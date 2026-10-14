@@ -21,7 +21,7 @@ def test_daily_selection_has_no_previous_day_fallback():
     now = datetime(2026, 10, 4, 15, tzinfo=timezone.utc).timestamp()
     old = {'shortcode': 'old', 'kind': 'reel', 'tier': 3, 'taken_at': now-86400,
            'hot_detected_at': now-1, 'rank_score': 100}
-    new = {**old, 'shortcode': 'new', 'taken_at': now-20*86400,
+    new = {**old, 'shortcode': 'new', 'taken_at': now-3600,
            'hot_detected_at': now, 'rank_score': 1,
            'metric_status': {'views': 'observed'}, 'views': 5000,
            'assessment': {'last_observed_at': now}}

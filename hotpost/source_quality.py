@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections import defaultdict, deque
 from pathlib import Path
@@ -70,13 +71,14 @@ def title_query_agreement(title: str, query: str) -> float:
 
 
 def media_format_reasons(meta: dict, max_duration: float = 180) -> list[str]:
+    from .source_presentation import portrait_geometry
     reasons = []
-    if meta.get("duration") is None or not 4 <= meta["duration"] <= max_duration:
+    duration = meta.get('duration')
+    if (not isinstance(duration,(int,float)) or isinstance(duration,bool)
+            or not math.isfinite(duration) or not 0 < duration <= max_duration):
         reasons.append("invalid_duration")
-    if (meta.get("width") or 0) < 360 or (meta.get("height") or 0) < 640:
-        reasons.append("low_resolution")
-    if (meta.get("width") or 0) > 2 * (meta.get("height") or 0):
-        reasons.append("not_crop_friendly")
+    if not portrait_geometry(meta):
+        reasons.append("invalid_video_dimensions")
     return reasons
 
 
@@ -102,6 +104,10 @@ def relevance_reasons(candidate, meta: dict, mode: str = 'scene') -> list[str]:
             and candidate.file_sha256
             and review.get('source_sha256') == candidate.file_sha256):
         return reasons
+    if mode == 'functional':
+        # Similarity decides review order. Actual visual review decides usage;
+        # a low score or mismatching title cannot reject unseen footage.
+        return reasons
     # 같은 제품을 다른 구도로 촬영한 대체영상은 장면 지문이 달라도 의미 근거로 보존한다.
     if mode in {'product', 'functional'} and semantic is not None and semantic >= .82:
         return reasons
@@ -126,6 +132,18 @@ def reuse_reasons(candidate) -> list[str]:
 
 
 def editing_ready(item: dict) -> bool:
+    if (item.get('manual_usage_review') or {}).get('editing_eligible') is False:
+        return False
+    if item.get('retiming'):
+        from .source_coverage import footage_coordinates
+        if footage_coordinates(item) is None:return False
+    if item.get('relevance_review_required') or item.get('presentation_review_required'):
+        return False
+    if item.get('presentation_review'):
+        from .source_presentation import valid_review
+        if not valid_review(item) or not all(item['presentation_review'].get(k) is True
+                for k in ('usable', 'quality_usable', 'action_preserved')):
+            return False
     if not item.get('editing_eligible', True):
         return False
     if item.get('blur_required') or item.get('source_quality') == 'edited-with-text':
@@ -160,6 +178,8 @@ def select_valid_candidates(candidates: list, limit: int, embeddings: dict | Non
             continue
         candidate.selected_for_zip = True
         candidate.selection_reason = (
+            "pending_visual_review" if getattr(candidate, 'relevance_review_required', False)
+            or getattr(candidate, 'presentation_review_required', False) else
             "reviewed_context_only_requires_capcut_blur" if getattr(candidate, 'blur_required', False)
             and (getattr(candidate, 'functional_review', None) or {}).get('same_core_function') is False
             and (candidate.functional_review or {}).get('context_usable') is True else

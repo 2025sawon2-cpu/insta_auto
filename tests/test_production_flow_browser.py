@@ -162,6 +162,12 @@ def setup_editor(page):
             const body=JSON.parse(options.body);requests.push({url,body});
             if(window.hold)await new Promise(resolve=>window.release=resolve);
             if(url.endsWith('/save-script'))task.feedback.script_text=body.text;
+            if(url.endsWith('/make-video')){
+                if('text' in body)task.feedback.script_text=body.text;
+                for(const key of ['speed','source_ids','voice_profile_id','pronunciations']){
+                    if(key in body)task.feedback[key]=body[key];
+                }
+            }
             if(url.endsWith('/save-original'))task.reviewed_original_text=body.text;
             if(url.endsWith('/apply-proposal'))task.feedback.script_text='AI가 고친 대본';
             task.revision++;task.feedback_revision++;
@@ -195,6 +201,7 @@ def test_search_retry_targets_failed_search_and_polling_preserves_new_query(flow
         task.source_search={status:'failed',message:'CAPTCHA'};task.revision++;draw();}''')
     page.locator('[data-search-options] > summary').click()
     page.locator('[data-field=search]').fill('나중에 검색할 새로운 조건')
+    page.get_by_role('button',name='영상 준비 알림',exact=True).click()
     page.locator('[data-pf=retry-source-search]').click()
     page.wait_for_function('requests.length===1 && !document.querySelector("#root")._saving')
     assert page.evaluate('requests[0].body.retry_job_id')=='search-failed'
@@ -260,20 +267,27 @@ def test_ai_status_updates_while_unsaved_input_survives(flow_page):
     assert page.locator('[data-field=script]').input_value()=='보존해야 할 사용자 입력'
 
 
-def test_typing_during_save_keeps_new_input_and_other_sections(flow_page):
+def test_typing_during_make_video_keeps_new_script_and_speed(flow_page):
     page=flow_page;setup_editor(page)
     page.evaluate("document.querySelectorAll('[data-pf-section=script] details').forEach(d=>d.open=true)")
     page.locator('[data-field=script]').fill('첫 번째 저장 요청')
     page.locator('[data-field=speed]').fill('1.15')
     page.evaluate('window.hold=true')
-    page.locator('[data-pf=save-script]').click()
+    page.locator('[data-pf=make-video]').click()
     page.wait_for_function('typeof release === "function"')
+    assert page.evaluate('requests[0].url.endsWith("/make-video")')
+    assert page.evaluate('requests[0].body.speed')==1.15
     page.locator('[data-field=script]').fill('저장 응답 전에 더 쓴 대본')
+    page.locator('[data-field=speed]').fill('1.2')
     page.evaluate('release()')
     page.wait_for_function('!document.querySelector("#root")._saving')
     assert page.locator('[data-field=script]').input_value()=='저장 응답 전에 더 쓴 대본'
-    assert page.locator('[data-field=speed]').input_value()=='1.15'
+    assert page.locator('[data-field=speed]').input_value()=='1.2'
     assert page.evaluate('task.feedback.script_text')=='첫 번째 저장 요청'
+    assert page.evaluate('task.feedback.speed')==1.15
+    assert page.evaluate('requests.length')==1
+    assert page.evaluate('JSON.parse(localStorage.getItem("production-feedback-work-test"))')=={
+        'script':'저장 응답 전에 더 쓴 대본','speed':'1.2'}
     assert '저장하지 않은' in page.locator('[data-change-status]').inner_text()
 
 
@@ -284,12 +298,12 @@ def test_evidence_separation_stale_voice_and_result_review_survive_poll(flow_pag
         task.pipeline[0].video_url='/completed.mp4';task.revision++;draw();
     }''')
     assert '수정사항 반영 전 음성' in page.locator('.pf-audio-card').inner_text()
-    assert page.locator('[data-pf-section=original]').is_visible()
     reference=page.locator('[data-detail-toggle$="-reference"]')
     if reference.get_attribute('aria-expanded')=='true':
         reference.click()
     assert reference.get_attribute('aria-expanded')=='false'
     reference.click()
+    assert page.locator('.pf-original').is_visible()
     assert page.locator('[data-field=original]').input_value()=='교정한 원본 발화'
     assert '화면 속 글자 · 발화와 별도 자료' in page.locator('.pf-original').inner_text()
     page.locator('[data-review-check=speech]').check()
@@ -332,10 +346,16 @@ def test_used_sources_stay_separate_from_uploads_and_pending_selection(flow_page
     assert not page.locator('[data-source-group=used] [data-field="source:used"]').is_checked()
     assert page.locator('[data-source-group=added] [data-field="source:new"]').is_checked()
     assert page.locator('[data-field="source:new"]').evaluate('(e)=>e===document.activeElement')
-    page.locator('[data-pf=save-sources]').click()
-    page.wait_for_function('requests.length===1')
+    page.locator('[data-pf=make-video]').click()
+    page.wait_for_function('requests.length===1 && !document.querySelector("#root")._saving')
+    assert page.evaluate('requests[0].url.endsWith("/make-video")')
     assert page.evaluate('requests[0].body.source_ids')==['new']
+    assert page.evaluate('task.feedback.source_ids')==['new']
+    assert page.evaluate('task.pipeline[1].inputs.source_ids')==['used']
+    assert page.evaluate('task.pipeline[1].artifacts.sources.map(s=>s.id)')==['used']
     assert page.locator('[data-source-group=used] [data-field="source:used"]').count()==1
+    assert not page.locator('[data-source-group=used] [data-field="source:used"]').is_checked()
+    assert page.locator('[data-source-group=added] [data-field="source:new"]').is_checked()
 
 
 def test_caption_sync_controls_validate_bounds_preserve_draft_and_loop(flow_page):

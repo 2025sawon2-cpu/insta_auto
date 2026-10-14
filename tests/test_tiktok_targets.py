@@ -17,7 +17,9 @@ def test_chinese_platform_never_falls_back_to_korean_when_chinese_exhausted(prov
 
 
 def test_tiktok_frontloads_all_three_languages():
-    queries=['display cabinet '+str(i) for i in range(8)]+['진열장','展示柜']
+    queries=['display cabinet','silver display cabinet','red display cabinet',
+        'black display cabinet','wooden display cabinet','glass display cabinet',
+        'white display cabinet','small display cabinet','진열장','展示柜']
     assert [language(q) for q in platform_queries(queries,'tiktok',3)]==['en','ko','zh']
 
 
@@ -64,6 +66,8 @@ def test_browser_attempts_three_languages_even_with_small_candidate_cap(tmp_path
         wait_for_timeout=lambda _:None,mouse=SimpleNamespace(wheel=lambda *a:None),close=lambda:None)
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path,source_queries_per_platform=1),tmp_path)
     monkeypatch.setattr(searcher,'_pace',lambda *a, **kw:None)
+    monkeypatch.setattr(searcher,'_page',lambda *a:page)
+    monkeypatch.setattr(searcher,'_submit_search',lambda *a:True)
     monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
     monkeypatch.setattr(bs,'_embedded_candidates',lambda *a:[])
     monkeypatch.setattr(bs,'_anchors',lambda p,provider,q,kind:[{'url':f'https://www.tiktok.com/@a/video/{q}'}])

@@ -1,7 +1,7 @@
 """Observe one user-requested search; never solve or retry authentication."""
 from urllib.parse import parse_qs, quote_plus, urlparse
 
-from .search_access import challenge_on_page, empty_results_on_page, login_wall_on_page
+from .search_access import challenge_on_page, empty_results_on_page, login_wall_on_page, search_restriction_on_page
 from .source_search.tiktok_results import search_response_candidates
 
 
@@ -34,9 +34,11 @@ class TikTokSearchVerification:
             return {'status': 'captcha', 'candidates': 0}
         if login_wall_on_page(page, 'tiktok'):
             return {'status': 'login_required', 'candidates': 0}
-        if (parsed.path != '/search/video' or
+        if (parsed.path.rstrip('/') not in {'/search', '/search/video'} or
                 parse_qs(parsed.query).get('q', [''])[0] != self.query):
             return {'status': 'page_changed', 'candidates': 0}
+        if search_restriction_on_page(page):
+            return {'status': 'query_restricted', 'candidates': 0}
         if self.candidates:
             return {'status': 'results', 'candidates': len(self.candidates)}
         if empty_results_on_page(page):
@@ -54,6 +56,8 @@ class TikTokSearchVerification:
             return f"검색 결과 {result['candidates']}개 확인 · 확인을 마치면 세션 저장 완료를 누르세요."
         if status == 'no_results':
             return '검색은 정상 응답했지만 결과가 없습니다. 확인을 마치면 세션 저장 완료를 누르세요.'
+        if status == 'query_restricted':
+            return '검색어 제한 안내가 표시되어 결과가 없습니다. CAPTCHA가 아니며 다른 제품 검색어가 필요합니다.'
         if status == 'page_changed':
             return '검색 확인 화면으로 돌아온 뒤 세션 저장 완료를 누르세요.'
         return '검색 화면 로딩을 기다리는 중 · 창을 유지합니다.'

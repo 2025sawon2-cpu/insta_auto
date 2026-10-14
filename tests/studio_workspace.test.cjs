@@ -8,8 +8,8 @@ const context={window:{}};vm.createContext(context);
 for(const name of ['studio-workspace.js','caption-editor.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../web',name),'utf8'),context);
 const workspace=context.window.StudioWorkspace;
 
-test('review stages keep voice, caption editing and completed output separate',()=>{
-  for(const [status,expected] of [['preparing','sources'],['script_review','script'],['voice_review','voice'],['draft_review','edit'],['completed','results']]){
+test('four review tabs group narration with script and keep editing and output separate',()=>{
+  for(const [status,expected] of [['preparing','sources'],['script_review','script'],['voice_review','script'],['draft_review','edit'],['completed','results']]){
     assert.equal(workspace.route(describe({status}).tab),expected);
   }
   assert.equal(workspace.route('original'),'script');
@@ -19,7 +19,7 @@ test('an original transcription in progress marks script preparation as current'
   const d=describe({status:'preparing',automation:{protocol:2},run_id:'new',pipeline:[{id:'new',steps:[{key:'sources',status:'completed'}]}]});
   assert.equal(workspace.tabState(d.steps,'sources'),'done');
   assert.equal(workspace.tabState(d.steps,'script'),'current');
-  assert.equal(workspace.tabState(d.steps,'voice'),'pending');
+  assert.equal(workspace.tabState(d.steps,'voice'),'current');
   assert.equal(workspace.tabState(d.steps,'unknown'),'pending');
 });
 

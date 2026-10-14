@@ -6,7 +6,7 @@ from hotpost.config import Settings
 from hotpost.search_access import access_record, indexed_gate, request_manual_recheck
 from hotpost import source_finder
 from hotpost.source_outcomes import platform_outcomes
-from hotpost.source_search.strategy import merge_history
+from hotpost.source_search.strategy import merge_history, fresh_queries, consumed_scope
 
 
 @pytest.mark.parametrize('provider,search', [('duckduckgo', source_finder.search_web), ('bing', source_finder.search_bing)])
@@ -58,3 +58,23 @@ def test_indexed_auth_gate_preserves_platform_failure_without_counting_skips_as_
     assert outcome['reasons']['captcha'] == 1
     assert outcome['skipped_reasons']['verification_required'] == 1
     assert merge_history([attempted])[0]['http_status'] == 202
+
+
+def test_observed_access_wait_receipt_survives_without_overwriting_confirmed_content_scope():
+    query='cabinet site:tiktok.com/@ inurl:video'
+    wait={'provider':'duckduckgo','query':query,'status':'captcha','http_status':202,
+        'requests':[{'operation':'indexed_search','at':1}]}
+    confirmed={'provider':'duckduckgo','query':query,'status':'no_results',
+        'requests':[{'operation':'indexed_search','at':2}]}
+    before=merge_history([wait],[wait])
+    assert len(before)==1 and not consumed_scope(before[0])
+    assert fresh_queries([query],'duckduckgo',before)==[query]
+    combined=merge_history(before,[confirmed],[{**wait,'requests':[{'operation':'indexed_search','at':3}]}])
+    assert len(combined)==3
+    assert [r['http_status'] for r in combined if r['status']=='captcha']==[202,202]
+    assert sum(consumed_scope(r) for r in combined)==1
+    assert not fresh_queries([query],'duckduckgo',combined)
+    # A read of the saved gate is preserved in manifests but creates no new
+    # external request receipt and cannot erase known content failure.
+    skipped={**wait,'status':'verification_required'};skipped.pop('requests')
+    assert merge_history(combined,[skipped])==combined

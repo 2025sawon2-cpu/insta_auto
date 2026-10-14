@@ -110,6 +110,10 @@ class CommandsMixin:
 
     def action(self, task_id, action, data):
         own = self.store.get(task_id)
+        if (own.get('creation_mode') == 'photo_post' and not self.settings.photo_production_enabled
+                and action in {'start-auto', 'resume-auto', 'retry', 'reproduce', 'make-video',
+                               'revise-edit', 'request-edit', 'export-edit', 'export-overlays', 'export-thumbnail', 'approve-voice'}):
+            raise ValueError('사진·캐러셀 게시물의 영상 제작은 비활성화되어 있습니다.')
         if own.get('creation_mode') == 'self_shot':
             if action == 'save-self-shot-brief':
                 return self.save_self_shot_brief(task_id, data)
@@ -161,12 +165,17 @@ class CommandsMixin:
                 if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
                 state['automation']['paused_by_user'] = True
                 if enabled(state):
-                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','refresh_sources','suggest_edit') AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (task_id,))
+                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND (kind NOT IN ('proposal','refresh_sources','suggest_edit') OR (kind='refresh_sources' AND json_extract(payload,'$.daily_quality_repair')=1)) AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (task_id,))
                 state.update(message='자동 진행 중지 · 진행 중인 단계의 결과를 보존합니다')
                 self.store.event(db, task_id, action, {})
                 return
             if action == 'resume-auto':
                 if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
+                if state.get('daily_quality',{}).get('pending') in {'exhausted','failed'}:
+                    from ..quality_progress import resume_assessment
+                    if not resume_assessment(state):
+                        state['message']='이전 품질 중단 유지 · 실제 새로운 수정 근거 대기'
+                        return
                 self.release_source_hold(state)
                 hold = state.pop('editorial_content_hold', None)
                 if hold:

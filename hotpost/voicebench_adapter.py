@@ -106,12 +106,46 @@ class VoiceBenchAdapter:
             raise RuntimeError("VoiceBench returned a non-object response.")
         return data
 
+    def _synthesis_request(self, method, path, *, headers, timeout, safe_retry=True, **kwargs):
+        """Transport/service waits preserve the server-owned synthesis request."""
+        from .model_service import ModelServiceUnavailable
+        from email.utils import parsedate_to_datetime
+        response = None
+        try:
+            response = getattr(self.session, method)(self._url(path), headers=headers,
+                                                     timeout=timeout, **kwargs)
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ContentDecodingError) as exc:
+            if not safe_retry:
+                raise RuntimeError('VoiceBench 제출 결과를 확인할 수 없습니다. 중복 합성을 막기 위해 요청 기록을 확인해야 합니다.') from exc
+            raise ModelServiceUnavailable('VoiceBench 전송 응답 대기 · 기존 요청을 보존합니다.',
+                                          attempted=method == 'post') from exc
+        if response.status_code == 429 or 500 <= response.status_code < 600:
+            if not safe_retry:
+                raise RuntimeError('VoiceBench 제출 결과를 확인할 수 없습니다. 중복 합성을 막기 위해 요청 기록을 확인해야 합니다.')
+            now = time.time()
+            retry_at = now + 60
+            value = getattr(response, 'headers', {}).get('Retry-After')
+            if value:
+                try:
+                    retry_at = now + max(0, float(value))
+                except ValueError:
+                    try:
+                        retry_at = max(now, parsedate_to_datetime(value).timestamp())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+            raise ModelServiceUnavailable(f'VoiceBench HTTP {response.status_code} 서비스 대기 · 기존 요청을 보존합니다.',
+                                          retry_at=retry_at, attempted=method == 'post')
+        return response
+
     def synthesize(self, text: str, output_path: Path,
                    progress: Callable[[str, int], None] | None = None,
                    request_id: int | None = None,
                    on_submitted: Callable[[int], None] | None = None,
                    retry_failed: bool = False, generation_key: str | None = None,
-                   voice_profile_id: str | None = None, require_personal_clone: bool = False) -> dict:
+                   voice_profile_id: str | None = None, require_personal_clone: bool = False,
+                   before_save: Callable[[], None] | None = None) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -128,7 +162,8 @@ class VoiceBenchAdapter:
         if require_personal_clone:
             if voice_profile_id:
                 raise ValueError('자동 제작은 본인 복제 목소리만 사용합니다.')
-            health = self.default_voice_status()
+            health = self._response_json(self._synthesis_request('get', '/v1/health',
+                headers=headers, timeout=timeout))
             if not health.get('ready') or health.get('default_voice_kind') != 'personal':
                 raise RuntimeError('내 목소리 복제 준비가 필요합니다. ' +
                                    ' / '.join(health.get('errors') or ['기본 음성이 개인 복제 음성인지 확인할 수 없습니다.']) +
@@ -141,21 +176,19 @@ class VoiceBenchAdapter:
             payload['generation_key'] = generation_key
         try:
             if request_id is None:
-                submitted = self._response_json(self.session.post(
-                    self._url("/v1/tts"), json=payload, headers=headers,
-                    timeout=timeout,
-                ))
+                submitted = self._response_json(self._synthesis_request('post', '/v1/tts',
+                    json=payload, headers=headers, timeout=timeout, safe_retry=bool(generation_key)))
             else:
                 if type(request_id) is not int or request_id <= 0:
                     raise ValueError("Invalid persisted VoiceBench request ID.")
-                submitted = self._response_json(self.session.get(
-                    self._url(f"/v1/tts/{request_id}"), headers=headers, timeout=timeout))
+                submitted = self._response_json(self._synthesis_request('get', f'/v1/tts/{request_id}',
+                    headers=headers, timeout=timeout))
                 submitted.setdefault('id', request_id)
                 # Explicit retry may replace a confirmed terminal failure.
                 # Unknown/running outcomes always retain the existing ID.
                 if retry_failed and submitted.get('status') in {'failed', 'cancelled'}:
-                    submitted = self._response_json(self.session.post(
-                        self._url('/v1/tts'), json=payload, headers=headers, timeout=timeout))
+                    submitted = self._response_json(self._synthesis_request('post', '/v1/tts',
+                        json=payload, headers=headers, timeout=timeout, safe_retry=bool(generation_key)))
         except requests.RequestException as exc:
             raise RuntimeError(
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."
@@ -166,15 +199,21 @@ class VoiceBenchAdapter:
         if on_submitted:
             on_submitted(request_id)
 
-        deadline = time.monotonic() + float(self.settings.voicebench_timeout)
+        from .operation_progress import ProgressWatch
+        watch = ProgressWatch(self.settings.voicebench_timeout, f'VoiceBench request {request_id}')
         status = submitted
+        phase = status.get('status')
         while status.get("status") not in {"succeeded", "failed", "cancelled"}:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"VoiceBench request {request_id} exceeded "
-                    f"{self.settings.voicebench_timeout}s; the request was not resubmitted."
-                )
             completed = int(status.get("completed_segments") or 0)
+            watch.observe('completed_segments', completed)
+            if phase == 'queued' and status.get('status') == 'running':
+                watch.reset('VoiceBench 음성 생성 진전')
+            phase = status.get('status')
+            if phase == 'queued':
+                # The service owns its serial queue; queue residence is not
+                # synthesis silence or another TTS submission.
+                watch.reset()
+            watch.check()
             total = max(1, int(status.get("segment_count") or 1))
             progress(
                 f"VoiceBench 음성 생성 중 ({completed}/{total})",
@@ -182,10 +221,8 @@ class VoiceBenchAdapter:
             )
             self.sleep(max(.1, float(self.settings.voicebench_poll_interval)))
             try:
-                status = self._response_json(self.session.get(
-                    self._url(f"/v1/tts/{request_id}"), headers=headers,
-                    timeout=timeout,
-                ))
+                status = self._response_json(self._synthesis_request('get', f'/v1/tts/{request_id}',
+                    headers=headers, timeout=timeout))
             except requests.RequestException as exc:
                 raise RuntimeError(
                     f"VoiceBench status check failed for request {request_id}; "
@@ -203,10 +240,8 @@ class VoiceBenchAdapter:
         if voice_profile_id and status.get('voice_id') != voice_profile_id:
             raise RuntimeError('요청한 목소리와 생성 결과가 다릅니다. VoiceBench 업데이트 상태를 확인하세요.')
         try:
-            audio = self.session.get(
-                self._url(f"/v1/tts/{request_id}/audio"), headers=headers,
-                timeout=timeout,
-            )
+            audio = self._synthesis_request('get', f'/v1/tts/{request_id}/audio',
+                headers=headers, timeout=timeout)
             audio.raise_for_status()
         except requests.RequestException as exc:
             raise RuntimeError(
@@ -214,6 +249,8 @@ class VoiceBenchAdapter:
             ) from exc
         payload = audio.content
         audio_info = verify_wav(payload)
+        if before_save:
+            before_save()
         temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         try:
             temporary.write_bytes(payload)

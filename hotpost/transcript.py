@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 from pathlib import Path
 from typing import Callable
 
@@ -44,8 +45,22 @@ def _audio(video: Path, target: Path) -> bool:
     return result.returncode == 0 and target.is_file() and target.stat().st_size > 32000
 
 
+def _pcm_audio(audio: Path):
+    """Read our FFmpeg-normalized mono 16 kHz WAV without a second AV decoder."""
+    import numpy as np
+    with wave.open(str(audio), 'rb') as source:
+        if (source.getnchannels(), source.getsampwidth(), source.getframerate(),
+                source.getcomptype()) != (1, 2, 16000, 'NONE'):
+            raise ValueError('음성 인식 입력은 16kHz 모노 PCM16 WAV여야 합니다.')
+        raw = source.readframes(source.getnframes())
+    samples = np.frombuffer(raw, dtype='<i2').astype(np.float32) / 32768.0
+    if not samples.size:
+        raise ValueError('음성 인식 입력에 오디오 샘플이 없습니다.')
+    return samples
+
+
 def _speech(settings: Settings, audio: Path,
-            notes: list[str]) -> tuple[list[dict], str, str]:
+            notes: list[str], progress=None) -> tuple[list[dict], str, str]:
     if sys.platform == "win32":
         try:
             from faster_whisper import WhisperModel
@@ -54,6 +69,7 @@ def _speech(settings: Settings, audio: Path,
             return [], "", "unavailable"
         model_root = settings.source_model_dir / "faster-whisper"
         model_root.mkdir(parents=True, exist_ok=True)
+        samples = _pcm_audio(audio)
 
         def transcribe(device: str, compute_type: str):
             model = WhisperModel(
@@ -63,14 +79,23 @@ def _speech(settings: Settings, audio: Path,
                 download_root=str(model_root),
             )
             return model.transcribe(
-                str(audio), language=None, beam_size=5, vad_filter=True,
+                samples, language=None, beam_size=5, vad_filter=True,
                 condition_on_previous_text=False,
             )
+
+        def receive(raw):
+            values = []
+            for item in raw:
+                values.append(item)
+                if progress:
+                    progress({'source':'speech', 'start':float(getattr(item,'start',0) or 0),
+                        'end':float(getattr(item,'end',0) or 0), 'text':str(getattr(item,'text','') or '')})
+            return values
 
         try:
             raw_segments, info = transcribe("cuda", "float16")
             engine = "faster-whisper-cuda"
-            raw_segments = list(raw_segments)
+            raw_segments = receive(raw_segments)
         except Exception as exc:
             notes.append(
                 f"faster-whisper GPU 전사를 사용할 수 없어 CPU로 전환했습니다: "
@@ -78,7 +103,7 @@ def _speech(settings: Settings, audio: Path,
             )
             raw_segments, info = transcribe("cpu", "int8")
             engine = "faster-whisper-cpu"
-            raw_segments = list(raw_segments)
+            raw_segments = receive(raw_segments)
         segments = []
         for item in raw_segments:
             text = re.sub(r"\s+", " ", str(getattr(item, "text", "") or "")).strip()
@@ -126,10 +151,10 @@ def _isolated_speech(settings: Settings, audio: Path, notes: list[str]):
         request.write_text(json.dumps({'audio': str(audio.resolve()),
             'data_dir': str(settings.data_dir.resolve()),
             'model': settings.transcript_faster_whisper_model}), encoding='utf-8')
-        process = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'hotpost.speech_worker',
+        from .operation_progress import run_progress_command
+        process = run_progress_command([sys.executable, '-X', 'utf8', '-m', 'hotpost.speech_worker',
             '--request', str(request), '--result', str(result)], cwd=ROOT,
-            capture_output=True, text=True, encoding='utf-8', errors='replace',
-            timeout=180, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            idle_seconds=180)
         if not result.is_file():
             raise RuntimeError(f'음성 전사 실행기가 결과를 반환하지 않았습니다 (exit {process.returncode}).')
         value = json.loads(result.read_text(encoding='utf-8'))

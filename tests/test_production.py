@@ -27,7 +27,7 @@ class Voice:
     def __init__(self):
         self.calls = []
 
-    def synthesize(self, text, target, request_id=None, on_submitted=None):
+    def synthesize(self, text, target, request_id=None, on_submitted=None, generation_key=None):
         self.calls.append((text, request_id))
         on_submitted(17)
         target.write_bytes(b'RIFF' + b'\0' * 4 + b'WAVE' + b'\0' * 32)
@@ -40,7 +40,10 @@ class Editor:
 
     def build(self, **kwargs):
         self.calls.append(kwargs)
-        return {'status': 'completed', 'draft_path': 'draft', 'warnings': [], 'output_kind': 'capcut_draft'}
+        draft=kwargs['script_path'].parent/'test-draft'
+        draft.mkdir(exist_ok=True)
+        (draft/'draft_content.json').write_text('{}','utf-8')
+        return {'status': 'completed', 'draft_path': str(draft), 'warnings': [], 'output_kind': 'capcut_draft'}
 
 
 @pytest.fixture
@@ -76,6 +79,25 @@ def selection():
                                'structure_change': '결과를 먼저 제시하고 사용 순서를 설명',
                                'visual_change': '정리 전후 장면 순서를 새롭게 배치'},
             'scenes': [{'asset_id': '0', 'label': '식탁 정리 손잡이', 'range': [0, 2]}]}
+
+
+def test_completed_edit_does_not_hide_later_missing_or_mutated_inputs(workflow):
+    manager, job, studio, voice, editor = workflow
+    manager.run(job['id'], 'rewrite')
+    selected = manager.select(job['id'], selection())
+    manager.run(job['id'], 'build')
+    Path(selected['script_path']).write_text('changed after completion', 'utf-8')
+    result = manager.run(job['id'], 'build')
+    assert result['status'] == 'blocked' and '변경' in result['error']
+    assert len(editor.calls) == len(voice.calls) == 1
+
+
+def test_rewrite_terminal_failure_returns_without_polling_until_timeout(workflow, monkeypatch):
+    manager, job, studio, *_ = workflow
+    studio.get = lambda jid: {'id':jid,'state':'failed','error':'confirmed failure'}
+    monkeypatch.setattr('hotpost.production.time.sleep', lambda _: pytest.fail('terminal failure must not sleep'))
+    result = manager.run(job['id'], 'rewrite')
+    assert result['status'] == 'blocked' and 'confirmed failure' in result['error']
 
 
 def test_end_to_end_selected_version_and_resume_without_duplicates(workflow):
@@ -130,3 +152,67 @@ def test_source_range_and_editorial_plan_are_required(workflow):
     payload['scenes'][0]['range'] = [4, 2]
     with pytest.raises(ValueError, match='구간'):
         manager.select(job['id'], payload)
+
+
+def test_manual_service_wait_reuses_script_key_and_request_even_when_scene_style_changes(workflow):
+    from hotpost.model_service import ModelServiceUnavailable
+    manager, job, _, voice, _ = workflow
+    manager.run(job['id'], 'rewrite')
+    manager.select(job['id'], selection())
+    keys = []
+    original = voice.synthesize
+    def interrupted(text, target, request_id=None, on_submitted=None, generation_key=None):
+        keys.append((generation_key, request_id))
+        if len(keys) == 1:
+            on_submitted(17)
+            raise ModelServiceUnavailable('audio transfer wait', retry_at=123456)
+        return original(text, target, request_id, on_submitted, generation_key)
+    voice.synthesize = interrupted
+    waiting = manager.run(job['id'], 'build')
+    assert waiting['status'] == 'service_wait' and waiting['voicebench_request_id'] == 17
+    assert waiting['service_retry_at'] == 123456 and not voice.calls
+    waiting['edit_style'] = 'brisk'; waiting['scenes'][0]['range'] = [1, 3]
+    manager.save(waiting)
+    assert manager.run(job['id'], 'build')['status'] == 'draft_ready'
+    assert keys[0][0] == keys[1][0] == 'prod-'+job['id']+'-'+waiting['script_sha256'][:32]
+    assert keys[1][1] == 17 and voice.calls == [(Path(waiting['script_path']).read_text('utf-8'), 17)]
+
+
+@pytest.mark.parametrize('new_selection', [False, True])
+def test_manual_retry_respects_provider_cooldown_even_after_new_script_selection(workflow, monkeypatch, new_selection):
+    import copy
+    from hotpost.model_service import ModelServiceUnavailable
+    manager, job, studio, voice, editor = workflow
+    manager.run(job['id'], 'rewrite')
+    manager.select(job['id'], selection())
+    monkeypatch.setattr('hotpost.production.time.time', lambda: 1000.0)
+    calls=[]
+    original=voice.synthesize
+    def interrupted(text,target,request_id=None,on_submitted=None,generation_key=None):
+        calls.append((request_id,generation_key))
+        if len(calls)==1:
+            on_submitted(17)
+            raise ModelServiceUnavailable('provider Retry-After',retry_at=1120)
+        return original(text,target,request_id,on_submitted,generation_key)
+    voice.synthesize=interrupted
+    waiting=manager.run(job['id'],'build')
+    assert waiting['status']=='service_wait' and waiting['service_retry_at']==1120
+    if new_selection:
+        new_text='새 대본으로 고른 제품 이야기예요.'
+        studio.result['scripts'][0]['text']=new_text
+        studio.result['scripts'][0]['rewrite_review']['script_sha256']=digest(new_text)
+        waiting=manager.select(job['id'],selection())
+        assert waiting['voicebench_request_id'] is None
+    before=copy.deepcopy(waiting)
+    files={str(p):p.read_bytes() for p in manager.folder(job['id']).rglob('*') if p.is_file()}
+    for _ in range(3):
+        assert manager.run(job['id'],'build')==before
+    assert len(calls)==1 and not editor.calls and not voice.calls
+    assert files=={str(p):p.read_bytes() for p in manager.folder(job['id']).rglob('*') if p.is_file()}
+    monkeypatch.setattr('hotpost.production.time.time',lambda:1120.0)
+    assert manager.run(job['id'],'build')['status']=='draft_ready'
+    assert len(calls)==2
+    if new_selection:
+        assert calls[1][0] is None and calls[1][1]!=calls[0][1]
+    else:
+        assert calls[1]==(17,calls[0][1])

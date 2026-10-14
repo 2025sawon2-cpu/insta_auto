@@ -18,12 +18,13 @@ from .studio_runtime.media import MediaMixin
 from .studio_runtime.lifecycle import LifecycleMixin
 from .studio_runtime.generation import GenerationMixin
 from .studio_runtime.editing import EditingMixin
+from .daily_quality import DailyQualityMixin
 from .studio_runtime.common import digest, selected
 
 __all__ = ["Studio", "digest", "selected"]
 
 
-class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, GenerationMixin,
+class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, GenerationMixin, DailyQualityMixin,
              EditingMixin, SourceAcquisitionMixin, WorkflowMixin):
     def __init__(self, settings, *, workers=True):
         self.settings = settings
@@ -31,6 +32,8 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
         self.stop = threading.Event()
         self.render_lock = threading.Lock()
         self._lease = None
+        self._threads = []
+        self._close_lock = threading.Lock()
         if workers:
             self._lease = (self.store.root / "worker.lock").open("a+b")
             try:
@@ -44,30 +47,70 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
             except OSError:
                 self._lease.close(); self._lease = None
             if self._lease:
-                self.store.recover()
+                try:
+                    self.store.recover()
                 # Codex writing uses the CLI, while local media/model work
                 # remains serial. A task has at most one production job at
                 # once, enforced transactionally by StudioStore.claim. Saved
                 # proposals remain non-mutating and can overlap media work.
-                threading.Thread(target=self._worker, args=('media',), name='studio-production', daemon=True).start()
-                threading.Thread(target=self._worker, args=('scripts',), name='studio-scripts', daemon=True).start()
-                threading.Thread(target=self._worker, args=('sources',), name='studio-sources', daemon=True).start()
-                if settings.studio_auto_top_enabled:
-                    threading.Thread(target=self._watch_top, name='studio-top-two', daemon=True).start()
+                    self._start_owned_thread(self._worker,('media',),'studio-production')
+                    self._start_owned_thread(self._worker,('scripts',),'studio-scripts')
+                    self._start_owned_thread(self._worker,('sources',),'studio-sources')
+                    if settings.studio_auto_top_enabled:
+                        self._start_owned_thread(self._watch_top,(),'studio-top-two')
+                except BaseException:
+                    self.close()
+                    raise
 
-    def create(self, code, automation=None, *, with_created=False):
+    def _start_owned_thread(self, target, args, name):
+        thread=threading.Thread(target=target,args=args,name=name,daemon=True)
+        try:
+            thread.start()
+        except BaseException:
+            if thread.ident is not None:
+                self._threads.append(thread)
+            raise
+        self._threads.append(thread)
+
+    def close(self):
+        """Drain claimed work before releasing the exclusive worker lease."""
+        self.stop.set()
+        if threading.current_thread() in self._threads:
+            raise RuntimeError('Studio.close는 소유 worker 밖에서 호출해야 합니다. 실행 소유권은 유지합니다.')
+        with self._close_lock:
+            for thread in self._threads:
+                if thread.ident is not None:
+                    thread.join()
+            if self._lease is not None:
+                self._lease.close()
+                self._lease=None
+
+    def create(self, code, automation=None, *, with_created=False, allow_photo=False):
         from .storage import Storage
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", code):
             raise ValueError("올바르지 않은 게시물 ID")
         db = Storage(self.settings.db_path)
         try:
             row = db.conn.execute("SELECT * FROM posts WHERE shortcode=?", (code,)).fetchone()
-            if not row or row["kind"] not in {"reel", "video"}:
+            if row and row["kind"] in {"image", "carousel"} and not self.settings.photo_production_enabled:
+                raise ValueError("사진·캐러셀 게시물의 영상 제작은 비활성화되어 있습니다.")
+            if not row or row["kind"] not in ({"reel", "video", "image", "carousel"} if allow_photo else {"reel", "video"}):
                 raise ValueError("수집된 동영상 게시물을 선택하세요.")
-            title = re.sub(r"#\S+", "", row["caption"] or "").strip().split("\n")[0][:70] or code
+            from .studio_titles import caption_title
+            title = caption_title(row['caption']) or code
         finally:
             db.close()
-        state, created = self.store.create(code, title, automation)
+        initial = {"collected_at": row["first_seen"]}
+        if (automation and automation.get('selection_mode')=='automatic' and
+                automation.get('protocol')==2 and self.settings.studio_daily_quality_enabled):
+            from .daily_quality import POLICY
+            initial['daily_quality']={'policy':POLICY,'max_repairs':max(0,self.settings.studio_daily_quality_max_repairs),
+                'repair_round':0,'status':'pending','reviews':[]}
+            from .quality_progress import ensure
+            ensure(initial)
+        if row["kind"] in {"image", "carousel"}:
+            initial["creation_mode"] = "photo_post"
+        state, created = self.store.create(code, title, automation, initial=initial)
         task = self.public(state)
         return (task, created) if with_created else task
 

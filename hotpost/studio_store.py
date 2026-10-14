@@ -14,8 +14,26 @@ class Conflict(ValueError):
     pass
 
 
+class StaleClaim(Conflict):
+    """A recovered/reclaimed worker no longer owns this durable job."""
+
+
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def uid(prefix=""):
     return prefix + uuid.uuid4().hex[:16]
+
+
+def change_claimed(store, job, fn):
+    """Worker writes retain their claim; lightweight non-worker test ports work."""
+    options = {'job': job} if job.get('claim_token') else {}
+    return store.change(job['task_id'], fn, **options)
 
 
 class StudioStore:
@@ -55,7 +73,7 @@ class StudioStore:
                     self.save(db, state)
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=30)
+        db = sqlite3.connect(self.path, timeout=30, factory=ClosingConnection)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=30000")
         return db
@@ -125,8 +143,10 @@ class StudioStore:
         with self.connect() as db:
             return [json.loads(r[0]) for r in db.execute("SELECT state FROM tasks ORDER BY updated DESC")]
 
-    def change(self, task_id, fn, expected=None):
+    def change(self, task_id, fn, expected=None, *, job=None):
         with self.transaction() as db:
+            if job is not None and not self.owns(db, job, statuses=('running', 'failed')):
+                raise StaleClaim('작업 소유권이 변경되어 이전 실행의 저장을 중지합니다.')
             state = self.get(task_id, db)
             if expected is not None and state["revision"] != expected:
                 raise Conflict("다른 변경사항이 저장되었습니다. 새로고침 후 다시 적용하세요.")
@@ -159,7 +179,7 @@ class StudioStore:
                    (job_id, task_id, kind, key, json.dumps(payload, ensure_ascii=False), time.time(), time.time()))
         return job_id
 
-    def claim(self, lane=None, *, task_id=None):
+    def claim(self, lane=None, *, task_id=None, reservation=None, job_id=None):
         with self.transaction() as db:
             self.consume_previous_daily(db)
             self.pause_queued(db)
@@ -170,11 +190,18 @@ class StudioStore:
                            " AND kind NOT IN ('collect_sources','refresh_sources','rewrite','proposal')" if lane == 'media' else
                            " AND kind NOT IN ('collect_sources','refresh_sources')" if lane == 'production' else '')
             parameters = [time.time()]
+            due = "COALESCE(json_extract(checkpoint,'$.not_before'),0)<=?"
+            if reservation:
+                due = "(" + due + " OR (json_extract(checkpoint,'$.batch_reservation')=? AND COALESCE(json_extract(checkpoint,'$.batch_original_not_before'),0)<=?))"
+                parameters.extend([reservation, time.time()])
             if task_id is not None:
                 lane_filter += ' AND task_id=?'
                 parameters.append(task_id)
+            if job_id is not None:
+                lane_filter += ' AND id=?'
+                parameters.append(job_id)
             row = db.execute("""SELECT * FROM jobs WHERE status='queued'
-                AND COALESCE(json_extract(checkpoint,'$.not_before'),0)<=?
+                AND """ + due + """
                 AND (jobs.kind IN ('collect_sources','refresh_sources','proposal') OR NOT EXISTS (
                   SELECT 1 FROM jobs AS running WHERE running.task_id=jobs.task_id
                   AND running.status='running'
@@ -189,7 +216,10 @@ class StudioStore:
                 ) THEN 0 ELSE 1 END,created LIMIT 1""", parameters).fetchone()
             if row is None:
                 return None
-            db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row["id"]))
+            checkpoint = json.loads(row['checkpoint'])
+            checkpoint['_claim_token'] = uid('claim-')
+            db.execute("UPDATE jobs SET status='running',checkpoint=?,updated=? WHERE id=?",
+                       (json.dumps(checkpoint), time.time(), row["id"]))
             state = self.get(row['task_id'], db)
             if row['kind'] == 'collect_sources':
                 state['source_search'] = {'status':'running','message':'소스 영상을 자동으로 확보하는 중','progress':0}
@@ -208,8 +238,17 @@ class StudioStore:
                 self.save(db, state)
             result = dict(row)
             result["payload"] = json.loads(result["payload"])
-            result["checkpoint"] = json.loads(result["checkpoint"])
+            result["checkpoint"] = checkpoint
+            result['claim_token'] = checkpoint['_claim_token']
             return result
+
+    @staticmethod
+    def owns(db, job, *, statuses=('running',)):
+        row = db.execute('SELECT status,checkpoint,task_id,kind FROM jobs WHERE id=?', (job['id'],)).fetchone()
+        if row is None or row['status'] not in statuses or row['task_id'] != job['task_id'] or row['kind'] != job['kind']:
+            return False
+        token = job.get('claim_token') or job.get('checkpoint', {}).get('_claim_token')
+        return bool(token and token == json.loads(row['checkpoint']).get('_claim_token'))
 
     def consume_previous_daily(self, db):
         """Consume legacy daily picks; full batches keep processing after midnight."""
@@ -229,16 +268,45 @@ class StudioStore:
 
     def checkpoint(self, job_id, value):
         with self.transaction() as db:
+            # Worker callers pass the claimed job. String IDs remain available
+            # to explicit administration of queued checkpoints.
+            if isinstance(job_id, dict):
+                job = job_id
+                direct = db.execute('SELECT status FROM jobs WHERE id=?', (job['id'],)).fetchone()
+                if not job.get('claim_token') and direct is None:
+                    return False
+                if not job.get('claim_token') and direct['status'] in {'queued', 'paused'}:
+                    job_id = job['id']  # Explicit/direct administration, not a worker claim.
+                elif not self.owns(db, job):
+                    raise StaleClaim('이전 실행의 체크포인트 저장을 중지합니다.')
+                else:
+                    job_id = job['id']
+                    value = {**value, '_claim_token': job['claim_token']}
+            else:
+                row = db.execute('SELECT checkpoint FROM jobs WHERE id=?', (job_id,)).fetchone()
+                if row:
+                    token = json.loads(row['checkpoint']).get('_claim_token')
+                    if token:
+                        value = {**value, '_claim_token': token}
             db.execute("UPDATE jobs SET checkpoint=?,updated=? WHERE id=?", (
                 json.dumps(value, ensure_ascii=False), time.time(), job_id))
+
+    def assert_owned(self, job):
+        with self.connect() as db:
+            if not self.owns(db, job):
+                raise StaleClaim('이전 실행은 작업 파일·외부 실행을 시작할 수 없습니다.')
 
     @staticmethod
     def pause_queued(db):
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued' AND kind='collect_sources'
             AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
+                AND json_extract(tasks.state,'$.status')='completed')""")
+        db.execute("""UPDATE jobs SET status='paused' WHERE status='queued' AND kind='collect_sources'
+            AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
                 AND json_extract(tasks.state,'$.source_acquisition.hold') IS NOT NULL)""")
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued'
-            AND kind NOT IN ('proposal','refresh_sources','suggest_edit')
+            AND (kind NOT IN ('proposal','refresh_sources','suggest_edit')
+                 OR (kind='refresh_sources' AND json_extract(payload,'$.daily_quality_repair')=1))
             AND COALESCE(json_extract(payload,'$.launch'),0)<>1
             AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
                 AND json_extract(tasks.state,'$.automation.protocol')=2
@@ -247,6 +315,8 @@ class StudioStore:
 
     def defer(self, job, message, seconds, waiting=False, waiting_status=None):
         with self.transaction() as db:
+            if not self.owns(db, job):
+                return False
             state = self.get(job['task_id'], db)
             checkpoint = job['checkpoint']
             checkpoint['not_before'] = time.time()+seconds
@@ -254,7 +324,8 @@ class StudioStore:
                 checkpoint['auto_retries'] = checkpoint.get('auto_retries',0)+1
                 checkpoint['retry_requested'] = True
             if job['kind'] == 'collect_sources':
-                state['source_search'] = {'status':'queued','message':'소스 자동 수집 재시도 대기','error':str(message)[:500], 'progress':0}
+                state['source_search'] = {'status':'queued','message':message if waiting else '소스 자동 수집 재시도 대기',
+                                          'error':'' if waiting else str(message)[:500], 'progress':0}
             else:
                 state.update(status=(waiting_status or 'waiting_capcut') if waiting else 'retry_wait', error='',
                              message=message if waiting else f"일시적 오류 · 자동 재시도 {checkpoint['auto_retries']}/2 대기: {message}")
@@ -264,7 +335,7 @@ class StudioStore:
                 checkpoint['not_before'] = 0
             db.execute("UPDATE jobs SET status='queued',checkpoint=?,updated=? WHERE id=?",
                        (json.dumps(checkpoint),time.time(),job['id']))
-            if (state.get('automation', {}).get('paused_by_user') or state.get('automation', {}).get('consumed_by_daily_policy')) and job['kind'] not in {'proposal','refresh_sources','suggest_edit'} and not job['payload'].get('launch'):
+            if (state.get('automation', {}).get('paused_by_user') or state.get('automation', {}).get('consumed_by_daily_policy')) and (job['kind'] not in {'proposal','refresh_sources','suggest_edit'} or job['payload'].get('daily_quality_repair')) and not job['payload'].get('launch'):
                 db.execute("UPDATE jobs SET status='paused' WHERE id=?", (job['id'],))
                 state.update(status='paused', message='자동 진행 중지 · 재개하면 중단 단계부터 이어집니다')
                 if job['kind'] == 'collect_sources': state['source_search']['status'] = 'paused'
@@ -279,18 +350,36 @@ class StudioStore:
     def jobs(self, task_id):
         with self.connect() as db:
             return [dict(r) for r in db.execute(
-                "SELECT id,kind,status,error,updated FROM jobs WHERE task_id=? ORDER BY created DESC", (task_id,))]
+                "SELECT id,kind,status,error,updated FROM jobs WHERE task_id=? ORDER BY created DESC,rowid DESC", (task_id,))]
 
     def finish(self, job, result, apply):
         with self.transaction() as db:
+            if not self.owns(db, job):
+                return False
             state = self.get(job["task_id"], db)
             apply(state, db, result)
+            wait_until = result.get('_defer_until')
+            if wait_until is not None:
+                checkpoint = {**job['checkpoint'], 'not_before': wait_until}
+                db.execute("UPDATE jobs SET status='queued',checkpoint=?,error='',updated=? WHERE id=?",
+                           (json.dumps(checkpoint), time.time(), job['id']))
+                self.pause_queued(db)
+                self.save(db, state)
+                self.event(db, state['id'], job['kind']+'_waiting', {'job_id':job['id'], 'not_before':wait_until})
+                return True
+            if (job.get('payload',{}).get('quality_repair') or job.get('payload',{}).get('quality_rewrite')
+                    or job.get('kind')=='quality_reedit') and state.get('daily_quality'):
+                from .quality_progress import finish_attempt
+                finish_attempt(state,job,result,failed=bool(result.get('no_render')))
             self.save(db, state)
             db.execute("UPDATE jobs SET status='done',error='',updated=? WHERE id=?", (time.time(), job["id"]))
             self.event(db, state["id"], job["kind"] + "_finished", {"job_id": job["id"]})
+            return True
 
     def fail(self, job, error):
         with self.transaction() as db:
+            if not self.owns(db, job):
+                return False
             state = self.get(job["task_id"], db)
             payload = job.get("payload", {})
             if job['kind'] in {'refresh_sources','collect_sources'}:
@@ -312,3 +401,4 @@ class StudioStore:
             db.execute("UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?", (
                 str(error)[:700], time.time(), job["id"]))
             self.event(db, state["id"], "failed", {"job_id": job["id"], "error": str(error)[:700]})
+            return True

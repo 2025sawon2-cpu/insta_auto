@@ -20,10 +20,38 @@ def test_only_video_items_from_matching_search_response_are_candidates():
     assert not search_response_candidates(url,{**body,'status_code':1},'tailgate tent')
 
 
+def test_search_response_is_accepted_by_source_pipeline_candidate():
+    from dataclasses import asdict
+    from hotpost.source_search.models import Candidate
+
+    body = {'status_code': 0, 'item_list': [{
+        'id': '123456789012345', 'author': {'uniqueId': 'camping'},
+        'video': {'width': 720, 'height': 1280, 'duration': 20},
+        'stats': {'playCount': 1234, 'diggCount': 56}}]}
+    row, = search_response_candidates(
+        'https://www.tiktok.com/api/search/item/full/?keyword=tent', body, 'tent')
+    candidate = Candidate(**row)
+    assert candidate.platform == 'tiktok'
+    assert candidate.search_stats == {'playCount': 1234, 'diggCount': 56}
+    assert asdict(candidate)['video_meta']['height'] == 1280
+    assert Candidate(**asdict(candidate)).search_stats == candidate.search_stats
+
+
+def test_photo_with_video_metadata_is_not_manufactured_into_a_video_link():
+    body={'status_code':0,'item_list':[
+        {'id':'7583710588526710024','author':{'uniqueId':'fixture'},
+         'video':{'duration':0,'width':1080,'height':1920},
+         'imagePost':{'images':[{'imageURL':{'urlList':['https://cdn/photo.jpg']}}]}},
+        {'id':'123456789012345','author':{'uniqueId':'video'},'video':{'duration':20}}]}
+    rows=search_response_candidates('https://www.tiktok.com/api/search/item/full/?keyword=vest',body,'vest')
+    assert [r['url'] for r in rows]==['https://www.tiktok.com/@video/video/123456789012345']
+
+
 def test_waits_for_delayed_tiktok_results_without_reading_activity_links(tmp_path,monkeypatch):
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path),tmp_path)
     monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
     monkeypatch.setattr(bs,'empty_results_on_page',lambda p:False)
+    monkeypatch.setattr(bs,'search_restriction_on_page',lambda p:False)
     monkeypatch.setattr(bs,'_anchors',lambda *a:(_ for _ in ()).throw(AssertionError('Must not scrape all activity links')))
     hits=[];waits=[]
     def wait(ms):
@@ -46,9 +74,10 @@ def test_unknown_loading_is_bounded_and_distinct_from_empty_results(tmp_path,mon
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path),tmp_path)
     monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
     monkeypatch.setattr(bs,'empty_results_on_page',lambda p:False)
+    monkeypatch.setattr(bs,'search_restriction_on_page',lambda p:False)
     waits=[]
     assert searcher._wait_platform_results(SimpleNamespace(wait_for_timeout=waits.append),'tiktok','tent',{},[])==[]
-    assert waits==[1000]*15
+    assert waits==[1000]*30
 
 
 def test_challenge_arriving_after_last_poll_cannot_become_parser_failure(tmp_path,monkeypatch):
@@ -80,6 +109,8 @@ def test_challenge_in_final_diagnostic_snapshot_stops_without_more_queries(tmp_p
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path,source_browser_headless=True),tmp_path)
     monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
     monkeypatch.setattr(searcher,'_wait_platform_results',lambda *a:[])
+    monkeypatch.setattr(searcher,'_page',lambda *a:page)
+    monkeypatch.setattr(searcher,'_submit_search',lambda *a:calls.append(a[2]) or True)
     searcher._platforms(SimpleNamespace(new_page=lambda:page),['tent','camping'],10,providers={'tiktok'})
     assert len(calls)==1 and searcher.searches[-1]['status']=='captcha'
     assert manual_required(access_record(tmp_path,'tiktok'))

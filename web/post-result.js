@@ -43,11 +43,24 @@
     }
     return {active,script,voice,goal,steps,completed,needsClone:!voice&&steps.voice.state!=='running'&&t.production_blockers?.includes('personal_clone_unavailable')};
   }
-  function stageMarkup(t,m,selection) {
+  function availability(m,key) {
+    const ready=key==='sources'?m.goal.count>0:key==='script'?!!m.script?.text:key==='voice'?!!(m.voice?.path_url||m.voice?.url):m.completed.length>0;
+    const state=m.steps[key].state;
+    const reason=state==='running'?'작업 중 · 준비되면 열립니다':state==='failed'?'작업 오류 · 제작실에서 확인':state==='blocked'?'설정 확인이 필요합니다':state==='paused'?'제작이 일시중지됐습니다':'준비되면 열립니다';
+    return {ready,reason};
+  }
+  function stageMarkup(t,m,selection,unavailableReason) {
     return Object.entries(labels).map(([key,label])=>{
-      const s=m.steps[key], suffix=key==='sources'?` · ${m.goal.count}${m.active?.video_url?'':'/'+m.goal.target}개 확보`:'';
-      return `<button type="button" class="pr-stage is-${s.state}" data-stage="${key}" ${key==='final'?`aria-pressed="${selection===key}" aria-controls="pr-video-results"`:`aria-expanded="${selection===key}" aria-controls="pr-step-result"`} ${selection===key?'data-selected="true"':''} aria-label="${label}, ${s.text}${suffix}, 결과 보기"><span class="pr-symbol ${s.state==='running'?'pr-spinner':''}" aria-hidden="true">${s.state==='running'?'':s.state==='completed'?'✓':s.state==='failed'?'!':'○'}</span><strong>${label}</strong><span>${esc(s.text+suffix)}</span></button>`;
+      const s=m.steps[key], available=availability(m,key), ready=!unavailableReason&&available.ready;
+      const suffix=key==='sources'&&!unavailableReason?` · ${sourceSummary(m)}`:'';
+      const feedback=unavailableReason||(!ready?available.reason:key==='final'&&!m.active?.video_url?'이전 완성본 보기':s.text+suffix);
+      return `<button type="button" class="pr-stage is-${s.state}" data-stage="${key}" ${!ready?'disabled':''} ${key==='final'?`aria-pressed="${selection===key}" aria-controls="pr-video-results"`:`aria-expanded="${selection===key}" aria-controls="pr-step-result"`} ${ready&&selection===key?'data-selected="true"':''} aria-label="${label}, ${esc(feedback)}"><span class="pr-symbol ${s.state==='running'?'pr-spinner':''}" aria-hidden="true">${s.state==='running'?'':ready?'✓':s.state==='failed'?'!':'○'}</span><strong>${label}</strong><span>${esc(feedback)}</span></button>`;
     }).join('');
+  }
+  function sourceSummary(m){
+    return m.goal.required_seconds!=null
+      ? `사용 가능 ${m.goal.usable_seconds}/${m.goal.required_seconds}초 · ${m.goal.count}개`
+      : `${m.goal.count}${m.active?.video_url?'':'/'+m.goal.target}개 확보`;
   }
   function stepResult(t,m,key) {
     if(!key||key==='final')return '';
@@ -60,7 +73,9 @@
       const livePlatform=Object.keys(names).find(p=>liveNote.toLowerCase().startsWith(p));
       if(livePlatform){const issue=/captcha|인증 대기/i.test(liveNote)?'인증 대기':/로그인/.test(liveNote)?'로그인 필요':/429|요청 제한/.test(liveNote)?'요청 제한':'';if(issue){const name=names[livePlatform];issues[name]=issue;rows[name]??=0;}}
       const quota=Object.entries(m.goal.platform_targets||{}).map(([p,c])=>`${esc(names[p]||p)} ${c.usable}/${c.target}개`).join(' · ');
-      return `<h4>확보한 소스 영상 · 총 ${m.goal.count}${m.active?.video_url?'':'/'+m.goal.target}개</h4><dl class="pr-platforms">${Object.entries(rows).map(([p,n])=>`<div><dt>${esc(p)}${issues[p]?`<small> · ${esc(issues[p])}</small>`:''}</dt><dd>${n}개</dd></div>`).join('')||'<div><dt>아직 확보한 영상이 없어요.</dt></div>'}</dl>${quota?`<p><strong>필수 확보 기준 · ${quota}</strong></p>`:''}${m.goal.ready||m.active?.video_url?'<p>제작에 필요한 소스가 준비됐어요.</p>':`<p>${m.steps.sources.state==='running'?'부족한 장면을 다른 검색어와 플랫폼에서 찾고 있어요.':m.steps.sources.state==='failed'?'소스 수집에 오류가 발생했어요. 상세 기록을 확인할 수 있어요.':m.steps.sources.state==='paused'?'자동 수집을 일시중지한 상태예요.':'부족한 장면을 자동으로 추가 수집할 예정이에요.'}</p>`}${go('sources','제작실에서 소스 보기')}`;
+      const preference=Object.entries(m.goal.platform_preferences||{}).map(([p,c])=>`${esc(names[p]||p)} ${esc(c.usable)}/${esc(c.target)}개`).join(' · ');
+      const title=m.goal.required_seconds!=null?sourceSummary(m):`총 ${m.goal.count}${m.active?.video_url?'':'/'+m.goal.target}개`;
+      return `<h4>확보한 소스 영상 · ${esc(title)}</h4><dl class="pr-platforms">${Object.entries(rows).map(([p,n])=>`<div><dt>${esc(p)}${issues[p]?`<small> · ${esc(issues[p])}</small>`:''}</dt><dd>${n}개</dd></div>`).join('')||'<div><dt>아직 확보한 영상이 없어요.</dt></div>'}</dl>${quota?`<p><strong>필수 확보 기준 · ${quota}</strong></p>`:''}${preference?`<p>선호 목표 · ${preference} · 완료 필수조건 아님</p>`:''}${m.goal.ready||m.active?.video_url?'<p>제작에 필요한 소스가 준비됐어요.</p>':`<p>${m.steps.sources.state==='running'?'부족한 장면을 다른 검색어와 플랫폼에서 찾고 있어요.':m.steps.sources.state==='failed'?'소스 수집에 오류가 발생했어요. 상세 기록을 확인할 수 있어요.':m.steps.sources.state==='paused'?'자동 수집을 일시중지한 상태예요.':'부족한 장면을 자동으로 추가 수집할 예정이에요.'}</p>`}${go('sources','제작실에서 소스 보기')}`;
     }
     if(key==='script')return `<h4>${m.completed.length&&!m.active?.video_url?'수정 중인 대본':'제작 대본'}</h4>${m.script?`<div class="pr-script">${esc(m.script.text)}</div>`:`<p>${m.steps.script.state==='running'?'원본 레퍼런스를 분석해 대본을 만들고 있어요.':m.steps.script.state==='failed'?'대본 제작에 오류가 발생했어요.':'제작 대본을 준비하고 있어요.'}</p>`}${go('script','제작실에서 대본 수정')}`;
     const v=m.voice;
@@ -75,11 +90,19 @@
     const separateWork=m.needsClone&&live.length?`<p>${esc(live.map(k=>labels[k]).join(' · '))} 작업은 별도로 진행 중이에요.</p>`:'';
     return `<div class="pr-waiting${m.needsClone?' is-blocked':''}" role="status">${m.needsClone?'<span class="pr-symbol" aria-hidden="true">!</span>':live.length?'<span class="pr-spinner" aria-hidden="true"></span>':''}<strong>${esc(message)}</strong><p>${description}</p>${separateWork}${m.needsClone?`<a class="pr-secondary" href="${esc(href(t,'voice'))}">내 목소리 등록·설정</a>`:''}<a class="pr-text-link" href="${esc(href(t,'script'))}">제작실에서 수정 →</a></div>`;
   }
-  const video=(url,name,side)=>`<div class="pr-video"><h4>${name}</h4>${url?`<video controls playsinline preload="none" aria-label="${name}" src="${esc(url)}"></video><div class="pr-player-tools"><button type="button" data-play="${side}">▶ 재생</button><button type="button" data-fullscreen="${side}" aria-label="${name} 전체 화면">전체 화면</button></div>`:'<p class="pr-missing">원본 영상을 불러오지 못했어요.</p>'}</div>`;
-  function actions(t,run) {
-    const download=run.steps?.find(s=>s.key==='export')?.download_url;
-    const historical=run.id!==t.run_id;
-    return `${download?`<a class="pr-primary" href="${esc(download)}" download>↓ 영상 다운로드</a>`:''}<a class="pr-secondary" href="${esc(href(t,historical?'results':'edit',run.id))}">${historical?'이 영상의 제작 자료 보기':'제작실에서 수정'}</a>`;
+  const video=(url,name,side)=>`<div class="pr-video"><h4>${name}</h4>${url?`<video controls playsinline preload="none" aria-label="${name}" src="${esc(url)}"></video>`:'<p class="pr-missing">영상 파일이 준비되지 않았어요.</p>'}<div class="pr-player-tools"><button type="button" data-play="${side}" ${!url?'disabled':''}>▶ 재생</button><button type="button" data-fullscreen="${side}" ${!url?'disabled':''} aria-label="${name} 전체 화면">전체 화면</button></div>${!url?'<small class="pr-unavailable">영상 파일이 준비되면 재생과 전체 화면을 사용할 수 있어요.</small>':''}</div>`;
+  function actions(t,run,unavailableReason) {
+    const download=run?.steps?.find(s=>s.key==='export')?.download_url;
+    const historical=run&&run.id!==t.run_id, ready=!!run?.video_url;
+    const reason=unavailableReason||(t.id?availability(model(t),'final').reason:'제작 작업이 아직 등록되지 않았어요.');
+    const item=(control,feedback)=>`<div class="pr-action-item">${control}${feedback?`<small>${esc(feedback)}</small>`:''}</div>`;
+    return item(`<button type="button" class="pr-secondary" data-view-result ${!ready?'disabled':''}>완성 영상 보기</button>`,ready?'':reason)
+      +item(download?`<a class="pr-primary" href="${esc(download)}" download>↓ 영상 다운로드</a>`:'<button type="button" class="pr-primary" disabled>↓ 영상 다운로드</button>',download?'':ready?'다운로드 파일이 준비되지 않았어요.':reason)
+      +item(t.id?`<a class="pr-secondary" href="${esc(href(t,historical?'results':'edit',run?.id))}">${historical?'이 영상의 제작 자료 보기':'제작실에서 수정'}</a>`:'<button type="button" class="pr-secondary" disabled>제작실에서 수정</button>',t.id?'':'제작 작업 등록 후 사용할 수 있어요.');
+  }
+  function mountEmpty(root,reason='제작 작업이 아직 등록되지 않았어요.') {
+    delete root._postId;root.onclick=null;
+    root.innerHTML=`<section class="post-result"><header><h3>제작 결과</h3></header><nav class="pr-stages" aria-label="제작 결과">${stageMarkup({},model({}),null,reason)}</nav><p class="pr-stage-hint">준비된 결과의 버튼이 활성화됩니다.</p><div class="pr-actions">${actions({},null,reason)}</div><p class="pr-connection" role="status">${esc(reason)}</p></section>`;
   }
   function compare(t,run) {
     return `<div class="pr-compare">${video(t.reference_url,'원본 레퍼런스','reference')}${video(run.video_url,'우리 완성 영상','result')}</div><div class="pr-actions">${actions(t,run)}</div>`;
@@ -100,7 +123,7 @@
   function patch(el,html) { if(el._html!==html){el.innerHTML=html;el._html=html;} }
   function mount(root,t) {
     if(root._postId!==t.id) {
-      root.innerHTML='<section class="post-result"><header><h3 data-title></h3></header><nav class="pr-stages" aria-label="제작 단계 · 누르면 결과를 확인할 수 있어요"></nav><p class="pr-stage-hint">단계를 누르면 결과를 볼 수 있어요.</p><section id="pr-step-result" class="pr-step-result" hidden></section><div id="pr-video-results"><div class="pr-current"></div><section class="pr-history" aria-label="제작 영상"></section></div><p class="pr-connection" role="status" hidden></p><details class="pr-diagnostics"><summary>상세 정보 · 오류 기록</summary><div></div></details></section>';
+      root.innerHTML='<section class="post-result"><header><h3 data-title></h3></header><nav class="pr-stages" aria-label="제작 결과 · 준비된 항목을 누르면 볼 수 있어요"></nav><p class="pr-stage-hint">준비된 결과의 버튼이 활성화됩니다.</p><section id="pr-step-result" class="pr-step-result" hidden></section><div id="pr-video-results"><div class="pr-current"></div><section class="pr-history" aria-label="제작 영상"></section></div><p class="pr-connection" role="status" hidden></p><details class="pr-diagnostics"><summary>상세 정보 · 오류 기록</summary><div></div></details></section>';
       root._postId=t.id; root._selection=null; root._cards=new Map();
       if(!root._mediaListenersBound){
         root._mediaListenersBound=true;
@@ -108,15 +131,17 @@
         root.addEventListener('error',event=>{if(event.target.matches('video')){const box=event.target.closest('.pr-video');if(box&&!box.querySelector('.pr-media-error')){const p=document.createElement('p');p.className='pr-media-error';p.textContent='재생하지 못했어요. 다시 재생하거나 파일을 다운로드해 주세요.';box.append(p);}}},true);
       }
       root.onclick=event=>{
-        const button=event.target.closest('button');if(!button)return;
+        const button=event.target.closest('button');if(!button||button.disabled||button.hasAttribute('disabled'))return;
         if(button.dataset.stage){root._selection=root._selection===button.dataset.stage?null:button.dataset.stage;mount(root,root._task);if(button.dataset.stage==='final')root.querySelector('#pr-video-results').scrollIntoView?.({block:'nearest'});}
         if(button.dataset.collapse){const card=root._cards.get(button.dataset.collapse);card._collapsed=!card._collapsed;mount(root,root._task);}
+        if(button.hasAttribute('data-view-result')){const player=button.closest('.pr-result-card')?.querySelector('.pr-video:last-child video');if(player){player.scrollIntoView?.({block:'nearest'});player.muted=false;player.play().catch(()=>{});}}
         if(button.dataset.play||button.dataset.fullscreen){const video=button.closest('.pr-video').querySelector('video');if(button.dataset.play){if(video.paused){video.muted=false;video.play().catch(()=>{});}else video.pause();}else if(video.requestFullscreen)video.requestFullscreen().catch(()=>{});else video.webkitEnterFullscreen?.();}
       };
       root.addEventListener('play',e=>{const b=e.target.closest('.pr-video')?.querySelector('[data-play]');if(b)b.textContent='Ⅱ 일시정지';},true);
       root.addEventListener('pause',e=>{const b=e.target.closest('.pr-video')?.querySelector('[data-play]');if(b)b.textContent='▶ 재생';},true);
     }
     root._task=t; const m=model(t); root._model=m;
+    if(root._selection&&!availability(m,root._selection).ready)root._selection=null;
     const states=Object.values(m.steps).map(s=>s.state), prefix=m.completed.length?'수정본':'영상';
     root.querySelector('[data-title]').textContent=m.active?.video_url?'완성 영상':states.includes('running')?prefix+' 제작 중':states.includes('failed')?prefix+' 제작 실패':states.includes('paused')?prefix+' 제작 일시중지':states.includes('blocked')?prefix+' 제작 준비 필요':prefix+' 제작 대기';
     const focusedStage=root.contains(document.activeElement)?document.activeElement?.dataset?.stage:null;
@@ -139,7 +164,7 @@
       if(card.parentElement!==history)history.append(card);
     }
     const old=root.querySelector('.pr-current .pr-waiting-wrap');
-    if(!m.active?.video_url){let box=old;if(!box){box=document.createElement('div');box.className='pr-waiting-wrap';current.append(box);}patch(box,waiting(t,m));}else old?.remove();
+    if(!m.active?.video_url){let box=old;if(!box){box=document.createElement('div');box.className='pr-waiting-wrap';current.append(box);}patch(box,waiting(t,m)+`<div class="pr-actions">${actions(t,null)}</div>`);}else old?.remove();
     const ordered=visible;
     ordered.forEach((run,i)=>{const card=root._cards.get(run.id);if(history.children[i]!==card)history.insertBefore(card,history.children[i]||null);});
     history.classList.toggle('has-current',!!m.active?.video_url);
@@ -147,5 +172,5 @@
     root.querySelector('.pr-connection').hidden=true;
   }
   function connectionError(root) {const notice=root.querySelector('.pr-connection');if(notice){notice.hidden=false;notice.textContent='상태를 갱신하지 못했어요. 연결되면 자동으로 다시 확인합니다.';}}
-  window.PostResult={mount,model,inventory,stageMarkup,stepResult,compare,connectionError};
+  window.PostResult={mount,mountEmpty,model,inventory,availability,stageMarkup,stepResult,compare,connectionError};
 })();

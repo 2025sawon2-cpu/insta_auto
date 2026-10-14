@@ -311,6 +311,8 @@ class WebGraphQLCollector:
 
     # ------------------------------------------------------------ fetch
     def fetch(self, username: str, limit: int, existing: dict[str, Post] | None = None) -> tuple[Profile, list[Post], list[MetricObservation]]:
+        from ..collection_window import collection_time, in_collection_window
+        started = collection_time(self)
         self.collection_notes = []
         h = self._profile_html(username)
         profile = self._parse_profile(username, h)
@@ -374,12 +376,12 @@ class WebGraphQLCollector:
         if not reached_boundary:
             self.collection_notes.append("수집 공백이 복구 상한을 초과했습니다. 중간 게시물이 누락될 수 있습니다.")
         ordered = sorted(posts.values(), key=lambda p: p.taken_at, reverse=True)
-        new_count = sum(p.taken_at > newest_known for p in ordered) if newest_known is not None else 0
-        out = ordered[:min(cap, max(limit, new_count))]
+        out = [p for p in ordered[:cap] if in_collection_window(p.taken_at, started)]
         fresh_codes = {p.shortcode for p in out}
-        # 초기 메타데이터 수집 후 남은 과거 조회수도 다음 실행에서 보강한다.
+        # 기존 글도 같은 24시간 안에 게시된 경우에만 조회수를 보강한다.
         baseline = sorted(known.values(), key=lambda p: p.taken_at, reverse=True)[:min(31, self.settings.posts_per_account + 1)]
-        out.extend(p for p in baseline if p.is_video and p.views is None and p.shortcode not in fresh_codes)
+        out.extend(p for p in baseline if p.is_video and p.views is None and p.shortcode not in fresh_codes
+                   and in_collection_window(p.taken_at, started))
         latest = {p.shortcode: p for p in out}
         observations = self._fill_video_views(latest, existing or {}) if any(p.is_video for p in out) else []
         return profile, out, observations

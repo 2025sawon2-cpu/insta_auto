@@ -10,6 +10,7 @@ import copy
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import shutil
@@ -27,6 +28,7 @@ import requests
 from PIL import Image, ImageOps
 
 from .config import Settings
+from .model_service import ModelServiceUnavailable
 # Compatibility exports: callers keep the existing source_finder API.
 from .source_search.models import Candidate
 from .source_search.catalog import KO_EN_ZH, PRODUCT_CONCEPTS
@@ -35,7 +37,7 @@ from .source_search.budget import charge_platform_probe
 from .request_pacing import request_pause, ytdlp_pacing_args
 from .storage import Storage
 from .source_urls import video_url, canonical_video_key
-from .source_queries import product_query_plan, platform_queries, clean_terms, language
+from .source_queries import tiktok_product_queries, product_query_plan, platform_queries, clean_terms, language
 from .source_quality import (platform_of, sha256_file,
                              relevance_reasons, reuse_reasons, select_valid_candidates, media_format_reasons,
                              title_query_agreement)
@@ -78,9 +80,79 @@ def _post(settings: Settings, shortcode: str):
     return post
 
 
+def _verify_reference(settings, shortcode, path):
+    """Validate a particular set of bytes, preserving media and past receipts."""
+    from .editing_adapter import _atomic_json
+    from .operation_progress import run_progress_command
+    digest = sha256_file(path)
+    receipt = settings.data_dir / 'reference-integrity' / shortcode / (digest + '.json')
+    policy = 'reference-full-decode-v1'
+    if receipt.is_file():
+        try:saved = json.loads(receipt.read_text('utf-8'))
+        except (OSError, ValueError):saved = {}
+        if saved.get('policy') == policy and saved.get('source_sha256') == digest:
+            if saved.get('status') == 'verified':
+                return saved
+            if saved.get('status') == 'invalid':
+                raise ValueError('기준 영상의 동일 바이트가 전체 디코드 검증에서 실패했습니다.')
+    ffmpeg, ffprobe = _executable('ffmpeg'), _executable('ffprobe')
+    if not ffmpeg or not ffprobe:
+        raise RuntimeError('기준 영상 전체 검증에 ffmpeg/ffprobe가 필요합니다.')
+    inspected = _run([ffprobe, '-v', 'error', '-show_entries',
+        'format=duration:stream=codec_type,duration,width,height,nb_frames', '-of', 'json', str(path)], timeout=30)
+    def invalid(reason):
+        if sha256_file(path) != digest:
+            raise RuntimeError('기준 영상 검증 중 파일이 변경되어 실패를 확정하지 않습니다.')
+        _atomic_json(receipt, {'policy':policy, 'source_sha256':digest, 'status':'invalid',
+            'bytes':path.stat().st_size, 'reason':reason, 'observed_at':time.time()})
+        raise ValueError('기준 영상 전체 검증 실패: ' + reason)
+    try:
+        info = json.loads(inspected.stdout)
+        stream = next((r for r in info.get('streams', []) if r.get('codec_type') == 'video'), {})
+        duration = float(stream.get('duration') or info.get('format', {}).get('duration') or 0)
+    except (ValueError, TypeError, AttributeError):
+        return invalid('영상 스트림 metadata를 읽을 수 없습니다.')
+    if inspected.returncode or not stream.get('width') or not stream.get('height') or not math.isfinite(duration) or duration <= 0:
+        return invalid('재생 가능한 양수 길이 영상 스트림이 없습니다.')
+    decoded = run_progress_command([ffmpeg, '-v', 'error', '-xerror', '-err_detect', 'explode',
+        '-i', str(path), '-map', '0:v:0', '-progress', 'pipe:1', '-nostats', '-f', 'null', '-'])
+    progress = dict(line.split('=',1) for line in decoded.stdout.splitlines() if '=' in line)
+    try:
+        frames = int(progress.get('frame',0))
+        decoded_seconds = int(progress.get('out_time_us',0)) / 1_000_000
+        expected_frames = int(stream.get('nb_frames') or 0) if str(stream.get('nb_frames','')).isdigit() else 0
+    except (TypeError, ValueError):
+        return invalid('전체 디코드 완료 근거가 올바르지 않습니다.')
+    if decoded.returncode or progress.get('progress') != 'end' or frames <= 0:
+        return invalid('전체 영상 디코드가 오류로 종료되었습니다.')
+    if expected_frames and frames != expected_frames:
+        return invalid('실제 디코드 프레임 수가 영상 스트림의 전체 프레임 수와 다릅니다.')
+    if duration - decoded_seconds > max(.25, 2 * duration / frames):
+        return invalid('영상 끝까지 디코드되지 않았습니다.')
+    # Inspect audio too because this exact reference feeds transcription.
+    if any(r.get('codec_type') == 'audio' for r in info.get('streams', [])):
+        audio = run_progress_command([ffmpeg, '-v', 'error', '-xerror', '-err_detect', 'explode',
+            '-i', str(path), '-map', '0:a:0', '-progress', 'pipe:1', '-nostats', '-f', 'null', '-'])
+        if audio.returncode or 'progress=end' not in audio.stdout:
+            return invalid('원본 음성 전체 디코드가 오류로 종료되었습니다.')
+    if sha256_file(path) != digest:
+        raise RuntimeError('기준 영상 전체 검증 중 실제 파일이 변경되었습니다.')
+    saved = {'policy':policy, 'source_sha256':digest, 'status':'verified', 'bytes':path.stat().st_size,
+        'duration':duration, 'decoded_seconds':decoded_seconds, 'decoded_frames':frames,
+        'expected_frames':expected_frames, 'audio_checked':any(r.get('codec_type') == 'audio' for r in info.get('streams', [])),
+        'observed_at':time.time()}
+    _atomic_json(receipt, saved)
+    return saved
+
+
 def _download_reference(settings: Settings, post, out: Path) -> Path:
     """로컬 영상을 재사용하고 설정된 인증 방식으로 기준 영상을 받는다."""
     from .reference_cache import reusable_reference
+    if getattr(post, 'kind', '') in {'image','carousel'}:
+        from .photo_reference import prepare_reference
+        prepared = prepare_reference(settings, post.shortcode)
+        shutil.copy2(prepared['reference_video'],out)
+        return out
     cached_files = [*settings.source_dir.glob(f'{post.shortcode}-*/reference.mp4'),
                     *settings.transcript_dir.glob(f'{post.shortcode}-*/reference.mp4')]
     for cached in sorted(cached_files, key=lambda p: p.stat().st_mtime, reverse=True):
@@ -89,7 +161,18 @@ def _download_reference(settings: Settings, post, out: Path) -> Path:
         if cached != out and 0 < cached.stat().st_size <= settings.source_max_file_mb * 1024 * 1024:
             meta = probe_video(cached)
             if (meta.get('duration') or 0) > 0 and meta.get('width'):
-                shutil.copy2(cached, out)
+                temporary = out.with_name(out.name + '.receiving')
+                try:
+                    _verify_reference(settings, post.shortcode, cached)
+                    shutil.copy2(cached, temporary)
+                    # Bind the actual copied bytes too; a concurrent cache
+                    # replacement cannot inherit the original receipt.
+                    _verify_reference(settings, post.shortcode, temporary)
+                    temporary.replace(out)
+                except ValueError:
+                    continue  # Preserve invalid originals/receipts; try another authorized reference.
+                finally:
+                    temporary.unlink(missing_ok=True)
                 return out
     if settings.collection_source == 'browser':
         from .instagram_video import browser_video_url
@@ -150,20 +233,36 @@ def _download_reference(settings: Settings, post, out: Path) -> Path:
         )
     limit = settings.source_max_file_mb * 1024 * 1024
     size = 0
+    temporary = out.with_name(out.name + '.receiving')
     try:
-        with out.open("wb") as f:
+        with temporary.open("wb") as f:
             for chunk in video.iter_content(1024 * 256):
                 size += len(chunk)
                 if size > limit:
                     raise RuntimeError("기준 영상이 설정된 최대 크기를 초과했습니다.")
                 f.write(chunk)
+        expected = (getattr(video, 'headers', {}) or {}).get('Content-Length')
+        if not size or expected and size != int(expected):
+            raise RuntimeError('기준 영상 수신 크기가 응답과 다릅니다.')
+        try:
+            _verify_reference(settings, post.shortcode, temporary)
+        except ValueError:
+            # A complete but corrupt reception remains diagnostic evidence,
+            # separate from publishable reference.mp4 and automatic cache scans.
+            digest = sha256_file(temporary)
+            failure_file = settings.data_dir / 'reference-integrity' / post.shortcode / (digest + '.received-invalid.mp4')
+            failure_file.parent.mkdir(parents=True, exist_ok=True)
+            if not failure_file.is_file():shutil.copy2(temporary, failure_file)
+            raise
+        temporary.replace(out)
     finally:
         video.close()
+        temporary.unlink(missing_ok=True)
     return out
 
 
 def extract_frames(video: Path, frame_dir: Path, prefix: str = "frame", max_frames: int = 12) -> list[Path]:
-    """균등 샘플과 장면 변화 프레임을 합친 뒤 중복 지문을 제거한다."""
+    """전체 균등 시간 증거를 유지하고 추가 장면 변화의 중복만 제거한다."""
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
@@ -174,30 +273,39 @@ def extract_frames(video: Path, frame_dir: Path, prefix: str = "frame", max_fram
         duration = max(1.0, float(probe.stdout.strip()))
     except ValueError as exc:
         raise RuntimeError("영상 길이를 읽지 못했습니다.") from exc
-    interval = max(0.7, duration / max(4, max_frames - 2))
+    scene_slots = min(4, max_frames // 3)
+    uniform_slots = max(2, max_frames - scene_slots)
+    interval = duration / uniform_slots
     pattern = str(frame_dir / f"{prefix}_%03d.jpg")
-    result = _run([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(video),
-                   "-vf", f"fps=1/{interval:.3f},scale=480:-2", "-q:v", "3", pattern])
+    result = _run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video),
+                   "-vf", f"fps=1/{interval:.6f},scale=480:-2", "-frames:v", str(uniform_slots), "-q:v", "3", pattern])
     if result.returncode:
         raise RuntimeError(f"프레임 추출 실패: {result.stderr[-300:]}")
-    files = sorted(p for p in frame_dir.glob(f"{prefix}_*.jpg") if '_scene_' not in p.name)
+    files = [frame_dir / f'{prefix}_{index:03d}.jpg' for index in range(1,uniform_slots+1)
+             if (frame_dir / f'{prefix}_{index:03d}.jpg').is_file()]
     # 짧게 등장하는 장면도 검색 근거로 남긴다. 출력 수와 실행 시간을 제한한다.
-    scene_pattern = str(frame_dir / f'{prefix}_scene_%03d.jpg')
-    try:
-        scene_result = _run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-i', str(video),
-                            '-vf', "select='gt(scene,0.3)',scale=480:-2", '-fps_mode', 'vfr',
-                            '-frames:v', '4', '-q:v', '3', scene_pattern], timeout=90)
-        scene_files = sorted(frame_dir.glob(f'{prefix}_scene_*.jpg')) if scene_result.returncode == 0 else []
-    except subprocess.TimeoutExpired:
-        scene_files = []
-    # 균등 샘플과 장면 변화 샘플이 각각 자리를 확보하도록 섞는다.
-    from itertools import zip_longest
-    files = list(dict.fromkeys(path for pair in zip_longest(files, scene_files) for path in pair if path is not None))
+    scene_files = []
+    scene_token = time.time_ns()
+    # Each section of the full recording gets a scene-change opportunity.
+    # Taking the first four cuts globally biased reverse search toward the intro.
+    for index in range(scene_slots):
+        target = frame_dir / f'{prefix}_{scene_token}_scene_{index+1:03d}.jpg'
+        try:
+            scene_result = _run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
+                '-ss', str(duration*index/scene_slots), '-t', str(duration/scene_slots), '-i', str(video),
+                '-vf', "select='gt(scene,0.3)',scale=480:-2", '-fps_mode', 'vfr',
+                '-frames:v', '1', '-q:v', '3', str(target)], timeout=90)
+            if scene_result.returncode == 0 and target.is_file():scene_files.append(target)
+        except subprocess.TimeoutExpired:
+            continue
+    # Reserve the uniform sequence before extra cuts so bounded downstream
+    # review keeps endpoints and a defensible chronological sequence.
+    files = list(dict.fromkeys([*files, *scene_files]))
     unique: list[Path] = []
     hashes: list[int] = []
     for path in files:
         h = dhash(path)
-        if not hashes or min((h ^ old).bit_count() for old in hashes) >= 5:
+        if '_scene_' not in path.name or not hashes or min((h ^ old).bit_count() for old in hashes) >= 5:
             unique.append(path); hashes.append(h)
         else:
             path.unlink(missing_ok=True)
@@ -337,11 +445,10 @@ def search_youtube(queries: list[str], limit: int, cookie_file: Path | None = No
         if audit is not None: audit.append(record)
         remaining_queries = len(selected_queries) - query_index
         count = min(6, max(1, (limit - len(out) + remaining_queries - 1) // remaining_queries))
-        suffix = " shorts" if not re.search(r"[\u3400-\u9fff]", query) else ""
         try:
             request_pause()
             result = _run([ytdlp, *ytdlp_pacing_args(), *_yt_runtime_args(js_runtime), *_yt_cookie_args(cookie_file), "--flat-playlist", "--dump-single-json",
-                           "--no-warnings", f"ytsearch{count}:{query}{suffix}"], timeout=90)
+                           "--no-warnings", f"ytsearch{count}:{query}"], timeout=90)
         except (OSError, subprocess.TimeoutExpired) as exc:
             record.update(status='error', error=type(exc).__name__)
             continue
@@ -466,6 +573,11 @@ def search_bing(queries: list[str], limit: int, audit: list | None = None) -> li
 
 
 def search_google_vision(settings: Settings, frames: list[Path], limit: int, audit: list | None = None) -> tuple[list[Candidate], list[str]]:
+    if settings.source_browser_search:
+        if audit is not None:
+            audit.append({'provider':'google-vision', 'query':'', 'status':'not_attempted',
+                          'candidates':0, 'reason':'existing_browser_session_required'})
+        return [], []
     key = settings.source_google_vision_api_key or os.environ.get("GOOGLE_CLOUD_VISION_API_KEY", "")
     if not key:
         return [], []
@@ -589,6 +701,9 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
                        cookie_file: Path | None = None, deadline: float | None = None,
                        js_runtime: str = '') -> Path | None:
     from .source_collection_access import collection_disabled
+    from .source_browser_runtime import BrowserBusy
+    candidate.download_attempted = False
+    candidate.download_diagnostics = None
     if collection_disabled(candidate.platform):
         candidate.error = '사용자 설정으로 해당 플랫폼 수집 제외'
         candidate.download_attempted = False
@@ -601,6 +716,9 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
     stem = f"{index:02d}_{_safe_name(candidate.provider)}"
     parsed = urlparse(candidate.url)
     video_id = parse_qs(parsed.query).get("v", [""])[0] if "youtube.com" in parsed.netloc else parsed.path.strip("/").split("/")[-1]
+    if candidate.platform == 'youtube':
+        from .youtube_download import video_id as youtube_video_id
+        video_id = youtube_video_id(candidate.url) or ''
     if video_id:
         cache_root = out_dir.parent.parent
         explicit = Path(candidate.cached_path).resolve() if candidate.cached_path else None
@@ -622,13 +740,52 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         candidate.download_attempted = False
         return None
     candidate.acquisition = 'network'
+    if candidate.platform == 'youtube':
+        from .config import load_settings
+        from .youtube_download import download
+        diagnostics = {'attempted':False, 'navigation_started':False}
+        try:
+            candidate.acquisition = 'existing-browser-playback'
+            path = download(load_settings(), candidate.url,
+                            out_dir / f'{stem}_{video_id}.mp4', max_mb * 1024 * 1024, diagnostics=diagnostics)
+            if path:diagnostics['attempted'] = True  # A published network reception completed.
+            return path
+        except Exception as exc:
+            from .source_browser_runtime import BrowserBusy
+            if isinstance(exc,(BrowserBusy,ModelServiceUnavailable)):raise
+            candidate.error = f'YouTube 현재 브라우저 영상 수신 실패: {str(exc)[:240]}'
+            return None
+        finally:
+            candidate.download_attempted = bool(diagnostics.get('attempted'))
+            from .source_attempts import transfer_diagnostics
+            candidate.download_diagnostics = transfer_diagnostics(diagnostics)
+    if candidate.platform == 'tiktok':
+        from .config import load_settings
+        from .tikvideo_download import with_fallback as download
+        diagnostics = {'attempted':False, 'navigation_started':False}
+        try:
+            path = download(load_settings(), candidate.url,
+                            out_dir / f'{stem}_{video_id}.mp4', max_mb * 1024 * 1024, diagnostics=diagnostics)
+            if path:diagnostics['attempted'] = True
+            return path
+        except Exception as exc:
+            from .source_browser_runtime import BrowserBusy
+            if isinstance(exc,(BrowserBusy,ModelServiceUnavailable)):raise
+            candidate.error = f'TikTok 현재 브라우저 영상 수신 실패: {str(exc)[:240]}'
+            return None
+        finally:
+            candidate.download_attempted = bool(diagnostics.get('attempted')
+                or (diagnostics.get('fallback') or {}).get('attempted'))
+            from .source_attempts import transfer_diagnostics
+            candidate.download_diagnostics = transfer_diagnostics(diagnostics)
     from .source_urls import lazada_video_id
     vendor_id = lazada_video_id(candidate.url)
     if vendor_id:
         from .public_vendor import download
         try:
+            candidate.download_attempted = True
             return download(candidate.url, out_dir / f'{stem}_{vendor_id}.mp4',
-                            max_mb * 1024 * 1024, deadline)
+                            max_mb * 1024 * 1024)
         except (OSError, ValueError, requests.RequestException) as exc:
             if isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 429:
                 SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
@@ -639,10 +796,8 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         for attempt in range(3):
             try:
                 request_pause()
-                remaining = deadline - time.monotonic() if deadline is not None else 60
-                if remaining <= 0:
-                    raise RuntimeError('다운로드 시간 예산 소진')
-                with requests.get(candidate.url, stream=True, timeout=min(60, max(1, remaining))) as r:
+                candidate.download_attempted = True
+                with requests.get(candidate.url, stream=True, timeout=(30, 60)) as r:
                     if r.status_code == 429:
                         SOURCE_COOLDOWNS[candidate.platform] = time.time() + 60
                         candidate.error = "429 제한 · 60초 쿨다운"
@@ -650,14 +805,13 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
                     r.raise_for_status(); size = 0
                     with target.open("wb") as f:
                         for chunk in r.iter_content(1024 * 256):
-                            if deadline is not None and time.monotonic() >= deadline:
-                                raise RuntimeError('다운로드 시간 예산 소진')
                             size += len(chunk)
                             if size > max_mb * 1024 * 1024:
                                 raise RuntimeError("파일 크기 제한 초과")
                             f.write(chunk)
                 return target
             except Exception as exc:  # noqa: BLE001
+                if isinstance(exc,(BrowserBusy,ModelServiceUnavailable)):raise
                 target.unlink(missing_ok=True); candidate.error = str(exc)[:240]
                 if attempt < 2 and isinstance(exc, requests.RequestException):
                     time.sleep(2 ** attempt)
@@ -678,21 +832,16 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
                "--", candidate.url]
     # Bilibili gets one resumable timeout retry; authentication errors still stop.
     is_bilibili = candidate.provider == "bilibili" or "bilibili.com" in candidate.url
-    process_timeout = 90
+    from .operation_progress import run_progress_command, NoProgressTimeout
     for attempt in range(3):
         request_pause()
-        remaining = deadline - time.monotonic() if deadline is not None else process_timeout
-        if remaining <= 0:
-            candidate.error = '다운로드 시간 예산 소진'
-            return None
         try:
-            timeout_seconds = min(process_timeout, max(1, remaining))
-            result = _run(command, timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            candidate.error = f"다운로드 제한 시간({round(timeout_seconds, 1):g}초) 초과"
-            if is_bilibili and attempt == 0 and (deadline is None or deadline - time.monotonic() >= 30):
-                process_timeout = 150  # Resume partial download once, within the shared budget.
-                continue
+            candidate.download_attempted = True
+            result = run_progress_command(command, progress_dir=out_dir)
+        except NoProgressTimeout as exc:
+            candidate.error = str(exc)
+            if is_bilibili and attempt == 0:
+                continue  # Retry a stalled transfer once, retaining its partial file.
             return None
         diagnostic = (result.stderr or result.stdout or '').lower()
         if "429" in diagnostic or "too many requests" in diagnostic:
@@ -701,8 +850,14 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
             return None
         if result.returncode == 0 or any(word in diagnostic for word in ("login", "captcha", "drm", "private")):
             break
-        if attempt < 2:
+        # Unsupported/private/deleted content and format/extractor errors are
+        # confirmed failures of this method; unchanged retries cannot repair it.
+        transfer_error = bool(re.search(r'timed? out|timeout|connection (?:reset|aborted)|'
+            r'temporary failure|temporarily unavailable|http error 5\d\d|remote end closed', diagnostic))
+        if attempt < 2 and transfer_error:
             time.sleep(2 ** attempt)
+            continue
+        break
     info_file = next(iter(out_dir.glob(f"{stem}_*.info.json")), None)
     if info_file:
         try:
@@ -750,16 +905,22 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
                'audit_checkpoint':'preparation', 'execution_audit_available':True,
                'search_audit':[], 'candidates':[], 'platform_outcomes':platform_outcomes([], [], policy['platform_minimums'])}
     _atomic_json(root/'manifest.json', receipt)
+    created = getattr(progress, 'source_attempt_created', None)
+    if created:
+        created(root/'manifest.json')
     phase = 'preparation'
     def report(message, pct):
         nonlocal phase
         phase = 'preparation' if pct < 32 else 'discovery' if pct < 50 else 'candidate_verification'
         if progress:
             progress(message, pct)
+    from .studio_pause import bind_progress, pause_scope, StudioPaused
+    bind_progress(report, progress)
     try:
-        return _find_sources(settings, shortcode, report, search_request=search_request,
-            search_round=search_round, previous_searches=previous_searches, exclude_urls=exclude_urls,
-            search_context=search_context, root=root, policy=policy)
+        with pause_scope(report):
+            return _find_sources(settings, shortcode, report, search_request=search_request,
+                search_round=search_round, previous_searches=previous_searches, exclude_urls=exclude_urls,
+                search_context=search_context, root=root, policy=policy)
     except Exception as exc:
         # Preserve the attempt even when reference/model preparation fails
         # before a platform is contacted. Never invent per-platform CAPTCHA.
@@ -767,8 +928,9 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
             receipt = json.loads((root/'manifest.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             pass
-        receipt.update(status='failed', failure={'stage':phase, 'type':type(exc).__name__,
-                       'reason':failure_reason(str(exc), default='pipeline_failed')})
+        receipt.update(status='paused' if isinstance(exc, StudioPaused) else 'failed',
+                       failure={'stage':phase, 'type':type(exc).__name__,
+                       'reason':'user_stopped' if isinstance(exc, StudioPaused) else failure_reason(str(exc), default='pipeline_failed')})
         if phase == 'discovery' and receipt.get('audit_checkpoint') in {'preparation','planned'}:
             # A provider may have been contacted before discovery returned.
             # Missing intermediate evidence means unknown, not unattempted.
@@ -779,55 +941,92 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
 
 def _find_sources(settings, shortcode, progress, *, search_request, search_round, previous_searches,
                   exclude_urls, root, policy, search_context=None):
+    from .studio_pause import bind_progress
     from .source_targets import candidate_batch, select_sources, tiktok_count, tiktok_coverage
     from .source_outcomes import platform_outcomes
     from .source_quality import editing_ready
     from .editing_adapter import _atomic_json
-    tiktok_target = policy['platform_minimums']['tiktok']
+    tiktok_target = policy.get('platform_preferences', policy['platform_minimums']).get('tiktok', 0)
     progress = progress or (lambda _m, _p: None)
     post = _post(settings, shortcode)
-    if not post.is_video:
-        raise ValueError("소스 영상 탐색은 릴스/동영상만 지원합니다.")
+    if not post.is_video and getattr(post, "kind", "") not in {"image","carousel"}:
+        raise ValueError("지원하지 않는 게시물 종류입니다.")
     job_id = root.name
     frames_dir = root / "reference_frames"; candidates_dir = root / "videos"; compare_dir = root / "compare"
     candidates_dir.mkdir(parents=True); compare_dir.mkdir(parents=True)
-    progress("기준 릴스를 가져오는 중", 8)
-    reference = _download_reference(settings, post, root / "reference.mp4")
-    progress("장면을 추출하는 중", 20)
-    frames = extract_frames(reference, frames_dir)
-    create_contact_sheet(frames, root / "reference_contact_sheet.jpg")
-    transcript = _transcript_evidence(settings, shortcode)
-    if settings.source_transcribe_reference and not any(transcript.values()):
+    from .source_preparation import prior_bundle, save_bundle, query_policy, bundle_paths
+    raw_transcript = _transcript_evidence(settings, shortcode)
+    prepared,bundle_path = prior_bundle(settings,shortcode,post.caption,raw_transcript,search_context)
+    if prepared:
+        progress('저장된 기준 영상·프레임 SHA 검증 완료 · 준비 자료 재사용',20)
+        reference=Path(prepared['reference']);frames=[Path(f) for f in prepared['frames']]
+        contact_sheet=Path(prepared['sheet'])
+    else:
+        progress("기준 릴스를 가져오는 중", 8)
+        reference = _download_reference(settings, post, root / "reference.mp4")
+        progress("장면을 추출하는 중", 20)
+        frames = extract_frames(reference, frames_dir)
+        contact_sheet=root / "reference_contact_sheet.jpg"
+        create_contact_sheet(frames, contact_sheet)
+    transcript = copy.deepcopy(raw_transcript)
+    if post.is_video and settings.source_transcribe_reference and not any(transcript.values()):
         from .transcript import extract_transcript
         try:
             extract_transcript(settings, shortcode, lambda message, pct: progress('검색 근거 분석 · ' + message, 20 + int(pct * .03)))
             transcript = _transcript_evidence(settings, shortcode)
+            raw_transcript = copy.deepcopy(transcript)
         except Exception as exc:
+            if isinstance(exc, ModelServiceUnavailable):
+                raise
             transcript['analysis_note'] = f'음성 분석 실패({type(exc).__name__}): 캡션·화면 근거로 계속'
     progress("음성·화면·캡션에서 검색 주제와 행동을 분석하는 중", 24)
     verifier = OpenClipVerifier(settings, frames)
     verification_notes = [verifier.error] if verifier.error else []
-    visual_queries = verifier.discover_product_queries()
+    visual_queries = prepared.get('visual_product_queries',[]) if prepared else verifier.discover_product_queries()
     from .source_search.strategy import fresh_frames
     vision_audit = []
-    vision_candidates, vision_terms = search_google_vision(settings,
-        fresh_frames(frames, 'google-vision', previous_searches or []), settings.source_max_candidates, vision_audit)
+    if prepared:
+        vision_candidates=[];vision_terms=prepared.get('google_vision_terms',[])
+        verifier.product_evidence=prepared.get('openclip_product_evidence',[])
+        verifier.subject_reference_indices=prepared.get('subject_reference_indices',[])
+    else:
+        vision_candidates, vision_terms = search_google_vision(settings,
+            fresh_frames(frames, 'google-vision', previous_searches or []), settings.source_max_candidates, vision_audit)
     from .text_overlay import TextOverlayDetector
     overlay_detector = TextOverlayDetector(settings)
     if overlay_detector.note:
         verification_notes.append(overlay_detector.note)
     if transcript.get('analysis_note'):
         verification_notes.append(transcript['analysis_note'])
-    if transcript.get('reference_kind') not in {'screen_text', 'mixed'}:
+    if prepared:
+        transcript=copy.deepcopy(prepared.get('transcript',transcript))
+    elif transcript.get('reference_kind') not in {'screen_text', 'mixed'}:
         transcript['screen_text'] = ' '.join([transcript.get('screen_text', ''), overlay_detector.reference_text(frames)])
-    query_plan = product_query_plan(post.caption, visual_queries, vision_terms, transcript, build_queries(post.caption))
-    if settings.source_query_model_enabled:
-        from .source_planning import enrich_plan
-        query_plan = enrich_plan(settings, query_plan, post.caption, transcript)
+    reuse_plan=bool(prepared and prepared.get('query_policy')==query_policy())
+    query_plan = copy.deepcopy(prepared['query_plan']) if reuse_plan else product_query_plan(post.caption, visual_queries, vision_terms, transcript, build_queries(post.caption))
+    if not prepared:
+        # A query-model capacity wait must retain completed media preparation.
+        media_path,_=bundle_paths(settings,shortcode,post.caption,raw_transcript)
+        save_bundle(media_path.with_suffix('.media.json'),post.caption,raw_transcript,reference,frames,contact_sheet,
+                    query_policy='media-only',transcript=transcript,query_plan=query_plan,
+                    visual_product_queries=visual_queries,google_vision_terms=vision_terms,
+                    openclip_product_evidence=verifier.product_evidence,
+                    subject_reference_indices=verifier.subject_reference_indices)
+    if settings.source_query_model_enabled and not reuse_plan:
+        from .source_planning import cached_enrich_plan
+        query_plan = cached_enrich_plan(settings, query_plan, post.caption, transcript,
+                                        reference_sha256=sha256_file(reference))
     from .source_search.planner import grounded_actions, choose_strategy, round_queries, annotate_audit
-    literal_actions = grounded_actions(query_plan, {'caption':post.caption, 'speech':transcript.get('speech',''),
-                                                  'screen_text':transcript.get('screen_text','')})
-    query_plan['query_details'] = [*literal_actions, *query_plan['query_details']]
+    if not reuse_plan:
+        literal_actions = grounded_actions(query_plan, {'caption':post.caption, 'speech':transcript.get('speech',''),
+                                                      'screen_text':transcript.get('screen_text','')})
+        query_plan['query_details'] = [*literal_actions, *query_plan['query_details']]
+        # Policy upgrades receive a separate immutable preparation receipt.
+        _,bundle_path=bundle_paths(settings,shortcode,post.caption,raw_transcript)
+        save_bundle(bundle_path,post.caption,raw_transcript,reference,frames,contact_sheet,
+                    transcript=transcript,query_plan=query_plan,visual_product_queries=visual_queries,
+                    google_vision_terms=vision_terms,openclip_product_evidence=verifier.product_evidence,
+                    subject_reference_indices=verifier.subject_reference_indices)
     from .search_access import access_record, manual_required
     from .source_search.readiness import readiness_blocked, readiness_record
     context = {**(search_context or {}), 'blocked_routes':[p for p in ('tiktok','douyin','xiaohongshu','bilibili','google-lens','yandex-images')
@@ -837,6 +1036,11 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     from .source_collection_access import disabled_platforms
     disabled = disabled_platforms(settings)
     strategy['routes'] = [route for route in strategy['routes'] if route not in disabled]
+    ready_routes=(search_context or {}).get('ready_routes')
+    if ready_routes is not None:
+        unavailable=[route for route in strategy['routes'] if route not in ready_routes]
+        strategy['routes']=[route for route in strategy['routes'] if route in ready_routes]
+        strategy['skipped_routes'].update({route:'현재 기존 경로 미준비 또는 미사용 범위 없음' for route in unavailable})
     strategy['skipped_routes'].update(disabled)
     query_plan['search_strategy'] = strategy
     progress('검색 전략 · ' + strategy['label'] + ' · ' + '; '.join(strategy['reasons']), 28)
@@ -845,11 +1049,16 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         verifier.focus_subject(query_plan['products'])
     query_details = round_queries(query_plan, strategy)
     if search_request.strip():
-        from .source_queries import feedback_queries
+        from .source_queries import feedback_queries, prioritize_tiktok_requests
         requested = feedback_queries(search_request)
         if not requested:
             verification_notes.append('긴 소스 검색 지시문을 검색어로 보내지 않았습니다. 짧은 검색어를 줄마다 입력하세요.')
         query_details = [{'query':q, 'language':language(q), 'origin':'user_feedback'} for q in requested] + query_details
+        if requested:
+            query_plan=prioritize_tiktok_requests(query_plan,requested)
+            if query_plan.get('tiktok_operator_query_rejections'):
+                verification_notes.append('TikTok 사용자 검색어의 명사·수식어 원본 근거 미확인 · '
+                    +str(len(query_plan['tiktok_operator_query_rejections']))+'개 미전송')
     queries = [item["query"] for item in query_details]
     if not queries:
         verification_notes.append('근거 있는 텍스트 검색어를 생성하지 못함 · 이미지 검색만 가능; 빈 문자열로 텍스트 검색하지 않음')
@@ -890,12 +1099,10 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     probed = 0
     attempted = 0
     embeddings = {}
-    deadline = time.monotonic() + max(1, settings.source_probe_time_budget)
     budget_stop = ''
     refinement_details = []
     refined = False
     platform_seconds = {}
-    functional_reviews = 0
     probe_progress = 50
     for i, candidate in enumerate(candidates, 1):
         from .source_collection_access import collection_disabled
@@ -916,38 +1123,25 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         if probed >= max(settings.source_max_downloads, settings.source_max_probe_downloads):
             budget_stop = 'probe_limit'
             break
-        if time.monotonic() >= deadline:
-            budget_stop = 'time_limit'
-            break
         skip_reason = 'platform_cooldown' if SOURCE_COOLDOWNS.get(candidate.platform, 0) > time.time() else ''
-        platform_remaining = max(1, settings.source_platform_probe_budget) - platform_seconds.get(candidate.platform, 0)
-        if platform_remaining <= 0:
-            skip_reason = 'platform_budget_exhausted'
         candidate_started = time.monotonic()
         path = None
         candidate.download_attempted = not bool(skip_reason)
         if not skip_reason:
-            from .source_search.budget import candidate_probe_seconds
-            pending_count = sum(c.platform == candidate.platform and c.download_attempted is None
-                                and not discovery_duration_reasons(c,max(180,settings.source_long_video_max_seconds))
-                                for c in candidates[i:]) + 1
-            allocation = candidate_probe_seconds(settings,platform_remaining,deadline-candidate_started,pending_count)
-            if allocation <= 0:
-                candidate.download_attempted = False
-                candidate.rejection_reasons = ['download_budget_deferred']
-                budget_stop = 'time_limit'
-                save_attempts()
-                break
-            candidate.download_budget_seconds = round(allocation,3)
+            candidate.download_budget_seconds = None  # Historical field only; no time allocation.
             attempted += 1
             save_attempts()
             with charge_platform_probe(platform_seconds, candidate.platform):
                 try:
                     path = download_candidate(candidate, candidates_dir, i, settings.source_max_file_mb,
-                                              settings.source_browser_cookie_file, deadline=min(deadline, candidate_started + allocation),
+                                              settings.source_browser_cookie_file,
                                               js_runtime=settings.source_ytdlp_js_runtime)
                 except (OSError, subprocess.SubprocessError, ValueError) as exc:
                     candidate.error = f'{type(exc).__name__}: {str(exc)[:240]}'
+                finally:
+                    if candidate.download_attempted is False:
+                        attempted -= 1  # Saved access gates/local reuse did not send this URL.
+                    save_attempts()
         if path:
             probed += 1
             candidate.downloaded_file = str(path.relative_to(root))
@@ -958,7 +1152,7 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                     from .source_segments import extract_relevant_segment
                     try:
                         segment = extract_relevant_segment(settings, path, candidate.video_meta, verifier,
-                                                           root / 'segments' / f'{i:02d}', deadline)
+                                                           root / 'segments' / f'{i:02d}')
                         if segment:
                             candidate.original_downloaded_file = candidate.downloaded_file
                             path, candidate.source_interval = segment
@@ -968,6 +1162,10 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                         candidate.error = f'긴 영상 구간 검사 실패: {type(exc).__name__}'
                 candidate.rejection_reasons = media_format_reasons(candidate.video_meta)
                 if not candidate.rejection_reasons:
+                    from .source_presentation import format_warnings, portrait_geometry
+                    candidate.format_warnings = format_warnings(candidate.video_meta)
+                    candidate.portrait_geometry = portrait_geometry(candidate.video_meta)
+                    candidate.presentation_review_required = True
                     candidate.file_sha256 = sha256_file(path)
                     try:
                         candidate.hash_similarity = compare_videos(frames, path, compare_dir / f"{i:02d}")
@@ -994,30 +1192,28 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                         candidate.source_score = round(clean_score * .55 + (semantic or 0) * .30
                                                        + (candidate.hash_similarity or 0) * .15
                                                        - (.08 if (candidate.video_meta.get("width") or 0) > (candidate.video_meta.get("height") or 0) else 0)
+                                                       - min(.06, .02 * len(candidate.format_warnings))
                                                        + (.03 if candidate.rights == "pexels-license" else 0), 4)
                         preview = root / "previews" / f"{i:02d}.jpg"
                         preview.parent.mkdir(exist_ok=True)
                         create_contact_sheet(sorted((compare_dir / f"{i:02d}").glob("candidate_*.jpg"))[:8], preview)
                         candidate.preview_file = str(preview.relative_to(root))
-                        if (settings.source_match_mode == 'functional'
-                                and functional_reviews < 3
-                                and relevance_reasons(candidate, candidate.video_meta, 'product')
-                                and ((candidate.semantic_similarity or 0) >= .60
-                                     or ((candidate.semantic_similarity or 0) >= .55
-                                         and title_query_agreement(candidate.title, candidate.query) >= .25))):
-                            from .source_functional import review_function
-                            functional_reviews += 1
-                            try:
-                                candidate.functional_review = review_function(settings, candidate, frames, candidate_frames)
-                            except Exception as exc:
-                                candidate.error = f'핵심 기능 영상 검토 대기: {type(exc).__name__}'
+                        if settings.source_match_mode == 'functional':
+                            candidate.similarity_warnings = relevance_reasons(candidate, candidate.video_meta, 'product')
+                            # Review selected footage once in Studio using the
+                            # exact overlay-approved intervals. No three-item
+                            # rescue cap and no score gate before visual review.
+                            candidate.relevance_review_required = True
                         candidate.rejection_reasons = [*relevance_reasons(candidate, candidate.video_meta, settings.source_match_mode),
                                                        *reuse_reasons(candidate)]
                     except Exception as exc:  # noqa: BLE001
+                        if isinstance(exc, ModelServiceUnavailable):
+                            raise
                         candidate.error = f"유사도 계산 실패: {exc}"
                         candidate.rejection_reasons = ["verification_failed"]
         else:
-            candidate.rejection_reasons = [skip_reason or "download_failed"]
+            candidate.rejection_reasons = candidate.rejection_reasons or [skip_reason or (
+                'not_attempted' if candidate.download_attempted is False else 'download_failed')]
         save_attempts()
         probe_progress = max(probe_progress, min(88, 50 + int(i / max(1, len(candidates)) * 38)))
         progress(f"후보 다운로드/검증 {i}/{len(candidates)}", probe_progress)
@@ -1025,10 +1221,11 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         usable = len(select_valid_candidates(copy.deepcopy([c for c in candidates
                      if editing_ready(asdict(c))]), settings.source_max_downloads))
         if ((i == len(candidates) or i == min(20, len(candidates))) and not refined
-                and (usable < policy['minimum_total']
-                     or tiktok_count(candidates, settings.source_max_downloads) < tiktok_target)
+                and (sum(bool(c.downloaded_file) and not c.rejection_reasons for c in candidates) < settings.source_max_downloads
+                     if policy.get('completion_mode') == 'scene_duration' else
+                     usable < policy['minimum_total'] or tiktok_count(candidates, settings.source_max_downloads) < tiktok_target)
                 and settings.source_refine_max_candidates > 0
-                and attempted < settings.source_max_attempts and time.monotonic() < deadline
+                and attempted < settings.source_max_attempts
                 and probed < max(settings.source_max_downloads, settings.source_max_probe_downloads)):
             refined = True
             titles = [c.title for c in candidates if c.title and (c.semantic_similarity or 0) >= .82][:3]
@@ -1039,7 +1236,9 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                 extra_queries = list(dict.fromkeys(d['query'] for d in refinement_details))
                 if extra_queries:
                     probe_progress = max(probe_progress, 80)
-                    progress(f'유효 소스 {usable}개 · TikTok {tiktok_count(candidates, settings.source_max_downloads)}/{tiktok_target}개 · 추가 검색 중', 80)
+                    progress((f'후보 확보 {sum(bool(c.downloaded_file) and not c.rejection_reasons for c in candidates)}개 · 장면 검토 대기 · 추가 검색 중'
+                              if policy.get('completion_mode') == 'scene_duration' else
+                              f'유효 소스 {usable}개 · TikTok {tiktok_count(candidates, settings.source_max_downloads)}/{tiktok_target}개 · 추가 검색 중'), 80)
                     search_started = time.monotonic()
                     extra = []
                     if settings.source_browser_search:
@@ -1047,26 +1246,27 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                         additional = browser_search(settings, [], extra_queries, settings.source_refine_max_candidates,
                                                     root / 'refinement_debug', previous_searches=[*(previous_searches or []), *search_audit],
                                                     routes=strategy['routes'],
-                                                    progress=lambda msg: progress('추가 검색 · ' + msg, 80))
+                                                    provider_queries={'tiktok': tiktok_product_queries(query_plan, extra_queries)},
+                                                    progress=bind_progress(lambda msg: progress('추가 검색 · ' + msg, 80), progress))
                         extra += [Candidate(**item) for item in additional['candidates']]
                         search_audit.extend(additional.get('searches', []))
                         browser_result['notes'].extend(additional.get('notes', []))
                     from .source_search.strategy import fresh_queries
-                    if 'youtube' in strategy['routes']:
+                    if not settings.source_browser_search and 'youtube' in strategy['routes']:
                         extra += search_youtube(platform_queries(fresh_queries(extra_queries, 'youtube', [*(previous_searches or []), *search_audit]), 'youtube', settings.source_queries_per_platform), settings.source_refine_max_candidates,
                                                settings.source_browser_cookie_file, search_audit, settings.source_ytdlp_js_runtime)
-                    if 'bing' in strategy['routes']:
+                    if not settings.source_browser_search and 'bing' in strategy['routes']:
                         extra += search_bing(platform_queries(fresh_queries(extra_queries, 'bing', [*(previous_searches or []), *search_audit]), 'youtube', 3), settings.source_refine_max_candidates, search_audit)
                     annotate_audit(search_audit, refinement_strategy)
-                    deadline += time.monotonic() - search_started  # The configured budget covers downloads/verification.
                     seen = {canonical_video_key(c.url) for c in candidates} | already_checked
                     novel = [c for c in _dedupe(extra) if video_url(c.url) and canonical_video_key(c.url) not in seen]
-                    # Probe fresh search intents next, before old candidates consume the remaining budget.
+                    # Probe fresh search intents before reusing the remaining candidate slots.
                     candidates[i:i] = candidate_batch(rank_candidates(novel,query_plan), max(0, min(settings.source_refine_max_candidates,
                                                                          settings.source_max_attempts - attempted)), tiktok_target)
     candidates.sort(key=lambda c: (c.downloaded_file != "", c.source_score or 0, c.similarity or 0), reverse=True)
     candidates.extend(invalid_candidates)
-    selected = select_sources(candidates, settings.source_max_downloads, tiktok_target)
+    selected = select_sources(candidates, settings.source_max_downloads, tiktok_target,
+                              required=bool(policy.get('platform_minimums')))
     coverage = tiktok_coverage(candidates, search_audit, tiktok_target, budget_stop)
     downloaded = len(selected)
     quality_counts = {key: sum(c.selected_for_zip and c.source_quality == key for c in candidates)
@@ -1082,13 +1282,19 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         "search_strategy": strategy,
         "search_audit": search_audit, "search_policy_version": 6,
         "source_target": policy['minimum_total'],
-        "platform_targets": {"tiktok": coverage} if tiktok_target else {},
+        "platform_targets": {"tiktok": coverage} if policy.get('platform_minimums') else {},
+        "platform_preferences": {"tiktok": {**coverage, 'required': False}} if tiktok_target else {},
         "platform_outcomes": platform_outcomes(candidates, search_audit, policy['platform_minimums'], budget_stop),
-        "quota_ready": sum(editing_ready(asdict(c)) for c in selected) >= policy['minimum_total'] and coverage['status'] == 'met',
+        "quota_ready": False if policy.get('completion_mode') == 'scene_duration' else
+                       sum(editing_ready(asdict(c)) for c in selected) >= policy['minimum_total'] and coverage['status'] == 'met',
+        "review_pending": sum(c.relevance_review_required or c.presentation_review_required for c in selected),
         "visual_product_queries": visual_queries, "openclip_product_evidence": verifier.product_evidence,
         "subject_reference_indices": verifier.subject_reference_indices,
         "google_vision_terms": vision_terms,
-        "reference_frames": [str(p.relative_to(root)) for p in frames],
+        "reference_frames": [os.path.relpath(p, root) for p in frames],
+        "preparation_bundle_path": str(bundle_path.resolve()),
+        "preparation_bundle_sha256": sha256_file(bundle_path),
+        "reference_contact_sheet": os.path.relpath(contact_sheet,root),
         "browser_notes": browser_result["notes"], "verification_notes": verification_notes,
         "candidates": [asdict(c) for c in candidates], "downloaded": downloaded,
         "probe_attempts": attempted, "probed_downloads": probed,
@@ -1105,7 +1311,7 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     zip_path = root / f"sources_{shortcode}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(root / "manifest.json", "manifest.json")
-        z.write(root / "reference_contact_sheet.jpg", "reference_contact_sheet.jpg")
+        z.write(contact_sheet, "reference_contact_sheet.jpg")
         for c in candidates:
             if c.selected_for_zip:
                 folder = {"clean-source": "clean_sources", "light-overlay": "review_needed",
@@ -1113,8 +1319,7 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                 z.write(root / c.downloaded_file, f"{folder}/{Path(c.downloaded_file).name}")
             if c.selected_for_zip and c.preview_file:
                 z.write(root / c.preview_file, c.preview_file)
-    progress(f"완료 · TikTok {coverage['usable']}/{tiktok_target}개" +
-             (' · 목표 미달/검색 미완료: ' + '; '.join(coverage['reasons']) if coverage['status']=='shortfall' else ''), 100)
+    progress(f"후보 확보 완료 · {len(selected)}개 · 장면·사용 가능 길이 검토 대기 · TikTok 선호 {tiktok_target}개", 100)
     manifest["zip_path"] = str(zip_path)
     return manifest
 

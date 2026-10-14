@@ -1,6 +1,8 @@
 """Versioned automatic production. Feedback is staged, never a live input mutation."""
 from __future__ import annotations
 
+from .studio_store import change_claimed
+
 import copy
 import hashlib
 import json
@@ -196,13 +198,54 @@ class WorkflowMixin:
             return None
         actions = {'save-feedback', 'save-script', 'restore-script', 'apply-proposal', 'regenerate-voice',
                    'revise-edit', 'request-edit', 'reproduce', 'discard-feedback', 'select-candidate', 'discard-edit-feedback',
-                   'save-captions', 'export-edit', 'make-video'}
+                   'save-captions', 'export-edit', 'make-video', 'save-overlays', 'export-overlays', 'save-thumbnail', 'export-thumbnail'}
         if action not in actions:
             return None
         def change(s, db):
             if data.get('feedback_revision') is not None and data['feedback_revision'] != s.get('feedback_revision',0):
                 raise Conflict('다른 화면에서 피드백이 변경되었습니다. 최신 내용을 확인한 뒤 다시 저장하세요.')
             feedback = s.setdefault('feedback', {})
+            if action in {'save-thumbnail', 'export-thumbnail'}:
+                from .studio_thumbnail import validate_thumbnail
+                from .remotion_editor import available
+                if not available():
+                    raise RuntimeError('Remotion 연결이 준비되지 않았습니다.')
+                edit = next((e for e in s['edits'] if e['id'] == data.get('edit_id')), None)
+                if not edit or edit['id'] != s.get('edit_id'):
+                    raise Conflict('새 편집 영상이 준비되었습니다. 이전 썸네일을 보관한 뒤 새 영상을 확인하세요.')
+                if set(feedback)-{'thumbnail_document', 'base_edit_id', 'thumbnail_only'}:
+                    raise Conflict('다른 편집 수정사항을 먼저 반영하거나 취소한 뒤 썸네일을 저장하세요.')
+                if feedback.get('base_edit_id', edit['id']) != edit['id']:
+                    raise Conflict('이전 편집 버전에 저장한 썸네일 수정이 있습니다.')
+                if s.get('pending_reproduction') or db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running') AND kind NOT IN ('collect_sources','refresh_sources','proposal','suggest_edit')", (task_id,)).fetchone():
+                    raise Conflict('진행 중인 영상 제작이 끝난 뒤 썸네일을 저장하세요.')
+                if not Path(edit.get('export_path') or '').is_file():
+                    raise ValueError('완성 영상이 준비된 뒤 썸네일을 반영하세요.')
+                document = validate_thumbnail(data.get('document'), edit['duration'])
+                feedback.update(thumbnail_document=document, base_edit_id=edit['id'], thumbnail_only=True)
+                if action == 'save-thumbnail':
+                    s['feedback_revision'] = s.get('feedback_revision', 0)+1
+                    self.store.event(db, task_id, action, {})
+                    return
+            if action in {'save-overlays', 'export-overlays'}:
+                from .remotion_editor import validate_document, available
+                if not available():
+                    raise RuntimeError('Remotion 연결이 준비되지 않았습니다.')
+                edit = next((e for e in s['edits'] if e['id'] == data.get('edit_id')), None)
+                if not edit or edit['id'] != s.get('edit_id'):
+                    raise Conflict('새 편집 영상이 준비되었습니다. 이전 편집을 보관한 뒤 새 영상을 확인하세요.')
+                if set(feedback)-{'overlay_document', 'base_edit_id', 'remotion_only'}:
+                    raise Conflict('대본·음성·소스 또는 기존 자막 수정사항을 먼저 반영하거나 취소하세요.')
+                if feedback.get('base_edit_id', edit['id']) != edit['id']:
+                    raise Conflict('다른 편집 버전에 저장한 꾸미기가 있습니다.')
+                if s.get('pending_reproduction') or db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running') AND kind NOT IN ('collect_sources','refresh_sources','proposal','suggest_edit')", (task_id,)).fetchone():
+                    raise Conflict('진행 중인 영상 제작이 끝난 뒤 편집을 저장하세요.')
+                document = validate_document(data.get('document'), edit['duration'])
+                feedback.update(overlay_document=document, base_edit_id=edit['id'], remotion_only=True)
+                if action == 'save-overlays':
+                    s['feedback_revision'] = s.get('feedback_revision', 0)+1
+                    self.store.event(db, task_id, action, {})
+                    return
             if action == 'make-video':
                 if 'text' in data:
                     text = str(data['text']).strip()
@@ -243,6 +286,8 @@ class WorkflowMixin:
                 feedback.pop('changes', None)
                 feedback.pop('base_edit_id', None)
                 feedback.pop('caption_only', None)
+                feedback.pop('overlay_document', None)
+                feedback.pop('remotion_only', None)
             elif action in {'save-script', 'restore-script', 'apply-proposal', 'select-candidate'}:
                 if action == 'save-script': text = str(data.get('text', '')).strip()
                 elif action == 'restore-script': text = next(v['text'] for v in s['scripts'] if v['id'] == data['script_id'])
@@ -299,13 +344,13 @@ class WorkflowMixin:
                 request = str(data.get('request', '')).strip()
                 if not request: raise ValueError('수정 요청을 입력하세요.')
                 self.store.enqueue(db, task_id, 'suggest_edit', {**data, 'feedback_hash': self.feedback_hash(feedback)}, uid('suggest:'))
-            if action in {'reproduce','export-edit','make-video'}:
+            if action in {'reproduce','export-edit','make-video','export-overlays','export-thumbnail'}:
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
-                if feedback.get('changes') and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids', 'voice_profile_id')):
+                if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids', 'voice_profile_id')):
                     raise Conflict('대본·음성·소스를 바꾸면 장면 구성이 달라집니다. 구간 수정만 초기화한 뒤 재제작하고, 새 영상에서 장면·자막을 조정하세요. 기존 완성본은 보존됩니다.')
                 ids = feedback.get('source_ids', [v['id'] for v in s['sources']])
-                if not ids: raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
+                if not ids and not feedback.get('thumbnail_only'): raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
                 snapshot(s)
                 # Reproduce is an explicit start request. A later pause must
                 # remain authoritative when the running step eventually ends.
@@ -346,10 +391,15 @@ class WorkflowMixin:
         old_inputs = copy.deepcopy(old['inputs'])
         old_inputs.pop('changes', None)
         old_inputs.pop('regenerate_voice', None)
+        old_inputs.pop('overlay_document', None)
+        old_inputs.pop('remotion_only', None)
+        old_inputs.pop('thumbnail_document', None)
+        old_inputs.pop('thumbnail_only', None)
         old_inputs.update(feedback)
         s.pop('run_id', None)
         from .source_policy import adopt_policy
-        adopt_policy(s, self.settings)
+        if not feedback.get('remotion_only') and not feedback.get('thumbnail_only'):
+            adopt_policy(s, self.settings)
         run = init_run(s)
         run.update(inputs=old_inputs, parent_id=old['id'])
         if 'script_text' in feedback:
@@ -361,11 +411,13 @@ class WorkflowMixin:
             s['edit_id'] = None
         s['automation'].update(active=True, paused_by_user=False)
         s.update(error='', progress=0)
-        if feedback.get('changes') and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids','voice_profile_id')):
+        if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids','voice_profile_id')):
             edit = next(e for e in s['edits'] if e['id'] == feedback['base_edit_id'])
             self.store.enqueue(db, s['id'], 'revision', {'edit_id':edit['id'], 'script_id':edit['script_id'],
-                'voice_id':edit['voice_id'], 'changes':feedback['changes'], 'caption_only':bool(feedback.get('caption_only'))}, 'revision:'+run['id'])
-            s.update(status='editing', message='수정한 자막으로 MP4 내보내기 중' if feedback.get('caption_only') else '저장한 장면·자막 수정으로 새 버전 제작 중')
+                'voice_id':edit['voice_id'], 'changes':feedback.get('changes', []), 'caption_only':bool(feedback.get('caption_only')),
+                **({'remotion_only':True, 'overlay_document':feedback['overlay_document']} if 'overlay_document' in feedback else {}),
+                **({'thumbnail_only':True, 'thumbnail_document':feedback['thumbnail_document']} if 'thumbnail_document' in feedback else {})}, 'revision:'+run['id'])
+            s.update(status='editing', message='첫 프레임 썸네일을 반영한 새 버전 제작 중' if feedback.get('thumbnail_only') else '수정한 자막으로 MP4 내보내기 중' if feedback.get('caption_only') else '저장한 장면·자막 수정으로 새 버전 제작 중')
         else:
             self._advance_auto(s, db)
 
@@ -376,8 +428,33 @@ class WorkflowMixin:
             self.activate_reproduction(s, db)
             return
         if not s['automation'].get('active') or not s.get('original_text'): return
-        self.ensure_source_collection(s, db)
         script, voice, edit = (selected(s, c, k) for c, k in [('scripts','script_id'), ('voices','voice_id'), ('edits','edit_id')])
+        if self.advance_daily_quality(s, db, script, voice, edit):
+            return
+        if run['inputs'].get('photo_story'):
+            # Explicit still-image production is a separate editing contract.
+            # It never promotes analysis slides or still holds to video coverage.
+            if s.get('creation_mode') != 'photo_post':
+                raise ValueError('사진 영상 제작은 사진 게시물에만 사용할 수 있습니다.')
+            if (edit and voice and script and edit.get('export_kind') == 'photo_story' and
+                    edit.get('voice_id') == voice.get('id') and edit.get('script_id') == script.get('id') and edit.get('export_verified') is True
+                    and Path(edit.get('export_path') or '').is_file() and edit.get('photo_assets')):
+                run.update(status='completed', completed=time.time())
+                run['artifacts']['photo_assets'] = copy.deepcopy(edit['photo_assets'])
+                s['latest_completed_run_id'] = run['id']
+                s['automation'].update(stage='completed', completed_at=time.time())
+                s.update(status='completed', message='원본 사진·음성·자막으로 만든 영상 내보내기 완료', progress=100, error='')
+            return
+        if run['inputs'].get('remotion_only') or run['inputs'].get('thumbnail_only'):
+            # This revision uses an already rendered, immutable picture/audio base.
+            # Do not recollect footage or reconsider the previously chosen narration.
+            if edit and edit.get('parent_id') == run['inputs'].get('base_edit_id') and edit.get('export_verified') and Path(edit.get('export_path', '')).is_file():
+                run.update(status='completed', completed=time.time())
+                s['latest_completed_run_id'] = run['id']
+                s['automation'].update(stage='completed', completed_at=time.time())
+                s.update(status='completed', message='첫 프레임 썸네일 반영 완료' if run['inputs'].get('thumbnail_only') else '자막·꾸미기를 반영한 MP4 내보내기 완료', progress=100, error='')
+            return
+        self.ensure_source_collection(s, db)
         key = run['id']
         wrong_automatic_voice = bool(voice and voice.get('voice_profile_id') and run['inputs'].get('voice_selection_mode') != 'manual')
         if not script or s['automation'].get('needs_top_pick'):
@@ -414,23 +491,44 @@ class WorkflowMixin:
             s['automation']['voice_selection'] = {'mode':'automatic','voice_id':voice['id']}
             # Freeze the exact validated inventory used by this edit, including
             # sources acquired while script and voice were already in flight.
-            # Ten is the acquisition-pool goal. A manual Studio selection may
+            # Acquisition coverage is a pool goal. A manual Studio selection may
             # use fewer clips and must never silently include excluded footage.
             source_ids = run['inputs'].get('source_ids', goal['source_ids'])
             run['inputs']['source_ids'] = source_ids
             payload = dict(script_id=script['id'], voice_id=voice['id'], source_ids=source_ids,
                            changes=run['inputs'].get('changes',[]), base_edit_id=run['inputs'].get('base_edit_id'))
+            if s.get('initial_render_preparation'):
+                from .initial_prepared_render import from_state
+                prepared,_=from_state(s)
+                key+=':prepared-cover:'+prepared['material_key']
+                payload['initial_render_preparation_key']=prepared['material_key']
+            quality=s.get('daily_quality',{})
+            if quality.get('repair_context'):
+                from .quality_progress import permit, queue_method
+                method=queue_method(s,db,'reedit')
+                if not method:return
+                from .scene_requirements import repair_render_signature,REPAIR_SIGNATURE_POLICY
+                signature=repair_render_signature(s)
+                quality['repair_signature_policy']=REPAIR_SIGNATURE_POLICY
+                payload.update(quality_repair=True,repair_input_signature=signature,
+                               repair_signature_policy=REPAIR_SIGNATURE_POLICY,
+                               parent_edit_id=quality['repair_context'].get('parent_edit_id'),quality_method=method)
         elif not edit.get('draft_path') and not edit.get('export_verified') and not edit.get('registration_deferred'):
             stage, status, message, payload = 'register', 'registering', 'CapCut 프로젝트 등록 대기', {'edit_id':edit['id'], 'launch':False}
         elif not edit.get('export_path'):
             stage, status, message, payload = 'export', 'exporting', 'CapCut 최종 MP4 내보내기 대기', {'edit_id':edit['id']}
         else:
+            if edit.get('export_verified') is not True or not Path(edit.get('export_path') or '__missing__').is_file():
+                raise ValueError('완료 영상 파일이 소실되었거나 검증되지 않았습니다. 기존 결과를 보존하고 확인이 필요합니다.')
+            from .daily_quality import verified_quality_export
+            if not verified_quality_export(s,edit):
+                raise ValueError('현재 완성 영상·편집 계획에 결속한 품질 검수 근거가 없습니다.')
             from .studio_sources import sync_ready_source_status
             sync_ready_source_status(s, db, self.settings.source_min_usable)
             run.update(status='completed', completed=time.time())
             s['latest_completed_run_id'] = run['id']
             s['automation'].update(stage='completed', completed_at=time.time())
-            message = {'web_captions':'수정한 자막으로 MP4 내보내기 완료',
+            message = {'remotion':'자막·꾸미기를 반영한 MP4 내보내기 완료', 'web_captions':'수정한 자막으로 MP4 내보내기 완료',
                        'web_render':'최종 MP4 내보내기 완료 · 웹 렌더링으로 복구'}.get(edit.get('export_kind'), 'CapCut 최종 영상 내보내기 완료')
             s.update(status='completed', message=message, progress=100, error='')
             return
@@ -438,13 +536,16 @@ class WorkflowMixin:
         existing = db.execute('SELECT status FROM jobs WHERE key=?', (queue_key,)).fetchone()
         if existing and existing['status'] == 'failed' and s.get('error'):
             return
-        self.store.enqueue(db, s['id'], stage, payload, queue_key)
+        identity=self.store.enqueue(db, s['id'], stage, payload, queue_key)
+        if payload.get('quality_repair'):
+            permit(s,'reedit',reserve=True,job_id=identity)
         if s['automation'].get('stage') != stage:
             self.store.event(db, s['id'], 'automatic_stage', {'stage':stage, 'message':message})
         s['automation']['stage'] = stage
         s.update(status=status, message=message, progress=0, error='')
 
     def _export(self, state, job):
+        job = {**job, 'task_id': state['id']}
         from .editing_adapter import AutoCapcutAdapter, NativeExportUnavailable
         edit = next(e for e in state['edits'] if e['id'] == job['payload']['edit_id'])
         hold = self.settings.editing_dir / job['id'] / 'export-hold.json'
@@ -454,19 +555,19 @@ class WorkflowMixin:
         checkpoint = job['checkpoint']
         if edit.get('registration_deferred') and not edit.get('draft_path'):
             checkpoint.setdefault('native_export_unavailable', edit.get('registration_note', 'CapCut 프로젝트 등록 대기'))
-            self.store.checkpoint(job['id'], checkpoint)
+            self.store.checkpoint(job, checkpoint)
         if not checkpoint.get('native_export_unavailable'):
             try:
                 result = AutoCapcutAdapter(self.settings).export(job_id=job['id'], draft_name=edit['draft_name'], draft_path=Path(edit['draft_path']))
             except NativeExportUnavailable as exc:
                 checkpoint['native_export_unavailable'] = str(exc)
-                self.store.checkpoint(job['id'], checkpoint)
+                self.store.checkpoint(job, checkpoint)
         if checkpoint.get('native_export_unavailable'):
             # Keep the registered draft and its existing edit identity. The
             # renderer reuses this exact picture/audio/cue plan and verifies
             # the final media. Content holds and verification errors never
             # enter this fallback; no native editor is killed or modified.
-            self.store.change(state['id'], lambda s, db: s.update(
+            change_claimed(self.store, job, lambda s, db: s.update(
                 message='CapCut 창 연결 실패 · 같은 장면·음성·자막으로 웹 내보내기 중', progress=50))
             plan = json.loads(Path(edit['plan_path']).read_text(encoding='utf-8'))
             rendered = self._process(state, job, 'caption-export', {'plan':plan, 'changes':[]})
@@ -490,7 +591,7 @@ class WorkflowMixin:
             # of reuse in the common saved plan and resulting detail screen.
             plan['footage_policy'] = 'owned-only-reuse-v1'
         changes = copy.deepcopy(job['payload'].get('changes', []))
-        if not changes: return self._process(state, job, 'render', {'plan':plan})
+        if not changes: return self._render_reviewed_cover(state, job, plan)
         base = next(e for e in state['edits'] if e['id']==job['payload']['base_edit_id'])
         old = json.loads(Path(base['plan_path']).read_text(encoding='utf-8'))
         used = set()
@@ -507,7 +608,55 @@ class WorkflowMixin:
                 change['shot_id']=replacement['id']
                 if not any(o['shot_id']==replacement['id'] for o in target['options']):
                     target['options'].append({'shot_id':replacement['id'],'relation':'illustration','reason':'사용자가 선택한 장면'})
-        return self._process(state, job, 'revise', {'plan':plan,'changes':changes})
+        return self._render_reviewed_cover(state,job,plan,changes)
+
+    def _render_reviewed_cover(self,state,job,plan,changes=None):
+        from .cover_selection import select_cover
+        # Keep the editor process boundary: select windows before reviewing
+        # cover candidates, then freeze these actual choices for rendering.
+        from .daily_quality import enabled as daily_enabled, QualitySceneGap
+        if daily_enabled(state):
+            from .scene_requirements import constrain_plan
+            constrain_plan(state,plan)
+            missing=[b for b in plan.get('beats',[]) if b.get('visual_alignment_gap')]
+            if missing:
+                raise QualitySceneGap([{'kind':'scene_gap','beat_id':b['id'],
+                    'reason':'필요한 검토 장면이 실제 편집 선택지에 연결되지 않음',
+                    'search_query':state.get('product') or state.get('title','')} for b in missing])
+        selected=self._process(state,job,'select-shots',{'plan':plan,'changes':changes or []})['plan']
+        if daily_enabled(state):
+            from .scene_requirements import anchor_selected_scenes, validate_selected_scenes
+            anchor_selected_scenes(state,selected)
+            validate_selected_scenes(state,selected)
+            missing=[b for b in selected.get('beats',[]) if b.get('visual_alignment_gap') or not b.get('selected_shot_id')]
+            if missing:
+                raise QualitySceneGap([{'kind':'scene_gap','beat_id':b['id'],
+                    'reason':'편집 전 필요한 사용 장면의 연결이 확인되지 않음',
+                    'search_query':state.get('product') or state.get('title','')} for b in missing])
+        candidates=self._process(state,job,'cover-candidates',{'plan':selected})['candidates']
+        selected=select_cover(self.settings,selected,candidates,self.folder(state['id'])/job['id'],
+            search_context=state.get('product') or state.get('title',''))
+        if daily_enabled(state):
+            validate_selected_scenes(state,selected)
+            if job['payload'].get('quality_prepare_only'):
+                return {'no_render':True,'prepared_plan':selected}
+            if job['kind']=='quality_reedit' or job['payload'].get('quality_repair'):
+                from .quality_progress import guard_render, QualityProgressHold, hold
+                if any(i.get('kind')=='caption_sync' for i in state['daily_quality'].get('feedback',[])):
+                    selected['audio_timing_repair']=True
+                    from .quality_progress import audio_repair_evidence
+                    selected['quality_audio_repair']={'method':'approved-voice-pcm-clock',
+                        'voice_sha256':selected['voice']['sha256'],'audit':audio_repair_evidence(state)}
+                blocked=[]
+                def before_render(current,db):
+                    if current.get('automation',{}).get('paused_by_user'):
+                        blocked.append('사용자 중지 유지');return
+                    reason=guard_render(current,selected,job['id'])
+                    blocked.append(reason)
+                    if reason:hold(current,reason,'stop_method')
+                change_claimed(self.store, job,before_render)
+                if blocked[0]:raise QualityProgressHold(blocked[0],waiting=blocked[0]=='사용자 중지 유지')
+        return self._process(state,job,'render',{'plan':selected})
 
     def _suggest_edit(self, state, job):
         from .studio_ai import plan_revision
@@ -524,7 +673,7 @@ class WorkflowMixin:
             jobs = self.store.jobs(state['id'])
         production_jobs = [j for j in jobs if j['kind'] in {
             'prepare', 'collect_sources', 'refresh_sources', 'rewrite', 'voice', 'edit', 'revision', 'revise',
-            'edit_request', 'register', 'export'}]
+            'edit_request', 'register', 'export','quality_review','quality_reedit'}]
         # A saved stage is a checkpoint, not evidence that a worker is running.
         execution = ('running' if any(j['status']=='running' for j in production_jobs)
                      else 'queued' if any(j['status']=='queued' for j in production_jobs)
@@ -549,7 +698,8 @@ class WorkflowMixin:
                 'project':bool(edit.get('portable_draft_path') and Path(edit['portable_draft_path']).is_dir()),
                 'export':bool(edit.get('export_verified') and edit.get('export_path') and Path(edit['export_path']).is_file())}
             stage = state.get('automation', {}).get('stage', 'prepare')
-            active_key = {'prepare':'sources','rewrite':'script','voice':'voice','edit':'project','register':'project','export':'export'}.get(stage)
+            active_key = {'prepare':'sources','rewrite':'script','voice':'voice','edit':'project','register':'project','export':'export',
+                          'quality_review':'project','quality_reedit':'project','refresh_sources':'sources'}.get(stage)
             run['steps'] = []
             for key, label in STEPS:
                 status = 'completed' if available[key] else 'pending'
@@ -559,7 +709,7 @@ class WorkflowMixin:
                     status = 'completed' if source_goal(state,self.settings.source_min_usable)['ready'] else 'pending'
                 if current and status != 'completed':
                     stage_kinds = {'sources':{'collect_sources','refresh_sources'}, 'transcript':{'prepare'}, 'script':{'prepare','rewrite'}, 'voice':{'voice'},
-                                   'project':{'edit','revision','revise','edit_request','register'}, 'export':{'export'}}
+                                   'project':{'edit','revision','revise','edit_request','register','quality_review','quality_reedit'}, 'export':{'export'}}
                     step_jobs = [j for j in production_jobs if j['kind'] in stage_kinds.get(key, set())]
                     status = ('running' if any(j['status']=='running' for j in step_jobs)
                               else 'queued' if any(j['status']=='queued' for j in step_jobs)

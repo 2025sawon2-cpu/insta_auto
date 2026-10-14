@@ -9,10 +9,11 @@ def test_pacing_announces_and_waits_before_each_search(tmp_path, monkeypatch):
     messages, waits = [], []
     searcher.progress = messages.append
     monkeypatch.setattr(bs.time, 'sleep', waits.append)
+    monkeypatch.setattr(bs.time, 'time', lambda: 100)
     searcher._pace('Google Lens')
     searcher._pace('Google Lens')
-    assert waits == [30, 30]
-    assert all('30초 대기' in m for m in messages)
+    assert waits == [10]
+    assert all('10.0초 대기' in m for m in messages)
 
 
 def test_captcha_cooldown_survives_worker_restart(tmp_path, monkeypatch):
@@ -27,9 +28,14 @@ def test_captcha_cooldown_survives_worker_restart(tmp_path, monkeypatch):
     assert any('CAPTCHA 인증 대기' in m for m in messages)
     bs.BROWSER_COOLDOWNS.clear()
     later = bs.BrowserSearcher(searcher.settings, tmp_path)
-    # A blocked service must not even open a search tab.
-    later._google(None, [], 10)
+    # A recorded challenge requires reading the same existing tab, never
+    # opening another search tab or assuming elapsed time resolves it.
+    current=SimpleNamespace(url='https://www.google.com/sorry/index',
+        locator=lambda _:SimpleNamespace(inner_text=lambda:'Verify you are human'))
+    monkeypatch.setattr(later,'_page',lambda *args:current)
+    later._google(SimpleNamespace(), [], 10)
     assert later.searches[0]['status'] == 'verification_required'
+    assert later.searches[0]['captcha_check']['status']=='captcha'
     assert not later._cooling_down('yandex-images')
 
 
@@ -110,14 +116,15 @@ def test_one_paced_search_request_detects_429_without_extra_auth_probe(tmp_path,
     monkeypatch.setattr(bs, 'BROWSER_COOLDOWNS', {})
     events = []
     monkeypatch.setattr(bs.time, 'sleep', lambda seconds: events.append(('wait', seconds)))
-    page=SimpleNamespace(route=lambda *a:None,close=lambda:None,
+    page=SimpleNamespace(url='about:blank',route=lambda *a:None,close=lambda:None,
         goto=lambda *a,**k:events.append(('search',None)) or SimpleNamespace(status=429))
+    monkeypatch.setattr(bs.BrowserSearcher, '_page', lambda *a:page)
     context = SimpleNamespace(new_page=lambda:page)
     searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path), tmp_path)
     searcher._platforms(context, ['minced garlic'], 4, providers={'tiktok'})
-    assert events == [('wait', 30), ('search', None)]
+    assert events == [('search', None)]
     assert searcher.searches[0]['status'] == 'rate_limited'
-    assert searcher.searches[0]['requests'][0]['operation'] == 'search_navigation'
+    assert searcher.searches[0]['requests'][0]['operation'] == 'search_home'
 
 
 def test_login_wall_on_search_stops_provider_without_retry(tmp_path, monkeypatch):
@@ -127,10 +134,11 @@ def test_login_wall_on_search_stops_provider_without_retry(tmp_path, monkeypatch
     page=SimpleNamespace(url='https://www.douyin.com/search/demo',route=lambda *a:None,close=lambda:None,
         goto=lambda *a,**k:calls.append(a[0]) or SimpleNamespace(status=200),wait_for_timeout=lambda _:None,
         locator=lambda _:SimpleNamespace(inner_text=lambda:'登录后即可搜索更多精彩视频 验证码登录'))
+    monkeypatch.setattr(bs.BrowserSearcher, '_page', lambda *a:page)
     context=SimpleNamespace(new_page=lambda:page)
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path), tmp_path)
     searcher._platforms(context,['蒜泥','大蒜'],4,providers={'douyin'})
-    assert len(calls)==1
+    assert len(calls)==0  # Existing login wall is preserved without navigation
     assert searcher.searches[0]['status']=='login_required'
     assert searcher._cooling_down('douyin')
 
@@ -166,20 +174,23 @@ def test_unfinished_search_page_is_not_empty_results_or_repeated_with_more_queri
         mouse=SimpleNamespace(wheel=lambda *a:None),
         locator=lambda _:SimpleNamespace(inner_text=lambda:'精选 推荐 登录 综合 视频 用户'))
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path),tmp_path)
+    monkeypatch.setattr(searcher, '_page', lambda *a:page)
+    monkeypatch.setattr(searcher, '_submit_search', lambda *a: calls.append(a[2]) or True)
     searcher._platforms(SimpleNamespace(new_page=lambda:page),['蒜泥','大蒜'],4,providers={'douyin'})
-    assert len(calls)==1
+    assert len(calls)==2  # One bounded retry, then stop this provider
     assert searcher.searches[-1]['status']=='page_unresolved'
 
 
-def test_budget_closes_browser_saves_cookies_and_retains_partial_candidates(tmp_path,monkeypatch):
+def test_obsolete_budget_does_not_abort_browser_and_cookies_are_saved(tmp_path,monkeypatch):
     import playwright.sync_api as pw
     saved=[];closed=[]
-    context=SimpleNamespace(set_default_timeout=lambda _:None,cookies=lambda:[],close=lambda:closed.append(True))
+    context=SimpleNamespace(pages=[],set_default_timeout=lambda _:None,cookies=lambda:[],close=lambda:closed.append(True))
     runtime=SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=lambda *a,**k:context))
     class Runtime:
         def __enter__(self):return runtime
         def __exit__(self,*a):pass
     monkeypatch.setattr(pw,'sync_playwright',Runtime)
+    monkeypatch.setattr(bs,'attach_browser',lambda *a:context)
     monkeypatch.setattr(bs,'export_cookies',lambda *a:saved.append('export'))
     monkeypatch.setattr(bs,'save_platform_cookies',lambda *a:saved.append(a[-1]))
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path),tmp_path)
@@ -191,5 +202,5 @@ def test_budget_closes_browser_saves_cookies_and_retains_partial_candidates(tmp_
     monkeypatch.setattr(searcher,'_platforms',search)
     result=searcher.run([],['test'],10)
     assert len(result['candidates'])==2
-    assert closed==[True] and 'google' in saved and 'douyin' in saved
-    assert result['searches'][-1]['status']=='budget_exhausted'
+    assert closed==[] and 'google' in saved and 'douyin' in saved
+    assert not any(r['status']=='budget_exhausted' for r in result['searches'])

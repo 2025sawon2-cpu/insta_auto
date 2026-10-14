@@ -107,6 +107,7 @@ def cmd_login(settings: Settings, args) -> int:
 def collect(settings: Settings, store: Storage, source: str, usernames: list[str]) -> tuple[int, int, int, list[str]]:
     from .collectors import get_collector
     from .collectors.base import CollectError, CollectionBlocked
+    from .collection_window import in_collection_window
     collector = None
     stop_reason = ""
     ok = failed = total = 0
@@ -115,6 +116,7 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
     run_id = store.start_run(started, source)
     try:
         collector = get_collector(source, settings)
+        collector.collection_started_at = started
         if hasattr(collector, "preflight"):
             collector.preflight()
     except Exception as exc:
@@ -133,16 +135,21 @@ def collect(settings: Settings, store: Storage, source: str, usernames: list[str
             _log(f"[{i}/{len(usernames)}] @{name} 수집 중...")
             try:
                 existing = {p.shortcode: p for p in store.posts_for(name, limit=max(settings.collect_recovery_limit, settings.posts_per_account * 2))}
-                tracked = store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
-                target = min(31, settings.posts_per_account + 1)
-                fetch_limit = (max(settings.collect_posts_per_account, target)
-                               if len(existing) < target else settings.collect_posts_per_account)
+                tracked = [p for p in store.tracked_hot_posts(name, limit=settings.hot_view_tracking_limit)
+                           if in_collection_window(p.taken_at, started)]
+                # The limit bounds discovery, not an initial historical baseline fill.
+                fetch_limit = max(settings.collect_posts_per_account, settings.collect_recovery_limit)
                 profile, posts, observations = collector.fetch(name, fetch_limit, existing=existing)
+                if source != 'demo':
+                    posts = [p for p in posts if in_collection_window(p.taken_at, started)]
+                    kept = {p.shortcode for p in posts}
+                    observations = [o for o in observations if o.shortcode in kept]
                 fresh_codes = {post.shortcode for post in posts}
                 tracked_extra = [post for post in tracked if post.shortcode not in fresh_codes]
                 rotating = store.recent_view_candidates(name, settings.hot_view_tracking_days,
                                                         fresh_codes | {p.shortcode for p in tracked_extra},
                                                         settings.recent_views_lookup_limit)
+                rotating = [p for p in rotating if in_collection_window(p.taken_at, started)]
                 if hasattr(collector, "refresh_video_views") and not any(o.http_status == 429 for o in observations):
                     if tracked_extra:
                         observations.extend(collector.refresh_video_views(tracked_extra, settings.hot_view_tracking_limit))

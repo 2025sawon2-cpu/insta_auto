@@ -12,7 +12,7 @@ from hotpost.writing.script_integrity import inspect
 
 REFERENCE = '친구 집에서 닭꼬치인 줄 알고 먹었는데 새송이버섯이라는 거예요. 댓글에 꼬치 남겨주세요.'
 ADAPTED = ('고기인 줄 알았는데 버섯이었다니 놀랍지 않아요? '
-           '친구네서 한 입 먹었는데 식감이 쫄깃하더라고요. 댓글에 꼬치 남겨주세요.')
+           '친구네서 한 입 먹었는데 식감이 쫄깃하더라고요. 댓글에 나도 남겨주세요.')
 
 
 def test_setting_reuse_is_allowed_but_verbatim_story_is_still_copy():
@@ -59,8 +59,10 @@ def test_single_draft_does_not_repair_only_because_it_retells_an_experience(tmp_
         if len(calls)==2:return {'issues':[]}
         pytest.fail('Allowed setting must not trigger a repair')
     monkeypatch.setattr(pipeline.codex_writer,'chat',chat)
-    value=pipeline.generate({'reference_script':REFERENCE,'writing_contract':snapshot()},
+    # Test the bounded single-variant review component. Public generation always
+    # returns three variants, covered separately in test_writing_variants.py.
+    value=pipeline._generate_single({'reference_script':REFERENCE,'writing_contract':snapshot()},
         tmp_path,lambda:None,lambda *args:None)
     assert value['scripts'][0]['text']==ADAPTED and len(calls)==2
-    assert '설정 차용 자체를 오류로 지적하지 말고' in calls[1][0]
+    assert '유형전환 A/B' in calls[1][0]
     assert not json.loads((tmp_path/'writing-audit.json').read_text('utf-8'))['repair']['attempted']

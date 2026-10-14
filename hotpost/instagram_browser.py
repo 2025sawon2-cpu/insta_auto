@@ -82,19 +82,34 @@ class InstagramBrowser:
         self.guard()
 
     def verify_identity(self):
-        if not self.settings.ig_user:
-            raise CollectionBlocked('configuration', '수집용 Instagram 계정 설정이 필요합니다.')
-        self.guard()
-        name = self.settings.ig_user.lower()
-        # 프로필 내 태그/게시물 소유자 링크가 아니라 로그인 사용자 탐색 메뉴의 프로필 사진.
+        """Detect the signed-in account; legacy ig_user is not a browser constraint."""
+        self.detected_user = ""
         for _ in range(8):
             self.guard()
-            verified = self.page.evaluate('''name => Array.from(document.querySelectorAll('a[href="/' + name + '/"] img'))
-                .some(img => !img.closest('main') && (img.alt || '').toLowerCase().includes(name))''', name)
-            if verified:
-                return
+            # A profile photo on a public page alone does not prove a login.
+            authenticated = any(c.get('name') == 'sessionid' and c.get('value')
+                                for c in self.context.cookies('https://www.instagram.com/'))
+            if authenticated:
+                name = self.page.evaluate(r"""() => {
+                    const names = new Set();
+                    for (const img of document.querySelectorAll('a[href] img')) {
+                        if (img.closest('main, article, [role="main"]') || !img.getClientRects().length) continue;
+                        const link = img.closest('a');
+                        const url = new URL(link.href, location.href);
+                        if (url.hostname !== 'www.instagram.com' && url.hostname !== 'instagram.com') continue;
+                        const match = url.pathname.match(/^\/([a-zA-Z0-9_.]+)\/$/);
+                        if (!match) continue;
+                        const name = match[1].toLowerCase();
+                        const alt = (img.alt || '').toLowerCase();
+                        if (alt === name + "'s profile picture" || alt === name + '님의 프로필 사진') names.add(name);
+                    }
+                    return names.size === 1 ? [...names][0] : '';
+                }""")
+                if name:
+                    self.detected_user = name
+                    return name
             self.page.wait_for_timeout(1000)
-        raise CollectionBlocked('login_required', '전용 브라우저에서 설정된 수집용 계정의 로그인을 확인하지 못했습니다.')
+        raise CollectionBlocked('login_required', '전용 브라우저의 로그인 계정을 확인하지 못했습니다. 로그인·인증을 완료하세요.')
 
     def close(self):
         try:

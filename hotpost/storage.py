@@ -109,7 +109,7 @@ class Storage:
         self.conn.execute("CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)")
         self.conn.execute("INSERT OR IGNORE INTO schema_version VALUES (1,0)")
         self.conn.commit()
-        for version in range(1, 6):
+        for version in range(1, 7):
             self.conn.execute("BEGIN IMMEDIATE")
             current = self.conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0]
             if current >= version:
@@ -152,6 +152,9 @@ class Storage:
                         SELECT substr(key,9), created_at FROM notifications
                         WHERE kind IN ('new_hot_reel','new_hot_post') AND key LIKE 'new-hot-%'
                     ) GROUP BY shortcode""")
+            elif version == 6:
+                if 'claim_token' not in {row[1] for row in self.conn.execute('PRAGMA table_info(jobs)')}:
+                    self.conn.execute("ALTER TABLE jobs ADD COLUMN claim_token TEXT NOT NULL DEFAULT ''")
             self.conn.execute("UPDATE schema_version SET version=? WHERE id=1", (version,))
             self.conn.commit()
 
@@ -314,6 +317,23 @@ class Storage:
         )
         self.conn.commit()
         return cursor.rowcount
+
+    def claim_job(self, job_id: str, token: str) -> dict | None:
+        """The queue's lifetime lease authorizes recovery; this CAS owns one attempt."""
+        cursor = self.conn.execute(
+            "UPDATE jobs SET status='running',claim_token=?,started_at=?,message='실행 중' "
+            "WHERE id=? AND status='queued'", (token, int(time.time()), job_id))
+        self.conn.commit()
+        return self.job_for(job_id) if cursor.rowcount else None
+
+    def update_running_job(self, job_id: str, token: str, **values) -> bool:
+        allowed = {"status", "progress", "message", "error", "result_json", "result_path", "finished_at"}
+        if not values or set(values) - allowed:
+            raise ValueError("잘못된 실행 작업 업데이트")
+        cursor = self.conn.execute("UPDATE jobs SET " + ",".join(f"{key}=?" for key in values)
+            + " WHERE id=? AND status='running' AND claim_token=?", (*values.values(), job_id, token))
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def update_job(self, job_id: str, **values) -> None:
         allowed = {"status", "progress", "message", "error", "result_json", "result_path",

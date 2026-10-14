@@ -14,7 +14,7 @@ def asset(folder, index, *, core=False, platform='youtube.com', quality='clean-s
     sha=hashlib.sha256(path.read_bytes()).hexdigest()
     return {'id':f'source-{index}','path':str(path),'sha256':sha,'source_quality':quality,
             'origin_url':f'https://{platform}/@fixture/video/{index}' if platform=='tiktok.com' else f'https://{platform}/watch?v={index}',
-            'source_role':'core' if core else 'context_only',
+            'video_meta':{'duration':4,'width':720,'height':1280}, 'source_role':'core' if core else 'context_only',
             'functional_review':{'reviewed':True,'same_core_function':core,'context_usable':not core,
                 'context_usage_limits':[] if core else ['general cooking'], 'observed_actions':['scooping garlic' if core else 'mixing salad'],
                 'evidence_frames':['observed.jpg'],'source_sha256':sha}}
@@ -71,6 +71,7 @@ def test_collection_returns_post_review_outcomes_and_preserves_search_history(tm
     manifest.write_text(json.dumps(raw))
     monkeypatch.setattr(source_finder, 'find_sources', lambda *a, **kw: raw)
     monkeypatch.setattr(source_finder, 'extract_frames', lambda *a, **kw: [Path('reference.jpg')])
+    monkeypatch.setattr(source_finder, 'probe_video', lambda *a: {'duration':30})
     monkeypatch.setattr(source_overlay_review, 'needs_overlay_review', lambda s: False)
     monkeypatch.setattr(source_functional, 'needs_function_review', lambda s: False)
     result = studio._collect_source_attempt(studio.store.get(tid), job)
@@ -85,8 +86,10 @@ def test_collection_returns_post_review_outcomes_and_preserves_search_history(tm
 def automatic_review_fixture(tmp_path, monkeypatch, *, mode='ready', active=True, kind='collect_sources'):
     from hotpost import source_finder, source_overlay_review, source_functional
     studio, tid, folder = task(tmp_path)
+    if kind != 'collect_sources':
+        with studio.store.transaction() as db:
+            db.execute("UPDATE jobs SET kind=? WHERE task_id=? AND kind='collect_sources' AND status='queued'", (kind,tid))
     job = studio.store.claim('sources')
-    job['kind'] = kind
     rows = [asset(folder, i, core=i == (12 if mode == 'missing_core' else 5),
                   platform='tiktok.com' if i < (4 if mode == 'missing_tiktok' else 5) or i == 12 else 'youtube.com')
             for i in range(14)]
@@ -98,21 +101,30 @@ def automatic_review_fixture(tmp_path, monkeypatch, *, mode='ready', active=True
     raw = {'zip_path': str(folder / 'sources.zip'), 'downloaded': len(rows),
            'candidates': [{'url': s['origin_url'], 'downloaded_file': Path(s['path']).name,
                            'file_sha256': s['sha256'], 'selected_for_zip': True,
-                           'source_quality': s['source_quality'], 'blur_required': s.get('blur_required', False),
+                           'video_meta':s['video_meta'], 'source_quality': s['source_quality'], 'blur_required': s.get('blur_required', False),
                            'editing_eligible': None, 'acquisition': 'local-cache',
+                           'relevance_review_required':True, 'similarity_warnings':['low_product_or_scene_similarity'],
+                           'presentation_review_required':True,
                            'download_attempted': False, 'rejection_reasons': []} for s in rows],
            'platform_targets': {'tiktok': 5}, 'search_audit': []}
     manifest = folder / 'manifest.json'
     manifest.write_text(json.dumps(raw))
     reviews = {s['sha256']: s['functional_review'] for s in rows}
     calls = []
-    def review_function(settings, candidate, reference, evidence):
+    def review_function(settings, candidate, reference, evidence,reference_info=None):
         calls.append(candidate.file_sha256)
         return reviews[candidate.file_sha256]
     monkeypatch.setattr(source_finder, 'find_sources', lambda *a, **kw: raw)
     monkeypatch.setattr(source_finder, 'extract_frames', lambda *a, **kw: [Path('reference.jpg')])
+    monkeypatch.setattr(source_finder, 'probe_video', lambda *a: {'duration':30})
     monkeypatch.setattr(source_overlay_review, 'needs_overlay_review', lambda s: False)
     monkeypatch.setattr(source_functional, 'review_function', review_function)
+    monkeypatch.setattr(source_functional,'reference_review_info',lambda state,folder:{'original_product_text':state['original_text']})
+    from hotpost import source_presentation
+    monkeypatch.setattr(source_presentation, 'review_presentation', lambda settings, source, output: {
+        'reviewed':True, 'policy':source_presentation.POLICY, 'source_sha256':source['sha256'],
+        'scope':source_presentation.review_scope(source), 'evidence_frames':[{'path':'portrait.jpg'}],
+        'usable':True, 'quality_usable':True, 'action_preserved':True})
     state = studio.store.change(tid, lambda s, db: s['automation'].update(active=active))
     result = studio._collect_source_attempt(state, job)
     return studio, tid, job, result, calls, raw, manifest
@@ -123,7 +135,7 @@ def test_automatic_review_finishes_at_verified_quota_and_preserves_extra_downloa
     assert len(calls) == len(result['sources']) == 10
     completion = result['review_completion']
     assert completion['reason'] == 'quota_met' and completion['deferred_sources'] == 4
-    assert completion['goal']['ready'] and completion['goal']['platform_targets']['tiktok']['usable'] == 5
+    assert completion['goal']['ready'] and completion['goal']['platform_preferences']['tiktok']['usable'] == 5
     assert json.loads(manifest.read_text()) == raw
     assert all((manifest.parent / c['downloaded_file']).is_file() for c in raw['candidates'])
     assert result['platform_outcomes']['tiktok']['reasons']['review_pending'] == 1  # retained extra TikTok
@@ -134,11 +146,11 @@ def test_automatic_review_finishes_at_verified_quota_and_preserves_extra_downloa
     assert not any(j['kind'] == 'collect_sources' and j['status'] == 'queued' for j in studio.store.jobs(tid))
 
 
-def test_automatic_review_does_not_stop_on_ten_without_tiktok_coverage(tmp_path, monkeypatch):
+def test_automatic_review_finishes_without_tiktok_preference_met(tmp_path, monkeypatch):
     _, _, _, result, calls, _, _ = automatic_review_fixture(tmp_path, monkeypatch, mode='missing_tiktok')
-    assert len(calls) == 13
+    assert len(calls) == 10
     assert result['review_completion']['goal']['ready']
-    assert result['review_completion']['goal']['platform_targets']['tiktok']['usable'] == 5
+    assert result['review_completion']['goal']['platform_preferences']['tiktok']['usable'] == 4
 
 
 def test_automatic_review_does_not_stop_without_actual_core_action(tmp_path, monkeypatch):
@@ -148,14 +160,14 @@ def test_automatic_review_does_not_stop_without_actual_core_action(tmp_path, mon
 
 def test_automatic_review_deduplicates_before_finishing(tmp_path, monkeypatch):
     _, _, _, result, calls, _, _ = automatic_review_fixture(tmp_path, monkeypatch, mode='duplicate')
-    assert len(calls) == 12  # repeated URL/hash is removed before any review
-    assert result['review_completion']['goal']['platform_targets']['tiktok']['usable'] == 5
+    assert len(calls) == 10  # repeated URL/hash is removed before any review
+    assert result['review_completion']['goal']['platform_preferences']['tiktok']['usable'] == 4
 
 
 def test_automatic_review_does_not_count_unprepared_blur(tmp_path, monkeypatch):
     _, _, _, result, calls, _, _ = automatic_review_fixture(tmp_path, monkeypatch, mode='unprepared_blur')
-    assert len(calls) == 13
-    assert result['review_completion']['goal']['platform_targets']['tiktok']['usable'] == 5
+    assert len(calls) == 11
+    assert result['review_completion']['goal']['platform_preferences']['tiktok']['usable'] == 4
     assert result['sources'][0]['id'] not in result['review_completion']['goal']['source_ids']
 
 
@@ -263,8 +275,16 @@ def test_transient_source_retry_has_a_limit(tmp_path):
     studio,tid,folder=task(tmp_path);job=studio.store.claim('sources')
     studio.handle_source_error(job,TimeoutError('timeout'))
     assert job['checkpoint']['auto_retries']==1
+    with studio.store.transaction() as db:
+        checkpoint = dict(job['checkpoint']);checkpoint.pop('not_before',None)
+        db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),job['id']))
+    job=studio.store.claim('sources')
     studio.handle_source_error(job,TimeoutError('timeout'))
     assert job['checkpoint']['auto_retries']==2
+    with studio.store.transaction() as db:
+        checkpoint = dict(job['checkpoint']);checkpoint.pop('not_before',None)
+        db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),job['id']))
+    job=studio.store.claim('sources')
     studio.handle_source_error(job,TimeoutError('timeout'))
     assert next(j for j in studio.store.jobs(tid) if j['id']==job['id'])['status']=='failed'
 

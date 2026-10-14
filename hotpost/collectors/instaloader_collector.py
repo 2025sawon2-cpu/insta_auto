@@ -142,9 +142,13 @@ class InstaloaderCollector:
         if prof.is_private and not prof.followed_by_viewer:
             raise CollectError(f"{username} 은 비공개 계정입니다.")
 
+        from ..collection_window import collection_time, in_collection_window
+        started = collection_time(self)
         posts: list[Post] = []
         try:
-            for p in itertools.islice(prof.get_posts(), limit):
+            for p in itertools.islice(prof.get_posts(), max(limit, self.settings.collect_recovery_limit)):
+                if not in_collection_window(int(p.date_utc.timestamp()), started):
+                    continue
                 caption = p.caption or ""
                 posts.append(Post(
                     shortcode=p.shortcode, username=prof.username,

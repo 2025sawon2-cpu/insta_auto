@@ -41,7 +41,10 @@ def test_zero_browser_interval_still_waits_one_second(tmp_path, monkeypatch):
     from hotpost.browser_search import BrowserSearcher
     waits = []
     monkeypatch.setattr(pacing.time, 'sleep', waits.append)
-    BrowserSearcher(Settings(data_dir=tmp_path, source_browser_search_interval=0), tmp_path)._pace('test')
+    monkeypatch.setattr(pacing.time, 'time', lambda: 100)
+    searcher = BrowserSearcher(Settings(data_dir=tmp_path, source_browser_search_interval=0), tmp_path)
+    searcher._pace('test')
+    searcher._pace('test')
     assert waits == [1]
 
 
@@ -61,13 +64,14 @@ def test_youtube_queries_pace_each_command(tmp_path, monkeypatch):
         assert command[command.index('--retry-sleep') + 1] == '2'
 
 
-def test_download_wait_counts_toward_deadline(tmp_path, monkeypatch):
-    from hotpost import source_finder as sf
-    clock = [0]
-    monkeypatch.setattr(sf.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(sf, 'request_pause', lambda: clock.__setitem__(0, 3))
-    monkeypatch.setattr(sf, '_executable', lambda _: 'yt-dlp')
-    monkeypatch.setattr(sf, '_run', lambda *a, **kw: (_ for _ in ()).throw(AssertionError('deadline expired')))
-    candidate = sf.Candidate('https://www.youtube.com/watch?v=test', 'youtube')
-    assert sf.download_candidate(candidate, tmp_path, 1, 50, deadline=2) is None
-    assert '시간 예산 소진' in candidate.error
+def test_download_wait_does_not_reduce_transfer_opportunity(tmp_path,monkeypatch):
+    from hotpost import source_finder as sf,operation_progress as op
+    from types import SimpleNamespace
+    clock=[0];calls=[]
+    monkeypatch.setattr(sf.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(sf,'request_pause',lambda:clock.__setitem__(0,3))
+    monkeypatch.setattr(sf,'_executable',lambda _:'yt-dlp')
+    monkeypatch.setattr(op,'run_progress_command',lambda *a,**k:calls.append((clock[0],k)) or SimpleNamespace(returncode=0,stdout='',stderr=''))
+    c=sf.Candidate('https://www.bilibili.com/video/BV1example','bilibili')
+    sf.download_candidate(c,tmp_path,1,50,deadline=2)
+    assert calls[0][0]==3 and 'deadline' not in calls[0][1]

@@ -70,6 +70,12 @@ def downloader_cookies(fallback, platform, out_dir):
         return None
     from .browser_profile import export_cookies
     saved = read_session(Path(fallback).parent, platform)
+    live = Path(fallback).parent / 'platform_sessions' / f'{platform}.json'
+    if (Path(fallback).parent / 'source_browser_profile' / 'hotpost-live-session-v1').exists():
+        try:
+            saved = json.loads(live.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            saved = {}
     if not saved.get('cookies'):
         return fallback
     target = Path(out_dir) / f'.{platform}-session.cookies.txt'

@@ -5,6 +5,7 @@ import re
 
 from .source_policy import source_platform
 from .source_quality import editing_ready
+from .source_attempts import candidate_execution, search_execution
 
 PLATFORMS = ('tiktok', 'douyin', 'xiaohongshu', 'instagram', 'youtube', 'bilibili', 'stock', 'other')
 SKIPPED = {'not_attempted', 'cooldown', 'verification_required', 'login_required', 'no_supported_queries', 'query_exhausted', 'image_exhausted', 'budget_exhausted', 'strategy_skipped', 'readiness_blocked', 'platform_disabled'}
@@ -14,11 +15,11 @@ def failure_reason(text, default='download_failed'):
     text = str(text).lower()
     if '429' in text or 'rate_limited' in text: return 'rate_limited'
     if 'captcha' in text or 'verification_required' in text: return 'captcha'
-    if any(v in text for v in ('login', '401', 'authentication', 'sign in')): return 'auth_required'
+    if any(v in text for v in ('login', '401', 'authentication', 'sign in', '로그인', '인증 확인')): return 'auth_required'
     if '403' in text: return 'access_denied'
     if any(v in text for v in ('drm', 'private', 'rights')): return 'access_restricted'
     if 'cooldown' in text: return 'cooldown'
-    if 'budget' in text or text in {'time_limit', 'attempt_limit', 'probe_limit'}: return 'budget_exhausted'
+    if 'budget' in text or '검색 예산 완료' in text or '예산 소진' in text or text in {'time_limit', 'attempt_limit', 'probe_limit'}: return 'budget_exhausted'
     return default
 
 
@@ -40,8 +41,7 @@ def platform_outcomes(candidates, searches, targets=None, budget_stop=''):
         items = [c for c in candidates if source_platform(c) == platform]
         reasons = Counter()
         skipped = Counter()
-        attempts = [r for r in rows if r.get('requests') or
-                    (r.get('query') and r.get('status') not in SKIPPED)]
+        attempts = [r for r in rows if search_execution(r)['attempted']]
         for row in rows:
             status = row.get('status', '')
             if row not in attempts:
@@ -50,19 +50,26 @@ def platform_outcomes(candidates, searches, targets=None, budget_stop=''):
                 skipped[status or 'not_attempted'] += 1
                 continue
             if status == 'no_results': reasons['no_candidates'] += 1
+            elif status == 'query_restricted': reasons['query_restricted'] += 1
             elif status not in {'results', 'started', 'not_attempted'}:
                 reason = failure_reason(status + ' ' + str(row.get('http_status', '')))
-                reasons['search_failed' if reason == 'download_failed' else reason] += 1
+                if reason == 'download_failed' and search_execution(row)['pending']:
+                    reasons['search_unconfirmed'] += 1
+                else:
+                    reasons['search_failed' if reason == 'download_failed' else reason] += 1
         download_attempts = 0
         for item in items:
             rejected = item.get('rejection_reasons') or []
-            attempted = item.get('download_attempted')
-            if attempted is None:
-                attempted = bool(item.get('downloaded_file') or 'download_failed' in rejected)
+            execution = candidate_execution(item)
+            attempted = execution['attempted']
             download_attempts += bool(attempted)
             if any(r.startswith('duplicate_of:') for r in rejected): reasons['duplicate'] += 1
-            elif 'download_failed' in rejected:
-                reasons[failure_reason(item.get('error', ''))] += 1
+            elif 'download_failed' in rejected and attempted:
+                reason = execution['reason']
+                if not reason:
+                    reason = ('download_failed' if item.get('download_diagnostics')
+                              else failure_reason(item.get('error', '')))
+                reasons[reason] += 1
             elif 'platform_cooldown' in rejected: reasons['cooldown'] += 1
             elif 'platform_budget_exhausted' in rejected: reasons['budget_exhausted'] += 1
             elif item.get('downloaded_file') and (rejected or not editing_ready(item)):
@@ -84,9 +91,14 @@ def platform_outcomes(candidates, searches, targets=None, budget_stop=''):
             'search_attempts': len(attempts), 'search_channels': sorted({r.get('provider', '') for r in attempts}),
             'skipped_searches':sum(skipped.values()), 'skipped_reasons':dict(skipped),
             'search_evidence':[{'stage':'search', 'channel':r.get('provider'), 'status':r.get('status'),
-                                'attempted':r in attempts, 'http_status':r.get('http_status')}
+                                'attempted':r in attempts, 'http_status':r.get('http_status'),
+                                'execution':search_execution(r)}
                                for r in rows],
+            'consumed_search_scopes':sum(search_execution(r)['consumed'] for r in rows),
+            'pending_search_scopes':sum(search_execution(r)['pending'] for r in rows),
             'download_attempts': download_attempts, 'reasons': dict(reasons),
+            'download_evidence':[{'url':c.get('original_url') or c.get('url'),
+                                  **candidate_execution(c)} for c in items],
             'status': 'met' if target and usable >= target else 'shortfall' if target else
                       'not_attempted' if not attempts and not download_attempts else 'attempted'}
     return result

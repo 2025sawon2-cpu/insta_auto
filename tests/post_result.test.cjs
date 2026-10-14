@@ -8,11 +8,38 @@ function fixture(){return {id:'work-test',run_id:'new',automation:{protocol:2,ac
  pipeline:[{id:'old',status:'completed',created:1,video_url:'/old.mp4',artifacts:{},steps:[{key:'export',status:'completed',download_url:'/download?run=old'}]},
  {id:'new',status:'queued',created:2,artifacts:{},steps:[]}], reference_url:'/reference.mp4'};}
 
-test('all four stages are clickable and real independent jobs alone animate',()=>{
+test('all stages remain visible and only available results are clickable',()=>{
  const t=fixture();t.jobs=[{kind:'collect_sources',status:'running'},{kind:'voice',status:'running'}];
  const m=api.model(t);assert.equal(m.steps.sources.state,'running');assert.equal(m.steps.script.state,'completed');assert.equal(m.steps.voice.state,'running');
- const html=api.stageMarkup(t,m,'sources');assert.equal((html.match(/data-stage=/g)||[]).length,4);assert.doesNotMatch(html,/disabled/);assert.equal((html.match(/pr-spinner/g)||[]).length,2);
+ const html=api.stageMarkup(t,m,'sources');assert.equal((html.match(/data-stage=/g)||[]).length,4);assert.equal((html.match(/disabled/g)||[]).length,1);assert.equal((html.match(/pr-spinner/g)||[]).length,2);
+ assert.equal(api.availability(m,'voice').ready,false);assert.match(api.availability(m,'voice').reason,/작업 중/);
+ assert.equal(api.availability(m,'final').ready,true);
  t.jobs.forEach(j=>j.status='queued');assert.doesNotMatch(api.stageMarkup(t,api.model(t),null),/pr-spinner/);
+});
+test('unprepared and stale assets cannot enable result buttons',()=>{
+ const t=fixture();t.pipeline=[];t.source_goal.count=0;t.scripts=[];
+ t.voices=[{id:'stale',script_id:'old-script',path_url:'/old.wav'}];t.voice_id='stale';
+ const m=api.model(t),html=api.stageMarkup(t,m,null);
+ assert.equal((html.match(/disabled/g)||[]).length,4);
+ for(const key of ['sources','script','voice','final'])assert.equal(api.availability(m,key).ready,false);
+ t.scripts=[{id:'s1',text:'완성한 대본'}];t.voices=[{id:'ready',script_id:'s1',path_url:'/ready.wav'}];t.voice_id='ready';
+ assert.equal(api.availability(api.model(t),'voice').ready,true);
+});
+test('completed playback remains available while a missing download has a disabled button and reason',()=>{
+ const t=fixture();t.pipeline[0].steps=[];
+ const html=api.compare(t,t.pipeline[0]);
+ assert.match(html,/data-view-result >완성 영상 보기/);
+ assert.match(html,/class="pr-primary" disabled>↓ 영상 다운로드/);
+ assert.match(html,/다운로드 파일이 준비되지 않았어요/);
+ assert.doesNotMatch(html,/<a[^>]+href="(?:undefined|null|#)"/);
+});
+test('unavailable reference playback controls stay visible and disabled',()=>{
+ const t=fixture();t.reference_url='';
+ const html=api.compare(t,t.pipeline[0]);
+ assert.match(html,/data-play="reference" disabled/);
+ assert.match(html,/data-fullscreen="reference" disabled/);
+ assert.match(html,/영상 파일이 준비되면 재생과 전체 화면을 사용할 수 있어요/);
+ assert.match(html,/data-play="result" >/);
 });
 test('old completion never completes a new run and stale voice cannot be played',()=>{
  const t=fixture();t.voice_id='v1';t.voices=[{id:'v1',script_id:'old-script',path_url:'/old.wav'}];
@@ -34,6 +61,15 @@ test('source summary exposes the mandatory TikTok count without completing an un
  const t=fixture();t.source_goal={count:10,target:10,platforms:{'틱톡':4,'유튜브':6},core_ready:true,ready:false,platform_targets:{tiktok:{usable:4,target:5,status:'shortfall'}}};
  const m=api.model(t),html=api.stepResult(t,m,'sources');
  assert.equal(m.steps.sources.state,'waiting');assert.match(html,/필수 확보 기준 · 틱톡 4\/5개/);assert.doesNotMatch(html,/소스가 준비됐어요/);
+});
+test('new coverage goal exposes seconds and does not block on a soft TikTok shortfall',()=>{
+ const t=fixture();t.source_goal={count:2,target:1,platforms:{'유튜브':2},ready:true,
+   usable_seconds:40,required_seconds:37.5,platform_targets:{},
+   platform_preferences:{tiktok:{usable:0,target:5,required:false}}};
+ const m=api.model(t),html=api.stepResult(t,m,'sources');
+ assert.equal(m.steps.sources.state,'completed');assert.match(html,/사용 가능 40\/37.5초 · 2개/);
+ assert.match(html,/선호 목표 · 틱톡 0\/5개 · 완료 필수조건 아님/);
+ assert.doesNotMatch(html,/필수 확보 기준|2\/1개/);
 });
 
 test('in-flight platform authentication is visible before the search round finishes',()=>{

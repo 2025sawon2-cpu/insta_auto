@@ -18,6 +18,8 @@ test('first deep-linked mount displays and downloads the requested older complet
   // The collapsed current-job progress may link v2 assets; the displayed
   // result's prominent download must belong to v1.
   assert.equal(root.querySelector('.pf-downloads a').getAttribute('href'),'/download?run=v1&asset=export');
+  assert.match(root.querySelector('.pf-downloads').textContent,/최신 편집본 수정하기/);
+  assert.match(root.textContent,/수정은 최신 편집본에 적용됩니다/);
 });
 test('polling keeps a subsequent manual version choice instead of reapplying deep link',{skip:!parseHTML},()=>{
   const {root,app}=harness(),t=fixture();app.mount(root,t,{selectedRun:'v1'});

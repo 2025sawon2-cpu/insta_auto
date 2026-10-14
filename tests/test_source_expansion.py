@@ -31,7 +31,7 @@ def test_model_requires_literal_evidence_and_real_language():
     ]}
     actual = enrich_plan(Settings(), plan, '', {'speech': '생선 살이 안 부서져요'}, lambda *_: response)
     assert [r['query'] for r in actual['query_details']] == ['fry fish without breaking', '煎鱼不破皮']
-    assert '일부 언어' in actual['planning_notes'][0]
+    assert any('일부 언어' in note for note in actual['planning_notes'])
 
 
 def test_missing_chinese_is_repaired_once_without_weakening_evidence():
@@ -90,30 +90,33 @@ def test_youtube_result_budget_does_not_starve_later_languages(monkeypatch):
     assert {r['language'] for r in audit} == {'en', 'ko', 'zh'}
 
 
-def test_bilibili_deadline_prevents_long_retry(tmp_path, monkeypatch):
-    from hotpost import source_finder as sf
-    monkeypatch.setattr(sf, '_executable', lambda _: 'tool')
-    monkeypatch.setattr(sf.time, 'monotonic', lambda: 100)
-    seen = []
-    def run(command, timeout):
-        seen.append(timeout)
-        assert '--js-runtimes' in command and 'node:C:/node.exe' in command
-        raise subprocess.TimeoutExpired(command, timeout)
-    monkeypatch.setattr(sf, '_run', run)
-    c = Candidate('https://www.bilibili.com/video/BV1234567890', 'bilibili')
-    assert download_candidate(c, tmp_path, 1, 50, deadline=110, js_runtime='node:C:/node.exe') is None
-    assert seen == [10]
-    assert c.error == '다운로드 제한 시간(10초) 초과'
+def test_bilibili_stalled_transfer_retries_without_inherited_deadline(tmp_path,monkeypatch):
+    from hotpost import source_finder as sf, operation_progress as op
+    monkeypatch.setattr(sf,'_executable',lambda _:'tool')
+    monkeypatch.setattr(sf,'request_pause',lambda:None)
+    calls=[]
+    def run(command,**kwargs):
+        calls.append(kwargs)
+        assert '--js-runtimes' in command
+        raise op.NoProgressTimeout('응답 중단')
+    monkeypatch.setattr(op,'run_progress_command',run)
+    c=Candidate('https://www.bilibili.com/video/BV1234567890','bilibili')
+    assert download_candidate(c,tmp_path,1,50,deadline=0.17,js_runtime='node:C:/node.exe') is None
+    assert len(calls)==2 and all('deadline' not in x for x in calls)
 
 
 def test_browser_failed_navigation_cannot_reuse_previous_results(tmp_path, monkeypatch):
     from hotpost import browser_search as bs
+    monkeypatch.setattr(bs, 'BROWSER_COOLDOWNS', {})
     monkeypatch.setattr(bs.time, 'sleep', lambda _: None)
     def fail(*_a, **_k): raise TimeoutError()
-    page = SimpleNamespace(route=lambda *_: None, goto=fail, close=lambda: None)
+    page = SimpleNamespace(route=lambda *_: None, goto=fail, close=lambda: None, is_closed=lambda:False, context=SimpleNamespace(browser=SimpleNamespace(is_connected=lambda:True)))
     monkeypatch.setattr(bs, '_anchors', lambda *_: pytest.fail('stale page must not be scraped'))
     searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path, source_queries_per_platform=1), tmp_path)
-    searcher._platforms(SimpleNamespace(new_page=lambda: page), ['fry fish'], 4)
+    monkeypatch.setattr(searcher,'_page',lambda *a:page)
+    monkeypatch.setattr(searcher,'_submit_search',fail)
+    monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
+    searcher._platforms(SimpleNamespace(new_page=lambda: page), ['fish'], 4)
     assert len(searcher.searches) == 4
     assert searcher.searches[0]['status'] == 'error'
     assert all(r['status'] == 'no_supported_queries' and r['candidates'] == 0 for r in searcher.searches[1:])
@@ -169,10 +172,10 @@ def test_long_video_scans_and_saves_original_interval(tmp_path, monkeypatch):
     from hotpost import source_finder as sf
     from hotpost.source_segments import extract_relevant_segment
     monkeypatch.setattr(sf, '_executable', lambda _: 'ffmpeg')
-    def run(command, timeout):
+    def run(command, **kwargs):
         Path(command[-1]).write_bytes(b'fixture')
         return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(sf, '_run', run)
+    monkeypatch.setattr('hotpost.source_segments.run_progress_command', run)
     scores = iter([.1, .2, .3, .9, .3, .4, .5, .4])
     verifier = SimpleNamespace(score=lambda _: next(scores))
     result = extract_relevant_segment(Settings(), tmp_path/'original.mp4', {'duration': 630}, verifier,
@@ -184,14 +187,15 @@ def test_long_video_scans_and_saves_original_interval(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('height, expected', [(1280, 1), (400, 0)])
 @pytest.mark.parametrize('initial_count', [1, 25])
-def test_low_yield_expands_search_and_verifies_new_download(tmp_path, monkeypatch, height, expected, initial_count):
+@pytest.mark.parametrize('browser_mode', [False, True])
+def test_low_yield_expands_search_and_verifies_new_download(tmp_path, monkeypatch, height, expected, initial_count, browser_mode):
     from hotpost import source_finder as sf, text_overlay
     from hotpost.models import Post
     from PIL import Image
-    settings = Settings(data_dir=tmp_path, source_browser_search=False, source_query_model_enabled=False,
+    settings = Settings(data_dir=tmp_path, source_browser_search=browser_mode, source_query_model_enabled=False,
                         source_transcribe_reference=False, source_max_downloads=2, source_max_attempts=22)
     monkeypatch.setattr(sf, '_post', lambda *_: Post('ref', 'u', 1, 'reel', caption='생선구이'))
-    monkeypatch.setattr(sf, '_download_reference', lambda *a: a[-1])
+    monkeypatch.setattr(sf, '_download_reference', lambda *a: (a[-1].write_bytes(b'reference'), a[-1])[1])
     def frames(_video, directory, *_a, **_k):
         directory.mkdir(parents=True, exist_ok=True)
         p = directory/'candidate_001.jpg'; Image.new('RGB', (20, 30), 'white').save(p); return [p]
@@ -212,6 +216,17 @@ def test_low_yield_expands_search_and_verifies_new_download(tmp_path, monkeypatc
             return [Candidate(f'https://youtube.com/watch?v=initial{i}', 'youtube') for i in range(initial_count)]
         return [Candidate('https://youtube.com/watch?v=refined', 'youtube')]
     monkeypatch.setattr(sf, 'search_youtube', search)
+    if browser_mode:
+        from dataclasses import asdict
+        def browser_search(_settings, _frames, queries, limit, _root, **kwargs):
+            audit = []
+            found = search(queries, limit, None, audit, None)
+            return {'candidates':[asdict(c) for c in found], 'searches':audit, 'notes':[], 'terms':[]}
+        monkeypatch.setattr('hotpost.browser_search.browser_search', browser_search)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Initial/refinement browser search cannot fall back to separate search')
+        for name in ('search_youtube', 'search_bing', 'search_web', 'search_pexels'):
+            monkeypatch.setattr(sf, name, forbidden)
     def download(candidate, directory, index, *_a, **_k):
         if 'initial' in candidate.url: return None
         p=directory/'new.mp4'; p.write_bytes(b'video'); return p
@@ -224,4 +239,9 @@ def test_low_yield_expands_search_and_verifies_new_download(tmp_path, monkeypatc
     result = sf.find_sources(settings, 'ref')
     assert len(searches) == 2 and searches[0][0] not in searches[1]
     assert result['downloaded'] == expected and result['probe_attempts'] == (2 if initial_count == 1 else 22)
-    assert result['refinement_query_details'] and len(result['search_audit']) == 2
+    assert result['refinement_query_details']
+    attempted_searches = [r for r in result['search_audit'] if r['status'] != 'no_supported_queries']
+    assert len(attempted_searches) == 2
+    assert all(r['provider'] == 'youtube' and r['status'] == 'results' for r in attempted_searches)
+    unattempted = [r for r in result['search_audit'] if r['status'] == 'no_supported_queries']
+    assert all(r.get('candidates') == 0 for r in unattempted)

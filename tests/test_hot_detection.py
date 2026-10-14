@@ -32,12 +32,15 @@ def test_first_hot_date_is_stable_and_independent_of_post_date(tmp_path, monkeyp
     store.upsert_profile(Profile('u', followers=1000))
     normal = [Post(f'base{i}', 'u', now - (i + 5) * 86400, 'image', 10, 1) for i in range(10)]
     hot = Post('hot', 'u', now - 2 * 86400, 'image', 1000, 100)
-    store.upsert_posts(normal + [hot])
+    store.upsert_posts(normal + [hot], collected_at=now-86400)
     report = build_report(settings, store, 'browser', usernames=['u'])
     row = next(p for p in report['posts'] if p['shortcode'] == 'hot')
     assert row['tier'] > 0
     assert row['hot_detected_at'] == now
     assert row['hot_detected_date_kst'] == '2026-09-27'
+    assert row['collected_at'] == now-86400
+    assert row['collection_date_at'] == row['hot_detected_at']
+    assert row['collection_date_kst'] == row['hot_detected_date_kst']
     assert next(p for p in report['posts'] if p['shortcode'] == 'base0')['hot_detected_at'] is None
     now += 86400
     report = build_report(settings, store, 'browser', usernames=['u'])

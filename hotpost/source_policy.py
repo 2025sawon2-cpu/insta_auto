@@ -4,8 +4,13 @@ from urllib.parse import urlparse
 
 
 def current_policy(settings=None):
-    return {'version': 2, 'minimum_total': max(10, getattr(settings, 'source_min_usable', 10)),
-            'platform_minimums': {'tiktok': max(5, getattr(settings, 'source_tiktok_min_usable', 5))}}
+    return {'version': 3, 'completion_mode': 'scene_duration', 'minimum_total': 1,
+            'suggested_total': max(1, getattr(settings, 'source_min_usable', 10)),
+            'platform_minimums': {},
+            'platform_preferences': {'tiktok': max(0, getattr(settings, 'source_tiktok_min_usable', 5))},
+            'coverage_ratio': max(1., getattr(settings, 'source_coverage_ratio', 1.25)),
+            'fallback_output_seconds': max(1., getattr(settings, 'source_default_duration', 30.)),
+            'core_min_seconds': max(1., getattr(settings, 'source_core_min_seconds', 4.))}
 
 
 def run_policy(state, target=10):
@@ -43,7 +48,10 @@ def source_platform(source):
 
 
 def goal_message(goal):
-    text = f"전체 {goal['count']}/{goal['target']}개"
+    text = (f"사용 가능 {goal['usable_seconds']:g}/{goal['required_seconds']:g}초 · {goal['count']}개"
+            if 'required_seconds' in goal else f"전체 {goal['count']}/{goal['target']}개")
     for platform, coverage in goal.get('platform_targets', {}).items():
         text += f" · {'TikTok' if platform == 'tiktok' else platform} {coverage['usable']}/{coverage['target']}개"
+    for platform, coverage in goal.get('platform_preferences', {}).items():
+        text += f" · {'TikTok' if platform == 'tiktok' else platform} 선호 {coverage['usable']}/{coverage['target']}개"
     return text

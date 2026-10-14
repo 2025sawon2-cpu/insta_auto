@@ -117,8 +117,11 @@ def test_reopen_restores_approvals_and_request_checkpoint(studio):
 def test_late_failure_does_not_mark_new_script_failed(studio):
     state=prepared(studio)
     old=studio.action(state["id"],"approve-script",{"script_id":state["script_id"]})
-    studio.store.claim() # prepare
+    # This stale-voice test starts after preparation; unfinished prepare jobs
+    # now correctly prevent a concurrent job for the same task.
+    studio.store.change(state['id'],lambda s,db:db.execute("UPDATE jobs SET status='done' WHERE task_id=? AND kind='prepare'",(s['id'],)))
     voice=studio.store.claim()
+    assert voice and voice['kind']=='voice'
     studio.action(state["id"],"save-script",{"text":"다음 버전으로 수정했어요."})
     studio.store.fail(voice,"old failure")
     new=studio.store.get(state["id"])

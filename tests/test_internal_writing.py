@@ -8,7 +8,7 @@ from hotpost.writing.contract import snapshot
 from hotpost.writing.jobs import Jobs
 
 REFERENCE='차문에 끼워서 컵을 놓고 휴대폰을 세울 수 있어요. 댓글에 홀더 남겨주세요.'
-DRAFT='컵 놓을 자리가 모자라요? 문 쪽에 걸어 음료 자리를 하나 늘려요. 폰도 세워둘 수 있어요. 댓글에 홀더 남겨주세요.'
+DRAFT='컵 놓을 자리가 모자라요? 문 쪽에 걸어 음료 자리를 하나 늘려요. 폰도 세워둘 수 있어요. 댓글에 나도 남겨주세요.'
 
 def run(tmp_path, monkeypatch, replies):
     calls=[]
@@ -18,10 +18,10 @@ def run(tmp_path, monkeypatch, replies):
         if isinstance(value,Exception):raise value
         return value
     monkeypatch.setattr(pipeline.codex_writer,'chat',chat)
-    value=pipeline.generate({'reference_script':REFERENCE,'writing_contract':snapshot()},tmp_path,lambda:None,lambda *a:None)
+    value=pipeline._generate_single({'reference_script':REFERENCE,'writing_contract':snapshot()},tmp_path,lambda:None,lambda *a:None)
     return value,calls,json.loads((tmp_path/'writing-audit.json').read_text('utf-8'))
 
-def test_single_draft_review_does_not_run_candidate_competition(tmp_path,monkeypatch):
+def test_per_variant_review_is_bounded_and_preserves_clean_draft(tmp_path,monkeypatch):
     result,calls,audit=run(tmp_path,monkeypatch,[{'text':DRAFT},{'issues':[]}])
     assert len(calls)==2 and len(result['scripts'])==1
     assert result['scripts'][0]['text']==DRAFT and not audit['repair']['attempted']
@@ -73,7 +73,7 @@ def test_short_nonempty_reference_reaches_codex_without_length_gate(tmp_path,mon
         if len(calls)==3:return {'text':'설치가 번거롭죠? 펼쳐 놓으면 바로 쓸 수 있어요. 댓글에 나도 남겨주세요.'}
         return {'preferred':0,'reason':'원고 보존','issues':[]}
     monkeypatch.setattr(pipeline.codex_writer,'chat',chat)
-    result=pipeline.generate({'reference_script':'펼치면 끝이에요!','writing_contract':snapshot()},tmp_path,lambda:None,lambda *a:None)
+    result=pipeline._generate_single({'reference_script':'펼치면 끝이에요!','writing_contract':snapshot()},tmp_path,lambda:None,lambda *a:None)
     assert result['scripts'] and calls[0]['reference']=='펼치면 끝이에요!'
 
 def test_queue_durable_and_does_not_duplicate_active_work(tmp_path,monkeypatch):

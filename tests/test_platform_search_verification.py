@@ -20,6 +20,8 @@ def test_loading_home_and_search_results_are_distinct():
     assert verify.observe(page)['status']=='loading'
     verify.candidates={'one':{'url':'one'}}
     assert verify.observe(page)=={'status':'results','candidates':1}
+    page.url='https://www.tiktok.com/search?q=mushroom+skewers'
+    assert verify.observe(page)['status']=='results'
     page.url='https://www.tiktok.com/'
     assert verify.observe(page)['status']=='page_changed'
     page.url='https://www.tiktok.com/search/video?q=a+different+query'
@@ -56,6 +58,7 @@ def test_observation_uses_existing_matching_response_without_new_requests():
     ('슬라이더를 드래그하여 퍼즐을 맞추세요',True,True),
     ('No results found',False,True),
     ('No results found',True,False),
+    ('결과를 찾을 수 없음 이 문구는 증오 행동과 관련될 수 있습니다.',True,False),
 ])
 def test_verification_preserves_window_until_done_and_only_confirmed_search_releases_gate(
         tmp_path,monkeypatch,body,explicit,expected_gate):
@@ -77,8 +80,12 @@ def test_verification_preserves_window_until_done_and_only_confirmed_search_rele
         def __enter__(self):return SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=launch))
         def __exit__(self,*a):pass
     monkeypatch.setattr(pw,'sync_playwright',Runtime)
+    monkeypatch.setattr(module,'ensure_browser',lambda _:None)
+    monkeypatch.setattr(module,'attach_browser',lambda *a: paths.append(str(a[1].source_browser_profile_dir)) or context)
+    monkeypatch.setattr(module,'managed_page',lambda *a:page)
+    monkeypatch.setattr('hotpost.browser_search.BrowserSearcher._submit_search',lambda *a: events.append(('input',verify.query)) or True)
     monkeypatch.setattr(module.time,'sleep',lambda _:None)
-    monkeypatch.setattr(module,'probe_platform_auth',lambda *a:pytest.fail('No extra /login request'))
+    monkeypatch.setattr('hotpost.browser_profile.probe_platform_auth',lambda *a:pytest.fail('No extra /login request'))
     class Stop:
         count=0
         def wait(self,_):
@@ -93,8 +100,8 @@ def test_verification_preserves_window_until_done_and_only_confirmed_search_rele
     manager._work('tiktok',verify)
     assert not manager.error
     assert paths==[str(manager.settings.source_browser_profile_dir)]
-    assert len([e for e in events if e[0]=='navigate'])==1
-    assert events[-1][0]=='closed'
+    assert len([e for e in events if e[0]=='input'])==1
+    assert not any(e[0]=='closed' for e in events)
     assert manual_required(access_record(tmp_path,'tiktok')) is expected_gate
     assert not module.BROWSER_LOCK.locked()
 
@@ -122,3 +129,34 @@ def test_query_validation_occurs_before_launch(tmp_path):
     for query in ('',None,123,'x'*181):
         with pytest.raises(ValueError):TikTokSearchVerification(query)
     assert not manager.active
+
+
+@pytest.mark.parametrize('provider', ['bilibili','tiktok'])
+def test_controlled_search_replaces_old_query_instead_of_concatenating_it(tmp_path,monkeypatch,provider):
+    from urllib.parse import urlencode
+    from hotpost.browser_search import BrowserSearcher
+    old='이전 검색어';query='A7 미니 파일'
+    class Field:
+        first=None
+        value=old
+        def is_visible(self):return True
+        def count(self):return 1
+        def wait_for(self,**kw):pass
+        def fill(self,value):self.value+=value  # observed stale controlled state
+        def input_value(self):return self.value
+        def press_sequentially(self,value,**kw):self.value+=value
+        def press(self,key):
+            if key=='ControlOrMeta+A':self.value=''
+            elif key=='Enter':
+                name='q' if provider=='tiktok' else 'keyword'
+                page.url=f'https://www.{provider}.com/search?'+urlencode({name:self.value})
+    field=Field();field.first=field
+    page=SimpleNamespace(url=f'https://www.{provider}.com/search?old=1',locator=lambda _:field,
+                         wait_for_timeout=lambda _:None)
+    def wait_for_url(predicate,**kw):assert predicate(page.url),page.url
+    page.wait_for_url=wait_for_url
+    searcher=BrowserSearcher(Settings(data_dir=tmp_path),tmp_path/'debug')
+    monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
+    monkeypatch.setattr(searcher,'_pace',lambda *a,**kw:None)
+    assert searcher._submit_search(page,provider,query,{})
+    assert field.value==query

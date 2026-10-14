@@ -32,7 +32,7 @@ def test_self_shot_create_edit_upload_start_and_no_external_search(studio_page,m
     text='이 대본 그대로 읽어주세요!\n내가 만든 두 번째 문장입니다.'
     page.locator('[name=text]').fill(text)
     page.locator('[data-own-submit]').click()
-    expect(page.locator('#drawer-code')).to_have_text('내 촬영 영상 → 우리 쇼츠 제작')
+    expect(page.get_by_role('heading',name='내 촬영 영상',exact=True)).to_be_visible()
     expect(page.locator('[data-pf=search]')).to_have_count(0)
     expect(page.get_by_text('선택한 촬영 영상으로 제작 시작',exact=True)).to_be_disabled()
     page.locator('[data-upload-files]').set_input_files([
@@ -56,7 +56,7 @@ def test_self_shot_draft_never_prompts_for_original_speech(studio_page):
     own=tasks[0];own.update(creation_mode='self_shot',self_shot={'started':False,'script_mode':'manual','text':'내 대본'},
                             status='self_shot_draft',jobs=[],sources=[],original_text='')
     own['automation']['active']=False;own['revision']+=1
-    page.evaluate('refreshStudio()');page.locator('[data-work=source]').click()
+    page.evaluate('refreshStudio()');page.locator('#attention-open').click();page.locator('[data-work=source]').click()
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     expect(page.locator('[data-pf-section=script] .sd-script-text')).to_have_text('내 대본')
     expect(page.locator('[data-field=original]')).to_have_count(0)
@@ -71,11 +71,11 @@ def test_self_shot_automatic_form_dark_theme_and_required_product(studio_page):
     expect(page.locator('[data-own-auto]')).to_be_visible()
     expect(page.locator('[data-own-manual]')).to_be_hidden()
     assert page.locator('[name=product]').evaluate('(el)=>el.required')
-    assert not page.locator('form').evaluate('(el)=>el.checkValidity()')
+    assert not page.locator('.self-shot-form').evaluate('(el)=>el.checkValidity()')
     colors=page.locator('.self-shot-dialog').evaluate('(el)=>({background:getComputedStyle(el).backgroundColor,color:getComputedStyle(el).color})')
     assert colors['background']=='rgb(29, 41, 60)' and colors['color']=='rgb(237, 243, 255)'
     page.locator('[name=product]').fill('접이식 도시락통')
-    assert page.locator('form').evaluate('(el)=>el.checkValidity()')
+    assert page.locator('.self-shot-form').evaluate('(el)=>el.checkValidity()')
 
 
 def test_self_shot_result_displays_actual_reuse_and_product_evidence(studio_page):

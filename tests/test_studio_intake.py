@@ -62,6 +62,19 @@ def test_new_collection_does_not_show_previous_receipt(tmp_path):
     assert receipt['rows']==[] and receipt['candidates']==[]
 
 
+def test_collection_receipt_survives_midnight_without_starting_jobs(tmp_path, monkeypatch):
+    from hotpost.daily_hot import date_key
+    _, studio, report, _ = setup_run(tmp_path)
+    before = intake_status(studio)
+    job_count = sum(len(studio.store.jobs(t['id'])) for t in studio.store.list())
+    monkeypatch.setattr('hotpost.studio_intake.time.time', lambda:report['generated_at']+86400)
+    after = intake_status(studio)
+    assert after['new_hot_videos'] == before['new_hot_videos'] == 3
+    assert after['candidates'] == before['candidates']
+    assert after['collection_date_kst'] == date_key(before['finished_at'])
+    assert sum(len(studio.store.jobs(t['id'])) for t in studio.store.list()) == job_count
+
+
 def test_all_hot_videos_are_registered_even_with_a_metric_warning(tmp_path):
     settings, studio, report, run = setup_run(tmp_path)
     report['posts'][0]['metric_status']['views']='missing'

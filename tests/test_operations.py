@@ -60,14 +60,17 @@ def test_single_heavy_worker_duplicate_suppression_and_restart_recovery(tmp_path
     assert queue.get(first["id"])["status"] == "done"
     assert queue.get(second["id"])["status"] == "done"
 
+    queue.close()
     restarted = JobQueue(settings)
     assert restarted.get(first["id"])["result"]["shortcode"] == "reel-a"
     store = Storage(settings.db_path)
     running, _ = store.create_job("running-old", "source", "reel-old")
     store.update_job(running["id"], status="running")
     store.close()
+    restarted.close()
     second_restart = JobQueue(settings)
     assert second_restart.get("running-old")["status"] == "interrupted"
+    second_restart.close()
 
 
 def test_cleanup_dry_run_matches_actual_and_preserves_archived_results(tmp_path):
@@ -108,7 +111,7 @@ def test_cleanup_dry_run_matches_actual_and_preserves_archived_results(tmp_path)
 def test_collection_alerts_schedule_miss_and_schema_version(tmp_path):
     settings = _settings(tmp_path)
     store = Storage(settings.db_path)
-    assert store.conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+    assert store.conn.execute("SELECT version FROM schema_version").fetchone()[0] == 6
     assert store.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     health = store.record_account_collection("creator", False)
     assert health["consecutive_failures"] == 1

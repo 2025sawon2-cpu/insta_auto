@@ -45,6 +45,7 @@ def test_auth_preflight_failure_skips_every_account_and_closes(tmp_path, monkeyp
 
 
 def test_rate_limit_mid_run_preserves_completed_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.time, "time", lambda: 1700000100)
     class Limited:
         called = []
         closed = False
@@ -150,9 +151,10 @@ def test_graphql_json_body_accepts_instagram_content_types(mime):
 def test_fetch_collects_past_pinned_post_and_marks_approximation(tmp_path):
     settings = Settings(data_dir=tmp_path, collect_recovery_limit=5)
     collector = BrowserCollector(settings)
+    collector.collection_started_at = 100000
     codes = ['pinned','new','boundary']
     raw = [{'code':code, 'taken_at':stamp, 'media_type':2, 'product_type':'clips',
-            'user':{'username':'account'}} for code,stamp in zip(codes,[100,300,200])]
+            'user':{'username':'account'}} for code,stamp in zip(codes,[100,99900,99800])]
     class Page:
         mouse = SimpleNamespace(wheel=lambda *args: None)
         def content(self):
@@ -165,8 +167,8 @@ def test_fetch_collects_past_pinned_post_and_marks_approximation(tmp_path):
         def wait_for_timeout(self, *args): pass
     collector.browser = SimpleNamespace(page=Page(), navigate=lambda *args:None,
                                         verify_identity=lambda:None, guard=lambda:None)
-    profile, posts, observations = collector.fetch('account',2,existing={'boundary':Post('boundary','account',200,'reel')})
-    assert [p.shortcode for p in posts] == ['new','boundary','pinned']
+    profile, posts, observations = collector.fetch('account',2,existing={'boundary':Post('boundary','account',99800,'reel')})
+    assert [p.shortcode for p in posts] == ['new','boundary']
     observation = next(o for o in observations if o.shortcode=='new')
     assert observation.success is False and observation.views is None
     assert '1.2만' in observation.reason
@@ -188,6 +190,7 @@ def test_browser_navigation_timeout_has_bounded_error():
 
 def test_reels_enrichment_scrolls_for_profile_posts_without_adding_older_posts(tmp_path):
     collector = BrowserCollector(Settings(data_dir=tmp_path, collect_recovery_limit=5))
+    collector.collection_started_at = 100000
     class Page:
         section = ''
         scroll = 0
@@ -197,7 +200,7 @@ def test_reels_enrichment_scrolls_for_profile_posts_without_adding_older_posts(t
         def locator(self, selector):
             if not self.section:
                 rows = [{'code':code,'media_type':2,'taken_at':stamp,'user':{'username':'account'}}
-                        for code,stamp in [('pinned',100),('new',300)]]
+                        for code,stamp in [('pinned',100),('new',99900)]]
             else:
                 rows = [{'code':code,'media_type':2,'play_count':count}
                         for code,count in [('new',12000),('older',9000),('pinned',8000)]]
@@ -209,10 +212,10 @@ def test_reels_enrichment_scrolls_for_profile_posts_without_adding_older_posts(t
     page.mouse=SimpleNamespace(wheel=page.wheel)
     def navigate(path): page.section = 'reels' if path.endswith('/reels/') else ''
     collector.browser=SimpleNamespace(page=page,navigate=navigate,verify_identity=lambda:None,guard=lambda:None)
-    _,posts,obs=collector.fetch('account',2,existing={'new':Post('new','account',300,'reel')})
-    assert page.scroll > 0
-    assert {p.shortcode for p in posts} == {'new','pinned'}
-    assert {o.views for o in obs} == {12000,8000}
+    _,posts,obs=collector.fetch('account',2,existing={'new':Post('new','account',99900,'reel')})
+    assert page.scroll == 0  # Old pinned reels no longer require enrichment scrolling.
+    assert {p.shortcode for p in posts} == {'new'}
+    assert {o.views for o in obs} == {12000}
     assert all(o.success for o in obs)
 
 

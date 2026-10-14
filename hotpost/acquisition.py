@@ -11,9 +11,13 @@ from .storage import Storage
 
 
 def candidates(report, settings):
+    from .collection_window import in_collection_window
+    started = report.get("collection_started_at", report.get("generated_at", time.time()))
     followers = {row['username']: row.get('followers', 0) for row in report['accounts']}
     selected = []
     for post in report['posts']:
+        if not in_collection_window(post.get("taken_at", 0), started):
+            continue
         count = followers.get(post['username'], 0)
         views = post.get('views')
         if (post.get('kind') != 'reel' or not count or views is None

@@ -5,10 +5,28 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   window.HotpostDisplay.theme($('#theme-toggle'));
   if(!document.documentElement.dataset.theme)document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
-  let tasks=[], selectedId=null, requestedId=new URLSearchParams(location.search).get('work'), requestedTab=new URLSearchParams(location.search).get('tab'), filter='all', listPage=1, listView=localStorage.getItem('studio-list-view')==='grid'?'grid':'board', lanePages={working:1,attention:1,finished:1}, tab='script', dirty=false, saving=false, timer, saveTimer, lastRevision=-1, activeEditId=null;
+  let tasks=[], selectedId=null, requestedId=new URLSearchParams(location.search).get('work'), requestedTab=new URLSearchParams(location.search).get('tab'), listPage=1, listView=localStorage.getItem('studio-list-view')==='grid'?'grid':'board', lanePages={working:1,attention:1,finished:1}, tab='script', dirty=false, saving=false, timer, saveTimer, lastRevision=-1, activeEditId=null;
   const current=()=>tasks.find(t=>t.id===selectedId);
   const board=window.StudioBoard.mount($('#work-list'),$('#overview'),$('#board-pagination'),$('#board-recent'));
   const updateJourney=window.StudioBoard.mountJourney($('#drawer-journey'));
+  const browseMemories={};let transition=0;
+  const browse=window.StudioBrowse.mount(event=>{
+    if(event.kind==='screen'){
+      browseMemories[event.previous]={listPage,lanePages:{...lanePages},scroll:window.scrollY,lanes:[...$('#work-list').querySelectorAll('.column-cards')].map(n=>n.scrollTop)};
+      const memory=browseMemories[event.next];listPage=memory?.listPage||1;lanePages=memory?.lanePages||{working:1,attention:1,finished:1};
+      const list=$('#work-list');list.dataset.direction=event.next==='attention'?'forward':'back';
+      const reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
+      const generation=++transition;list.getAnimations().forEach(a=>a.cancel());
+      const leave=reduced?null:list.animate([{opacity:1,transform:'translateX(0)'},{opacity:0,transform:event.next==='attention'?'translateX(-60px)':'translateX(60px)'}],{duration:150,easing:'ease-in',fill:'forwards'});
+      Promise.resolve(leave?.finished).catch(()=>{}).then(()=>{
+        if(generation!==transition)return;leave?.cancel();renderList();
+        [...$('#work-list').querySelectorAll('.column-cards')].forEach((n,i)=>n.scrollTop=memory?.lanes[i]||0);
+        window.scrollTo({top:memory?.scroll??window.scrollY,behavior:'instant'});
+        if(!reduced)list.animate([{opacity:0,transform:event.next==='attention'?'translateX(60px)':'translateX(-60px)'},{opacity:1,transform:'translateX(0)'}],{duration:220,easing:'ease-out'});
+        $(event.next==='attention'?'#attention-back':'#attention-open').focus({preventScroll:true});
+      });
+    }else{listPage=1;lanePages={working:1,attention:1,finished:1};renderList();}
+  });
   const panels=new Map(), memories=new Map();
   let selecting=false;
   const description=t=>window.StudioBoard.describe(t);
@@ -16,15 +34,18 @@
   document.addEventListener('production-draft',()=>{if(current())renderHero(current(),description(current()));});
   function updateDrawerHeader(){
     const t=current();if(!t)return;
+    $('#work-drawer').dataset.protocol=String(t.automation?.protocol||1);
     $('#drawer-title').textContent=window.StudioBoard.title(t);
-    $('#drawer-code').textContent=t.creation_mode==='self_shot'?'내 촬영 영상 → 우리 쇼츠 제작':'터진게시물 → 우리 영상 제작';
+    $('#drawer-code').textContent='제작실';
     const d=description(t);
-    $('#drawer-status').textContent=`${d.phase} · ${d.stageName} · ${d.label}`;
+    $('#drawer-status').textContent=d.complete?'완성':d.label;$('#drawer-status').dataset.state=d.state;
     updateJourney(t);applyDetailTab();$('#journey-current').textContent=d.phase;renderHero(t,d);
   }
   function renderHero(t,d){
     const local=JSON.parse(localStorage.getItem('production-feedback-'+t.id)||'{}');
-    const pending=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
+    const pending=!!$('#detail')._remotionDirty||Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:|caption:|start:|end:)/.test(k))||Object.keys(t.feedback||{}).length;
+    $('#drawer-status').textContent=d.complete?'완성':d.label;
+    $('#drawer-status').dataset.state=pending&&d.complete?'editing':d.state;
     const title=d.complete&&pending?'완성 영상 보관 중 · 수정 내용 반영 전':d.complete?'영상 제작 완료':d.stageName+' · '+d.label;
     const html=`<div class="hero-copy"><div class="hero-state"><span class="hero-status ${d.state}">${d.steps.some(s=>s.live)?window.StudioBoard.activityMarkup(true):''}${esc(d.label)}</span><span>${d.done} / 6 단계 완료</span></div><h3>${esc(title)}</h3>${d.complete?'<button type="button" class="sd-secondary" data-focus-current>완성 영상 보기</button>':''}${t.error&&!d.steps.some(s=>s.live)?'<button type="button" class="sd-secondary" data-action="retry">중단 단계부터 재시도</button>':''}</div>`;
     const hero=$('#work-hero');hero.dataset.productionLive=String(d.steps.some(s=>s.live));
@@ -47,6 +68,7 @@
     const nav=$('#detail-tabs');
     if(nav.dataset.selected!==tab){const button=nav.querySelector('[aria-pressed=true]'),bounds=nav.getBoundingClientRect(),item=button?.getBoundingClientRect();if(item){if(item.left<bounds.left)nav.scrollLeft-=bounds.left-item.left;else if(item.right>bounds.right)nav.scrollLeft+=item.right-bounds.right;}nav.dataset.selected=tab;}
     $('#work-drawer').dataset.view=tab;
+    if(tab!=='edit')window.RemotionEditor?.pause(panel);
     panel.querySelectorAll('[data-pf-section], [data-legacy-section]').forEach(el=>{el.hidden=workspaceTab(el.dataset.pfSection||el.dataset.legacySection)!==tab;});
     if(current()?.automation?.protocol===2){
       const summary=panel.querySelector('.pf-summary'), editor=panel.querySelector('.pf-editor');
@@ -59,7 +81,7 @@
   }
   function rememberPanel(){
     if(!selectedId)return;
-    const panel=$('#detail');panel.querySelectorAll('video,audio').forEach(m=>m.pause());
+    const panel=$('#detail');window.RemotionEditor?.pause(panel);panel.querySelectorAll('video,audio').forEach(m=>m.pause());
     panels.set(selectedId,panel);memories.set(selectedId,{tab,activeEditId,lastRevision,scroll:$('#drawer-scroll').scrollTop});
   }
   function showCompletedVideo(){
@@ -118,8 +140,8 @@
   async function api(path,body){const r=await fetch('/api/studio'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'});const data=await r.json();if(!r.ok)throw new Error(window.StudioBoard.message(data.error,'요청을 처리하지 못했어요. 잠시 후 다시 시도하세요.'));return data;}
   function updateTask(t){const index=tasks.findIndex(x=>x.id===t.id);if(index>=0)tasks[index]=t;else tasks.unshift(t);renderList();updateDrawerHeader();}
   document.addEventListener('studio-self-shot-created',async event=>{
-    updateTask(event.detail);filter='all';listPage=1;$('#search').value='';
-    $('#filters').querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter==='all'));
+    updateTask(event.detail);listPage=1;$('#search').value='';
+
     await openWork(event.detail.id);tab='sources';renderDetail();applyDetailTab();
   });
   async function action(kind,data={},options={}){
@@ -129,15 +151,18 @@
   }
   function renderList(){
     $('#total-count').textContent=tasks.length;$('#rail-count').textContent=tasks.length;
-    const n=board.render(tasks,{selectedId,filter,query:$('#search').value,page:listPage,view:listView,lanePages});
+    const scoped=browse.update(tasks);
+    const n=board.render(scoped,{selectedId,filter:'all',query:$('#search').value,page:listPage,view:listView,lanePages,screen:browse.screen,summaryTasks:browse.periodTasks});
     listPage=Number($('#work-list').dataset.page)||1;lanePages=JSON.parse($('#work-list').dataset.lanePages||JSON.stringify(lanePages));
     $('#board-views').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.listView===listView)));
-    $('#filters').querySelectorAll('[data-filter]').forEach(b=>{b.classList.toggle('selected',b.dataset.filter===filter);b.setAttribute('aria-pressed',String(b.dataset.filter===filter));});
+
     $('#board-empty').hidden=n>0;
-    $('#board-empty').textContent=tasks.length?(filter==='running'&&!$('#search').value?'현재 진행 중인 작업이 없습니다. 확인이 필요한 작업은 ‘확인 필요’ 탭에서 볼 수 있어요.':'조건에 맞는 작업이 없습니다. 검색어나 필터를 바꿔보세요.'):'내 촬영 영상으로 새 제작을 시작하거나 터진게시물에서 소재를 추가하세요.';
+    $('#board-empty').textContent=$('#search').value.trim()?'선택한 수집 날짜와 검색 조건에 맞는 영상이 없습니다.':tasks.length?browse.emptyMessage():'내 촬영 영상으로 새 제작을 시작하거나 터진게시물에서 소재를 추가하세요.';
   }
   function renderDetail(){
-    const t=current();const panel=$('#detail');panel.hidden=!t;if(!t)return;
+    const t=current();const panel=$('#detail');panel.hidden=!t;
+    window.ReferenceJobs.mount($('#studio-reference-tools'),t);
+    if(!t)return;
     const requestedRun=new URLSearchParams(location.search).get('run');
     if(t.automation?.protocol===2){lastRevision=t.revision;window.ProductionFlow.mount(panel,t,{editor:true,selectedRun:requestedRun,onUpdate:updateTask,onRender:()=>applyDetailTab(panel),onTab:next=>{tab=next;applyDetailTab(panel);$('#drawer-scroll').scrollTop=0;}});applyDetailTab(panel);return;}
     panel._legacyEditing=false;
@@ -213,7 +238,6 @@
     if(el.dataset.work){await openWork(el.dataset.work);if(current()&&description(current()).complete)showCompletedVideo();return;}
     if(el.id==='close-work'){await closeWork();return;}
     if(el.id==='expand-work'){$('#work-drawer').classList.toggle('expanded');const full=$('#work-drawer').classList.contains('expanded');el.textContent=full?'패널로 축소':'전체화면';el.setAttribute('aria-pressed',String(full));syncDrawerMode();return;}
-    if(el.dataset.filter){filter=el.dataset.filter;listPage=1;lanePages={working:1,attention:1,finished:1};renderList();return;}
     if(el.dataset.listView){listView=el.dataset.listView;localStorage.setItem('studio-list-view',listView);renderList();return;}
     if(el.dataset.lanePage){lanePages[el.dataset.lane]=Number(el.dataset.lanePage);renderList();const lane=$('[data-stage="'+el.dataset.lane+'"]');lane.querySelector('.column-cards').scrollTop=0;lane.querySelector('[data-lane-page]:not(:disabled)')?.focus({preventScroll:true});return;}
     if(el.dataset.boardPage){listPage=Number(el.dataset.boardPage);renderList();$('#work-list').scrollIntoView({block:'start'});$('#board-pagination button:not(:disabled)')?.focus({preventScroll:true});return;}

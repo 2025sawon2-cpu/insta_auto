@@ -97,16 +97,19 @@ def claim_next(studio, tid):
     return studio.store.claim('sources')
 
 
-def test_three_no_gain_rounds_stop_persistently_and_leave_script_lane_alive(tmp_path):
+def test_distinct_no_gain_rounds_continue_until_scope_exhaustion_and_leave_script_lane_alive(tmp_path):
     studio, tid, folder = task(tmp_path)
     for i in range(3):
         job = claim_next(studio, tid)
         assert job
         finish(studio, job, round_result(i))
+    assert not studio.store.get(tid)['source_acquisition'].get('hold')
+    job = claim_next(studio, tid)
+    finish(studio, job, round_result(3, searches=[{'provider':'youtube','query':'','status':'query_exhausted'}]))
     state = studio.store.get(tid)
-    assert state['source_acquisition']['hold']['reason'] == 'no_progress'
+    assert state['source_acquisition']['hold']['reason'] == 'strategy_exhausted'
     assert state['source_search']['status'] == 'blocked'
-    assert '증가 없음' in state['message'] or '증가 없음' in state['source_search']['message']
+    assert '검색 조건 없음' in state['source_search']['message']
     assert not state.get('error')
     studio.store.recover()
     studio.store.change(tid, lambda s, db:studio.advance_workflow(s, db))
@@ -116,7 +119,7 @@ def test_three_no_gain_rounds_stop_persistently_and_leave_script_lane_alive(tmp_
     assert public['pipeline'][0]['steps'][0]['status'] == 'blocked'
 
 
-def test_skipped_authentication_and_exhaustion_stop_without_new_failed_requests(tmp_path):
+def test_skipped_authentication_wait_preserves_unused_route_without_new_failed_requests(tmp_path):
     studio, tid, folder = task(tmp_path)
     job = studio.store.claim('sources')
     finish(studio, job, round_result(0, searches=[
@@ -124,7 +127,8 @@ def test_skipped_authentication_and_exhaustion_stop_without_new_failed_requests(
         {'provider':'yandex-images','query':'','status':'image_exhausted'},
         {'provider':'youtube','query':'','status':'query_exhausted'}]))
     state = studio.store.get(tid)
-    assert state['source_acquisition']['hold']['reason'] == 'strategy_exhausted'
+    assert not state['source_acquisition'].get('hold')
+    assert state['source_acquisition']['waiting']
     assert 'tiktok' in state['source_search']['message']
     assert '장면 이미지 소진' in state['source_search']['message']
     assert not state['source_acquisition']['queries']
@@ -143,19 +147,19 @@ def test_cache_only_round_can_continue_to_external_search_without_false_exhausti
     assert claim_next(studio, tid)['kind'] == 'collect_sources'
 
 
-def test_library_candidates_do_not_disable_the_bounded_no_gain_stop(tmp_path):
+def test_library_new_candidates_are_not_blocked_by_arbitrary_no_gain_count(tmp_path):
     studio,tid,folder=task(tmp_path)
     for i in range(3):
         job=claim_next(studio,tid)
         finish(studio,job,round_result(i,searches=[
             {'provider':'source-library','query':'','status':'results','candidates':2}]))
     state=studio.store.get(tid)
-    assert state['source_acquisition']['hold']['reason']=='no_progress'
+    assert not state['source_acquisition'].get('hold')
     assert not state['source_acquisition']['queries']
-    assert studio.store.claim('sources') is None
+    assert claim_next(studio,tid)
 
 
-def test_verified_gain_resets_stagnation_but_not_total_round_limit(tmp_path):
+def test_verified_gain_continues_without_arbitrary_total_round_limit(tmp_path):
     studio, tid, folder = task(tmp_path)
     studio.settings.source_collection_max_rounds = 3
     for i in range(3):
@@ -163,17 +167,17 @@ def test_verified_gain_resets_stagnation_but_not_total_round_limit(tmp_path):
         finish(studio, job, round_result(i, [asset(folder,i,core=i==0)]))
     state = studio.store.get(tid)
     assert state['source_acquisition']['no_progress_rounds'] == 0
-    assert state['source_acquisition']['hold']['reason'] == 'round_limit'
+    assert not state['source_acquisition'].get('hold')
     assert len(state['sources']) == 3
 
 
-def test_elapsed_budget_blocks_rescheduling_and_explicit_resume_preserves_search_ledger(tmp_path):
+def test_elapsed_time_is_observation_and_does_not_block_rescheduling(tmp_path):
     studio, tid, folder = task(tmp_path)
     job = studio.store.claim('sources')
     studio.store.change(tid, lambda s, db:s['source_acquisition'].update(started_at=time.time()-7200, execution_seconds=7200))
     finish(studio, job, round_result(0))
     state = studio.store.get(tid)
-    assert state['source_acquisition']['hold']['reason'] == 'time_limit'
+    assert not state['source_acquisition'].get('hold')
     ledger = state['source_acquisition']['queries']
     studio.action(tid, 'resume-auto', {'revision':state['revision']})
     state = studio.store.get(tid)
@@ -195,17 +199,14 @@ def test_fresh_budget_record_without_round_can_start_acquisition(tmp_path):
     assert studio.store.claim('sources')['payload']['round'] == 0
 
 
-def test_expired_queued_round_does_not_invoke_external_search(tmp_path, monkeypatch):
+def test_elapsed_queued_round_still_performs_needed_search(tmp_path,monkeypatch):
     from hotpost import source_finder
-    studio, tid, folder = task(tmp_path)
-    studio.store.change(tid, lambda s, db:s['source_acquisition'].update(started_at=time.time()-7200, execution_seconds=7200))
-    job = studio.store.claim('sources')
-    monkeypatch.setattr(source_finder, 'find_sources', lambda *a, **k: (_ for _ in ()).throw(AssertionError('unexpected external search')))
-    result = studio._collect_sources(studio.store.get(tid), job)
-    finish(studio, job, result)
-    state = studio.store.get(tid)
-    assert state['source_acquisition']['hold']['reason'] == 'time_limit'
-    assert studio.store.claim('sources') is None
+    studio,tid,folder=task(tmp_path)
+    studio.store.change(tid,lambda s,db:s['source_acquisition'].update(execution_seconds=7200))
+    job=studio.store.claim('sources');calls=[]
+    monkeypatch.setattr(studio,'_collect_source_attempt',lambda *a:calls.append(1) or {'sources':[]})
+    assert studio._collect_sources(studio.store.get(tid),job)=={'sources':[]}
+    assert calls==[1]
 
 
 def test_blank_web_queries_never_issue_network_requests(monkeypatch):

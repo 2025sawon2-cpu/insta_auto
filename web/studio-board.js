@@ -13,7 +13,7 @@
   const assetKeys = ['sources','transcript','script','voice','project','export'];
   const tabs = ['sources','original','script','voice','edit','results'];
   const stageOfKind = {prepare:'sources', collect_sources:'sources', rewrite:'script', voice:'voice', edit:'edit', revision:'edit', revise:'edit', edit_request:'edit', register:'edit', export:'export'};
-  const stageOfStatus = {preparing:'sources', source_wait:'sources', rewriting:'script', script_review:'script', voice_generating:'voice', voice_review:'voice', editing:'edit', draft_review:'edit', registering:'edit', exporting:'export', completed:'export'};
+  const stageOfStatus = {preparing:'sources', source_wait:'sources', rewriting:'script', script_review:'script', voice_generating:'voice', voice_review:'voice', editing:'edit', draft_review:'edit', quality_review:'edit', registering:'edit', exporting:'export', completed:'export'};
   const activityNames = {prepare:'자료 준비', rewrite:'대본 재가공', voice:'음성 생성', edit:'영상 편집', revision:'편집 수정', revise:'편집 수정', edit_request:'편집 수정', register:'프로젝트 등록', export:'MP4 내보내기', collect_sources:'소스 자동 추가 수집', refresh_sources:'소스 추가 수집', proposal:'대본 수정안 생성', suggest_edit:'편집 수정안 생성'};
   const stateNames = {running:'진행 중', queued:'실행 대기', review:'검토 필요', blocked:'제작 준비 필요', waiting:'제작 대기', retry:'재시도 대기', paused:'일시중지', error:'확인 필요', completed:'제작 완료', unknown:'상태 확인 필요'};
   function message(value, fallback='작업 상태를 확인하고 다시 시도해 주세요.') {
@@ -29,7 +29,8 @@
   }
   function title(task){
     let text=String(task.title||'').replaceAll(task.shortcode||'\u0000','').replace(/https?:\/\/\S+|#\S+/g,'').trim();
-    return text&&text!==task.id?text.slice(0,110):'새 쇼츠 제작';
+    if(['새 쇼츠 제작','새쇼츠제작'].includes(text))text='';
+    return text&&text!==task.id?text.slice(0,110):'제목 확인 필요';
   }
   function describe(task) {
     const owned=task.creation_mode==='self_shot';
@@ -85,8 +86,9 @@
     return (!q||`${task.title} ${task.shortcode}`.toLowerCase().includes(q))&&
       (filter==='all'||filter==='running'&&['running','queued','retry'].includes(d.state)||filter==='review'&&d.review||filter==='attention'&&!d.complete&&(d.attention||d.review||['paused','waiting','unknown'].includes(d.state))||filter==='completed'&&d.complete);
   }
-  function listPage(tasks,{filter='running',query='',page=1,pageSize=12}={}){
-    const filtered=tasks.filter(t=>matches(t,filter,query)).sort((a,b)=>(b.created||0)-(a.created||0)||a.id.localeCompare(b.id));
+  function listPage(tasks,{filter='running',query='',page=1,pageSize=12,collectedOrder=false}={}){
+    const collectionTime=t=>t.collection_date_at||t.hot_detected_at||t.collected_at||(t.creation_mode==='self_shot'?t.created:0)||0;
+    const filtered=tasks.filter(t=>matches(t,filter,query)).sort((a,b)=>(collectedOrder?collectionTime(b)-collectionTime(a):(b.created||0)-(a.created||0))||(b.created||0)-(a.created||0)||a.id.localeCompare(b.id));
     const pages=Math.max(1,Math.ceil(filtered.length/pageSize)),current=Math.min(pages,Math.max(1,page));
     return {items:filtered.slice((current-1)*pageSize,current*pageSize),total:filtered.length,page:current,pages,pageSize};
   }
@@ -107,10 +109,10 @@
     for(const step of d.steps){const li=el.querySelector(`[data-step="${step.id}"]`);li.dataset.stepState=step.state;li.dataset.live=String(step.live);text(li.querySelector('.step-node'),step.state==='done'?'✓':step.number);}
   }
   const bucket=d=>d.complete?'finished':d.attention||d.review||['paused','waiting','unknown'].includes(d.state)?'attention':'working';
-  function boardPage(tasks,{filter='all',query='',pages={},pageSize=4}={}){
-    const filtered=listPage(tasks,{filter,query,pageSize:Math.max(1,tasks.length)}).items;
+  function boardPage(tasks,{filter='all',query='',pages={},pageSize=4,classify=null,collectedOrder=false}={}){
+    const filtered=listPage(tasks,{filter,query,pageSize:Math.max(1,tasks.length),collectedOrder}).items;
     const lanes=['working','attention','finished'].map(id=>{
-      const items=filtered.filter(t=>bucket(describe(t))===id),total=items.length;
+      const items=filtered.filter(t=>(classify?classify(t):bucket(describe(t)))===id),total=items.length;
       const count=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(count,Math.max(1,pages[id]||1));
       return {id,total,page,pages:count,pageSize,items:items.slice((page-1)*pageSize,page*pageSize)};
     });
@@ -141,9 +143,12 @@
       card.classList.toggle('current',task.id===selectedId);card.classList.toggle('is-running',d.running);card.dataset.state=d.state;
       const live=d.steps.some(s=>s.live);card.dataset.productionLive=String(live);card.querySelector('.studio-working-dots').hidden=!live;
       const button=card.querySelector('button');button.setAttribute('aria-expanded',String(task.id===selectedId));button.setAttribute('aria-label',`${title(task)} · ${d.nextAction}`);
-      const labels={h3:title(task),'.card-mode':task.creation_mode==='self_shot'?'내 촬영':'터진게시물','.board-status':d.label,'.card-stage':view==='board'?d.stageName:d.complete?'완성 영상 보기':d.stageName+' · '+d.phase};
+      const collectionAt=root.StudioBrowse?.collectedAt(task)||task.collection_date_at||task.hot_detected_at||task.collected_at||(task.creation_mode==='self_shot'?task.created:0);
+      const dayLabel=collectionAt?`${task.creation_mode==='self_shot'?'등록':'수집·발견'} ${stamp(collectionAt)}`:'수집일 확인 필요';
+      const mode=task.creation_mode==='self_shot'?'내 촬영':'터진게시물';
+      const labels={h3:title(task),'.card-mode':view==='board'?mode+' · '+dayLabel:mode,'.board-status':d.label,'.card-stage':view==='board'?d.stageName:d.complete?'완성 영상 보기':d.stageName+' · '+d.phase};
       if(view==='board')Object.assign(labels,{'.card-phase':d.phase,'.card-message':d.message,'.card-version':d.versions,'.card-previous':d.previous,'.card-open':d.nextAction+' →','.card-activity':d.activity});
-      else labels.time=stamp(task.created);
+      else labels.time=dayLabel;
       for(const [selector,value] of Object.entries(labels))text(card.querySelector(selector),value);
       if(view==='board'){updateProgress(card.querySelector('.milestone-progress'),d);card.querySelector('.card-activity').hidden=!d.running;card.querySelector('.current-work').setAttribute('aria-busy',String(live));}
       const img=card.querySelector('img'),edit=(task.edits||[]).find(e=>e.id===task.edit_id),owned=task.creation_mode==='self_shot';
@@ -152,21 +157,22 @@
       if(!cover)img.hidden=true;card.querySelector('.card-placeholder').hidden=!!cover&&!img.hidden;
       return card;
     }
-    function render(tasks,{selectedId,filter='all',query='',page=1,view='board',lanePages={}}={}){
+    function render(tasks,{selectedId,filter='all',query='',page=1,view='board',lanePages={},screen=null,summaryTasks=null}={}){
       view=view==='grid'?'grid':'board';
       const focus=document.activeElement,views=new Map(tasks.map(t=>[t.id,describe(t)])),counts={attention:0,working:0,finished:0};
-      for(const task of tasks){const d=views.get(task.id);if(matches(task,'running',''))counts.working++;if(matches(task,'attention',''))counts.attention++;if(d.complete)counts.finished++;if(previousStates.has(task.id)&&!previousStates.get(task.id)&&d.complete)justFinished.unshift(task.id);previousStates.set(task.id,d.complete);}
+      for(const task of summaryTasks||tasks){const d=views.get(task.id)||describe(task);if(screen){counts[root.StudioBrowse.bucket(task)]++;}else{if(matches(task,'running',''))counts.working++;if(matches(task,'attention',''))counts.attention++;if(d.complete)counts.finished++;}if(previousStates.has(task.id)&&!previousStates.get(task.id)&&d.complete)justFinished.unshift(task.id);previousStates.set(task.id,d.complete);}
+      if(screen)overview.querySelectorAll('[data-metric]').forEach(n=>{delete n.dataset.filter;n.dataset.jumpStage=n.dataset.metric;n.hidden=n.dataset.metric==='attention';if(n.dataset.metric==='working')text(n.querySelector('span'),'제작 중');});
       for(const [id,count] of Object.entries(counts))overview.querySelector(`[data-metric="${id}"] strong`).firstChild.nodeValue=String(count);
       if(mountedView!==view){container.replaceChildren();if(view==='board')for(const lane of lanes.values())container.append(lane);mountedView=view;}
       container.dataset.view=view;
-      const grid=listPage(tasks,{filter,query,page}),board=boardPage(tasks,{filter,query,pages:lanePages});
+      const grid=listPage(tasks,{filter,query,page,collectedOrder:!!screen}),board=boardPage(tasks,{filter,query,pages:lanePages,classify:screen?root.StudioBrowse.bucket:null,collectedOrder:!!screen});
       const shown=view==='board'?board.lanes.flatMap(l=>l.items):grid.items;
       const visibleIds=new Set(shown.map(t=>t.id));
       for(const [id,node] of caches[view])if(!visibleIds.has(id))node.remove();
       const put=(parent,items)=>{let cursor=parent.firstElementChild;for(const task of items){const card=cardFor(task,views.get(task.id),view,selectedId);if(card!==cursor)parent.insertBefore(card,cursor);cursor=card.nextElementSibling;}};
       if(view==='board'){
         for(const data of board.lanes){
-          const lane=lanes.get(data.id);text(lane.querySelector('.column-count'),data.total);lane.querySelector('.column-empty').hidden=!!data.items.length;put(lane.querySelector('.column-cards'),data.items);
+          const lane=lanes.get(data.id);if(screen&&data.id==='finished')text(lane.querySelector('.column-number'),'02');if(screen&&data.id==='attention')lane.querySelector('h2').firstChild.nodeValue='확인 필요한 영상';lane.hidden=!!screen&&(screen==='attention'?data.id!=='attention':data.id==='attention');text(lane.querySelector('.column-count'),data.total);lane.querySelector('.column-empty').hidden=!!data.items.length;put(lane.querySelector('.column-cards'),data.items);
           const nav=lane.querySelector('.lane-pagination');nav.hidden=data.total<=data.pageSize;
           setMarkup(nav,`<span>${(data.page-1)*data.pageSize+1}–${Math.min(data.page*data.pageSize,data.total)} / ${data.total}</span><div><button type="button" data-lane="${data.id}" data-lane-page="${data.page-1}" ${data.page===1?'disabled':''} aria-label="${lane.querySelector('h2').firstChild.textContent} 이전 페이지">‹</button><button type="button" data-lane="${data.id}" data-lane-page="${data.page+1}" ${data.page===data.pages?'disabled':''} aria-label="${lane.querySelector('h2').firstChild.textContent} 다음 페이지">›</button></div>`);
         }

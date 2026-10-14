@@ -2,7 +2,7 @@
 from .script_integrity import inspect, digest
 from .script_quality import naturalness_review
 from .script_style import ending_issues
-from .reference_evidence import choose_keyword, comment_issues
+from .reference_evidence import comment_issues
 from .contract import receipt
 
 
@@ -15,7 +15,7 @@ def review(text, reference, evidence_mode='benchmark', keyword=None, contract=No
     reasons = [i['message'] for i in integrity['issues']]
     reasons += [i['message'] for i in natural['issues']]
     reasons += [i['rule'] for i in ending_issues(text)]
-    reasons += comment_issues(text, keyword or choose_keyword(reference)[0] or '나도')
+    reasons += comment_issues(text)
     reasons = list(dict.fromkeys(reasons))
     hashes = {'script_sha256':digest(text),'reference_sha256':digest(reference)}
     return {'text':text,'writing_contract':receipt(contract), 'integrity_review':integrity,

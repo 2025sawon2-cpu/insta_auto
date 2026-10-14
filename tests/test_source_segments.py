@@ -27,8 +27,7 @@ def install_encoder(monkeypatch):
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr('hotpost.source_finder._executable', lambda name: name)
-    monkeypatch.setattr('hotpost.source_finder._run', run)
-    monkeypatch.setattr('hotpost.source_segments.time.monotonic', lambda: 100)
+    monkeypatch.setattr('hotpost.source_segments.run_progress_command', run)
     return commands
 
 
@@ -49,7 +48,7 @@ def test_functional_variant_is_proposed_from_best_interval_without_approval(tmp_
     assert '-ss' in commands[-1] and commands[-1][commands[-1].index('-ss')+1] == '240.0'
 
 
-@pytest.mark.parametrize('mode, score',[('functional',.59), ('product',.73), ('scene',.73)])
+@pytest.mark.parametrize('mode, score',[('product',.73), ('scene',.73)])
 def test_scan_below_mode_threshold_does_not_encode_or_grant_approval(tmp_path, monkeypatch, mode, score):
     commands = install_encoder(monkeypatch)
     result = extract_relevant_segment(settings(mode), tmp_path/'original.mp4',
@@ -58,10 +57,20 @@ def test_scan_below_mode_threshold_does_not_encode_or_grant_approval(tmp_path, m
     assert not (tmp_path/'scan/segment.mp4').exists()
 
 
-def test_expired_budget_preserves_original_without_scanning(tmp_path, monkeypatch):
+@pytest.mark.parametrize('score', [.15, None])
+def test_functional_weak_or_unavailable_similarity_still_proposes_review_interval(tmp_path, monkeypatch, score):
     commands = install_encoder(monkeypatch)
-    original = tmp_path/'original.mp4'; original.write_bytes(b'original video')
-    result = extract_relevant_segment(settings(), original, {'duration':450},
-                                     Verifier([]), tmp_path/'scan', 99)
-    assert result is None and not commands
-    assert original.read_bytes() == b'original video'
+    file, interval = extract_relevant_segment(settings(), tmp_path/'original.mp4',
+        {'duration':450}, Verifier([score]*8), tmp_path/'scan', 300)
+    assert file.is_file() and len(commands) == 25
+    assert interval['scan_similarity'] == score
+    assert 'reviewed' not in interval
+
+
+def test_old_deadline_does_not_prevent_needed_segment_scan(tmp_path,monkeypatch):
+    commands=install_encoder(monkeypatch)
+    original=tmp_path/'original.mp4';original.write_bytes(b'preserved')
+    result=extract_relevant_segment(settings(),original,{'duration':450},
+        Verifier([.9]*8),tmp_path/'segments',deadline=0.17)
+    assert commands and result is not None
+    assert original.read_bytes()==b'preserved'

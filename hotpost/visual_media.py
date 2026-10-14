@@ -19,3 +19,13 @@ def frame_inline_data(path, *, max_bytes=1024*1024):
             if len(raw)<=max_bytes:
                 return {'mimeType':'image/jpeg','data':base64.b64encode(raw).decode('ascii')}
     raise ValueError('분석 프레임을 같은 해상도로 전달할 수 없습니다.')
+
+
+def review_frame_data(path):
+    """Keep geometry/detail; let difficult frames use spare bytes in the bounded call."""
+    for limit in (256*1024,512*1024,768*1024,1024*1024):
+        try:
+            return frame_inline_data(path,max_bytes=limit)
+        except ValueError as exc:
+            if '같은 해상도' not in str(exc):raise
+    raise ValueError('분석 프레임을 같은 해상도로 전달할 수 없습니다.')

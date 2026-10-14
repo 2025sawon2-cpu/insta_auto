@@ -12,18 +12,23 @@ def test_stopped_source_reason_visible_without_opening_search_history(studio_pag
     task['automation']['stage'] = 'sources'
     task['revision'] += 1
     page.evaluate('refreshStudio()')
+    page.locator('#attention-open').click()
     page.locator('[data-work="source"]').click()
     notice = page.locator('[data-source-alert]')
     expect(notice).to_be_visible()
     expect(notice).to_contain_text('소스 자동 수집 중지')
     expect(notice).to_contain_text('인증 필요: tiktok')
+    visible_reason = page.locator('.pf-runtime .sd-status-copy')
+    expect(visible_reason).to_be_visible()
+    expect(visible_reason).to_contain_text('소스 자동 수집 중지 · 인증 필요: tiktok')
     expect(page.get_by_role('button', name='필요한 영상 검색하기 · 검색 기록')).to_be_visible()
     page.locator('#close-work').click()
-    page.get_by_role('button', name='확인 필요', exact=True).click()
+    page.locator('#attention-back').click()
+    page.locator('#attention-open').click()
     expect(page.locator('[data-work="source"]')).to_be_visible()
 
 
-def test_active_search_objective_is_visible_without_opening_advanced_history(studio_page):
+def test_active_search_objective_is_visible_in_notice_without_opening_advanced_history(studio_page):
     from playwright.sync_api import expect
     page, tasks = studio_page
     task = tasks[0]
@@ -35,6 +40,7 @@ def test_active_search_objective_is_visible_without_opening_advanced_history(stu
     task['revision'] += 1
     page.evaluate('refreshStudio()')
     page.locator('[data-work="source"]').click()
+    page.get_by_role('button', name='영상 준비 알림', exact=True).click()
     expect(page.locator('[data-source-alert] [data-search-strategy]')).to_be_visible()
     expect(page.locator('[data-source-alert]')).to_contain_text('이전 검증 탈락')
 

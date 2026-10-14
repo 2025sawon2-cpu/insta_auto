@@ -7,10 +7,11 @@ import json
 from contextlib import ExitStack
 from urllib.parse import urlparse
 
-from .browser_profile import BROWSER_LOCK, PLATFORMS, _platform_rows, profile_cookie_status, probe_platform_auth, save_platform_cookies, restore_platform_cookies, source_context_options
+from .browser_profile import BROWSER_LOCK, PLATFORMS, _platform_rows, profile_cookie_status, save_platform_cookies
 from .search_access import PROVIDERS, access_record, manual_required, request_manual_recheck, challenge_on_page, login_wall_on_page
 from .config import Settings
-from .login_exchange import login_profile, publish_session, apply_sessions, read_session
+from .login_exchange import read_session
+from .source_browser_runtime import ensure_browser, attach_browser, managed_page, browser_lease, connection_status, pace
 
 
 class PlatformSessionManager:
@@ -52,7 +53,7 @@ class PlatformSessionManager:
             if instagram:
                 save_platform_cookies(cookies, self.settings.data_dir, key)
             else:
-                publish_session(cookies, self.settings.data_dir, key)
+                save_platform_cookies(cookies, self.settings.data_dir, key)
 
     def _update_rows(self, cookies, checks=None, instagram=False):
         rows = {p['id']: p for p in self.platforms}
@@ -118,6 +119,7 @@ class PlatformSessionManager:
         return {"active": self.active, "active_platform": self.active_platform, "phase": self.phase, "message": self.message, "error": self.error,
                 "platforms": rows,
                 "verification_result": self.verification_result, "profile_role": self.profile_role,
+                "browser_connection": connection_status(self.settings),
                 "cookie_file_ready": self.settings.source_browser_cookie_file.is_file()}
 
     def _work(self, platform=None, verification=None) -> None:
@@ -134,36 +136,33 @@ class PlatformSessionManager:
                     browser = InstagramBrowser(self.settings).open()
                     context = browser.context
                 else:
+                    search_profile_owned = BROWSER_LOCK.acquire(blocking=False)
+                    if not search_profile_owned:
+                        raise RuntimeError('수집 검색이 진행 중입니다. 완료 후 로그인·인증 확인을 다시 눌러 주세요.')
+                    stack.enter_context(browser_lease(self.settings))
+                    ensure_browser(self.settings)
                     pw = stack.enter_context(sync_playwright())
-                    profile = login_profile(self.settings.data_dir, platform)
-                    if verification:
-                        # A regular login still opens asynchronously while search
-                        # is busy. Search verification needs the actual source
-                        # profile and never races an already-owned search.
-                        search_profile_owned = BROWSER_LOCK.acquire(blocking=False)
-                        if not search_profile_owned:
-                            raise RuntimeError('수집 검색이 진행 중입니다. 검색 확인 창은 수집이 끝난 뒤 열어 주세요.')
-                        profile = self.settings.source_browser_profile_dir
-                        with self.lock: self.profile_role = 'collection'
-                    context = pw.chromium.launch_persistent_context(
-                        str(profile), **source_context_options(False),
-                    )
-                    targets = [platform] if platform else [key for key in PLATFORMS if key != 'instagram']
-                    restore_platform_cookies(context, self.settings.data_dir, targets)
-                    apply_sessions(context, self.settings.data_dir, profile, targets)
+                    context = attach_browser(pw, self.settings)
+                    with self.lock: self.profile_role = 'collection'
                 pages = context.pages
                 platform_pages={}
                 keys = [platform] if platform else [key for key in PLATFORMS if key != 'instagram']
                 for index, key in enumerate(keys):
                     spec = PLATFORMS[key]
-                    page = pages[0] if index == 0 and pages else context.new_page()
+                    page = (pages[0] if index == 0 and pages else context.new_page()) if instagram else managed_page(context, self.settings, PROVIDERS.get(key, key))
                     platform_pages[key]=page
                     if verification: verification.attach(page)
-                    if verification:
-                        with self.lock: self.message = '수집 검색 화면 준비 중 · 기존 검색 간격을 지킵니다.'
-                        time.sleep(max(1, min(60, self.settings.source_browser_search_interval)))
                     try:
-                        page.goto(verification.url if verification else spec["url"], wait_until="domcontentloaded", timeout=60000)
+                        # Keep a live challenge/search screen so the user can solve it in place.
+                        if verification:
+                            from .browser_search import BrowserSearcher
+                            searcher = BrowserSearcher(self.settings, self.settings.data_dir)
+                            searcher.progress = lambda message: setattr(self, 'message', message)
+                            searcher._submit_search(page, platform, verification.query, {'provider': platform})
+                        elif instagram or page.url == 'about:blank':
+                            if not instagram:
+                                pace(self.settings, PROVIDERS.get(key, key))
+                            page.goto(spec["url"], wait_until="domcontentloaded", timeout=30000)
                     except Exception:  # 페이지별 차단은 다른 로그인 탭을 막지 않는다.
                         pass
                     if hasattr(page, 'bring_to_front'): page.bring_to_front()
@@ -199,8 +198,9 @@ class PlatformSessionManager:
                                         '로그인 창에서 인증한 뒤 이 페이지의 세션 저장 완료를 누르세요.')
                 try:
                     if window_closed:
-                        try: context.close()
-                        except Exception: pass
+                        if instagram:
+                            try: browser.close()
+                            except Exception: pass
                         context = None
                         return
                     with self.lock: self.phase = 'saving'
@@ -223,7 +223,7 @@ class PlatformSessionManager:
                                 with self.lock: self.verification_result = observed
                                 checks[key] = ('verification_required' if observed['status']=='captcha' else
                                                'login_required' if observed['status']=='login_required' else 'unverified')
-                                if (self.stop_event.is_set() and observed['status'] in {'results','no_results'} and
+                                if (self.stop_event.is_set() and observed['status'] in {'results','no_results','query_restricted'} and
                                         any(p['id']==key and p['cookie_present'] for p in _platform_rows(cookies))):
                                     request_manual_recheck(self.settings.data_dir, provider)
                                 continue
@@ -245,19 +245,21 @@ class PlatformSessionManager:
                                 checks[key]='unverified'; continue
                             if not any(p['id'] == key and p['cookie_present'] for p in _platform_rows(cookies)):
                                 checks[key] = 'login_required'; continue
-                            time.sleep(max(1, self.settings.source_browser_search_interval))
-                            checks[key] = probe_platform_auth(context, key)
+                            # Observe this live page; no cookie-only /login probe.
+                            page = platform_pages[key]
+                            checks[key] = ('verification_required' if challenge_on_page(page) else
+                                           'login_required' if login_wall_on_page(page, provider) else 'unverified')
                     with self.lock:
                         self._update_rows(cookies, checks, instagram)
                         self.last_auth_checked_at = time.time()
                 except Exception as exc:
                     with self.lock:
                         self.error = f'세션 저장 또는 인증 확인 실패: {type(exc).__name__}. 로그인 창을 다시 열어 확인하세요.'
-                # Close before leaving Playwright, so persistent profile writes finish.
+                # Instagram has its own lifecycle; source Chrome stays open.
                 if browser:
                     browser.close(); browser = None
                 else:
-                    context.close()
+                    pass  # Playwright disconnects; Chrome and tabs remain open.
                 context = None
         except Exception as exc:  # noqa: BLE001
             with self.lock:
@@ -266,7 +268,7 @@ class PlatformSessionManager:
             if context:
                 try:
                     if browser: browser.close()
-                    else: context.close()
+                    # Attached source Chrome is owned independently of this client.
                 except Exception:
                     pass
             if search_profile_owned:
@@ -276,8 +278,9 @@ class PlatformSessionManager:
                 self.active_platform = None
                 self.phase = 'idle'
                 self.message = ('로그인 창이 닫혔습니다. 로그인 버튼을 누르면 바로 다시 열립니다.' if window_closed else
-                    "세션 저장 완료 · 아래 플랫폼 상태를 확인하세요." if not self.error else "로그인 저장을 완료하지 못했습니다.")
+                    "세션 저장 완료 · 수집용 Chrome을 유지하며 같은 창에서 검색합니다." if not self.error else "로그인 저장을 완료하지 못했습니다.")
                 if verification and not window_closed and not self.error:
                     result = self.verification_result or {'status':'loading'}
-                    self.message = ('검색 접근 확인 · 세션 저장 완료' if result['status'] in {'results','no_results'} and self.stop_event.is_set() else
+                    self.message = (verification.message(result) + ' · 세션 저장 완료' if result['status']=='query_restricted' and self.stop_event.is_set() else
+                                    '검색 접근 확인 · 세션 저장 완료' if result['status'] in {'results','no_results'} and self.stop_event.is_set() else
                                     '검색 인증 확인이 끝나지 않아 자동 재검색을 허용하지 않았습니다.')

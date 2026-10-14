@@ -22,11 +22,20 @@ class NativeExportUnavailable(RuntimeError):
 
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    import uuid
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         temp.write_text(json.dumps(value, ensure_ascii=False, indent=2),
                         encoding="utf-8")
-        os.replace(temp, path)
+        import time
+        for attempt in range(4):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(.025 * (attempt + 1))
     finally:
         temp.unlink(missing_ok=True)
 
@@ -96,8 +105,13 @@ class AutoCapcutAdapter:
         _atomic_json(request_path, request)
         command = [str(self.settings.auto_capcut_python.resolve()), "-X", "utf8", "-m", "auto_capcut.export_runner",
                    "--request", str(request_path), "--result", str(result_path)]
-        proc = self.runner(command, cwd=str(self.settings.auto_capcut_root), capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=1500, check=False)
+        if self.runner is subprocess.run:
+            from .operation_progress import run_progress_command
+            proc = run_progress_command(command, idle_seconds=1500, progress_dir=job_dir,
+                                        cwd=str(self.settings.auto_capcut_root))
+        else:
+            proc = self.runner(command, cwd=str(self.settings.auto_capcut_root), capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=1500, check=False)
         (job_dir / "export.log").write_text((proc.stdout or "") + (proc.stderr or ""), encoding="utf-8")
         if not result_path.is_file():
             raise RuntimeError("CapCut 내보내기 결과 응답이 없습니다.")
@@ -194,10 +208,14 @@ class AutoCapcutAdapter:
         child_env.setdefault("PYTHONUTF8", "1")
         child_env.setdefault("PYTHONIOENCODING", "utf-8")
         try:
-            proc = self.runner(command, cwd=str(repo), capture_output=True,
-                               text=True, encoding="utf-8", errors="replace",
-                               env=child_env,
-                               timeout=self.settings.auto_capcut_timeout, check=False)
+            if self.runner is subprocess.run:
+                from .operation_progress import run_progress_command
+                proc = run_progress_command(command, idle_seconds=self.settings.auto_capcut_timeout,
+                                            progress_dir=job_dir, cwd=str(repo), env=child_env)
+            else:
+                proc = self.runner(command, cwd=str(repo), capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace", env=child_env,
+                                   timeout=self.settings.auto_capcut_timeout, check=False)
         except subprocess.TimeoutExpired as exc:
             result = {
                 "contract_version": version,

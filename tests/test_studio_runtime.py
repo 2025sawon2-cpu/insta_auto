@@ -55,6 +55,30 @@ def test_public_projection_is_detached_and_media_urls_still_resolve(tmp_path):
     assert studio.store.get(state['id']) == before
 
 
+def test_public_plan_without_sample_frames_preserves_video_and_does_not_crash(tmp_path):
+    import json
+    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+    state,_=studio.store.create('empty-shot-frames','빈 미리보기',prepare=False)
+    clip=tmp_path/'source.mp4';clip.write_bytes(b'video')
+    plan=tmp_path/'plan.json';plan.write_text(json.dumps({'shots':[{'id':'s','path':str(clip),'frames':[]}]}),'utf-8')
+    def setup(s,db):s['edits'].append({'id':'edit','plan_path':str(plan)})
+    studio.store.change(state['id'],setup)
+    value=studio.public(studio.store.get(state['id']))
+    shot=value['edits'][0]['plan']['shots'][0]
+    assert shot['thumbnail_url']=='' and shot['video_url']
+
+
+def test_job_history_keeps_creation_order_when_windows_clock_timestamps_tie(tmp_path):
+    studio=Studio(Settings(data_dir=tmp_path),workers=False)
+    state,_=studio.store.create('clock-tie','동시 기록',prepare=False)
+    def enqueue(s,db):
+        for kind in ['voice','edit','register']:
+            studio.store.enqueue(db,s['id'],kind,{},kind+'-clock-test')
+        db.execute('UPDATE jobs SET created=123 WHERE task_id=?',(s['id'],))
+    studio.store.change(state['id'],enqueue)
+    assert [j['kind'] for j in studio.store.jobs(state['id'])]==['register','edit','voice']
+
+
 def test_worker_calls_instance_step_and_completion_overrides(tmp_path):
     seen = []
 
@@ -86,3 +110,25 @@ def test_scoped_claim_leaves_other_task_queue_untouched(tmp_path):
     assert studio.store.claim('production', task_id=second['id']) is None
     assert studio.store.claim('production', task_id="missing' OR 1=1 --") is None
     assert studio.store.claim('production')['task_id'] == first['id']
+
+
+def test_partial_thread_start_failure_drains_started_threads_and_releases_owner(tmp_path,monkeypatch):
+    import threading
+    import pytest
+    settings=Settings(data_dir=tmp_path,studio_auto_top_enabled=False)
+    seen=[];ended=[]
+    def worker(self,lane=None):
+        seen.append(self);self.stop.wait();ended.append(lane)
+    monkeypatch.setattr(Studio,'_worker',worker)
+    start=threading.Thread.start
+    def fail_second(thread):
+        if thread.name=='studio-scripts':raise RuntimeError('injected thread start failure')
+        return start(thread)
+    monkeypatch.setattr(threading.Thread,'start',fail_second)
+    with pytest.raises(RuntimeError,match='injected'):Studio(settings)
+    assert seen and seen[0].stop.is_set() and seen[0]._lease is None
+    assert ended==['media'] and all(not t.is_alive() for t in seen[0]._threads)
+    monkeypatch.setattr(threading.Thread,'start',start)
+    restarted=Studio(settings)
+    try:assert restarted._lease is not None
+    finally:restarted.close()

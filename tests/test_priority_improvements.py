@@ -29,6 +29,10 @@ def test_source_retry_does_not_prioritize_previously_rejected_downloads(tmp_path
          'selected_for_zip':True, 'rejection_reasons':[]},
     ]
     (folder/'manifest.json').write_text(json.dumps({'candidates':rows}))
+    # This test exercises review priority among existing cached files, rather
+    # than the separate guard that ignores missing downloads.
+    for row in rows:
+        (folder / row['downloaded_file']).write_bytes(b'cache-routing-fixture')
     # Even a one-item cache budget must reach the verified source at the end.
     assert [c.url for c in search_local_cache(settings, 'code', 1)] == [rows[-1]['url']]
 
@@ -90,7 +94,7 @@ def test_pinned_old_post_does_not_end_gap_recovery(monkeypatch):
     from hotpost.collectors import web_graphql as web
     now = int(time.time())
     known = Post('known', 'u', now - 1000, 'image', 10, 1)
-    pinned = Post('pinned', 'u', now - 9000, 'image', 10, 1)
+    pinned = Post('pinned', 'u', now - 90000, 'image', 10, 1)
     new = [Post(f'new{i}', 'u', now - i * 10, 'image', 10, 1) for i in range(15)]
     pages = [[pinned, *new[:11]], [*new[11:], known]]
     collector = web.WebGraphQLCollector.__new__(web.WebGraphQLCollector)
@@ -107,11 +111,11 @@ def test_pinned_old_post_does_not_end_gap_recovery(monkeypatch):
     collector._gql = gql
     collector._parse_profile = lambda *_: Profile('u', user_id='1', followers=100)
     _, posts, _ = collector.fetch('u', 5, {'known': known})
-    assert {p.shortcode for p in posts} == {p.shortcode for p in new}
+    assert {p.shortcode for p in posts} == {p.shortcode for p in new} | {'known'}
     assert not pages
 
 
-def test_initial_collection_requests_baseline_and_keeps_history(tmp_path, monkeypatch):
+def test_initial_collection_only_saves_last_day_and_keeps_history(tmp_path, monkeypatch):
     from hotpost import cli, collectors
     settings = Settings(data_dir=tmp_path)
     store = Storage(settings.db_path)
@@ -124,8 +128,8 @@ def test_initial_collection_requests_baseline_and_keeps_history(tmp_path, monkey
     monkeypatch.setattr(cli, '_operational_event', lambda *_: None)
     assert cli.collect(settings, store, 'web', ['u'])[:2] == (1, 0)
     cli.collect(settings, store, 'web', ['u'])
-    assert limits == [31, 5]
-    assert len(store.posts_for('u')) == 31
+    assert limits == [60, 60]
+    assert len(store.posts_for('u')) == 2
     store.close()
 
 

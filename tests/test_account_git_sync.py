@@ -118,11 +118,11 @@ def test_account_http_api_roundtrip_and_conflict_error(tmp_path,monkeypatch):
     from types import SimpleNamespace
     from hotpost import server
     settings=Settings(data_dir=tmp_path/'data',influencer_file=tmp_path/'accounts.txt')
-    queue=SimpleNamespace(register=lambda *a:None,resume_queued=lambda:None)
-    monkeypatch.setattr(server,'JobQueue',lambda *a:queue)
+    queue=SimpleNamespace(register=lambda *a:None,resume_queued=lambda:None,close=lambda:None,start_workers=lambda:None)
+    monkeypatch.setattr(server,'JobQueue',lambda *a,**k:queue)
     for name in ('SourceJobManager','TranscriptJobManager','PlatformSessionManager',
                  'LegacyProductionManager','ProductionManager','Studio'):
-        monkeypatch.setattr(server,name,lambda *a:SimpleNamespace())
+        monkeypatch.setattr(server,name,lambda *a:SimpleNamespace(close=lambda:None))
     httpd=server.serve(settings,port=0)
     thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()
     connection=HTTPConnection(*httpd.server_address,timeout=5)

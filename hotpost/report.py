@@ -14,6 +14,7 @@ from .categories import post_categories
 from .growth import growth_signal
 from .thumbs import ensure_thumbnail
 from .daily_hot import daily_state, priority
+from .collection_dates import post_collection_dates
 
 KST = timezone(timedelta(hours=9))
 
@@ -27,8 +28,9 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
     all_scored: list[Scored] = []
     growth_by_code: dict[str, dict] = {}
     observations_by_code: dict[str, list[dict]] = {}
-    post_updated = {row['shortcode']: row['updated_at'] for row in
-                    store.conn.execute('SELECT shortcode,updated_at FROM posts')}
+    post_times = {row['shortcode']: row for row in
+                  store.conn.execute('SELECT shortcode,first_seen,updated_at FROM posts')}
+    post_updated = {code: row['updated_at'] for code, row in post_times.items()}
     accounts_out = []
     allowed = set(usernames) if usernames is not None else None
     for username, prof in sorted(profiles.items()):
@@ -81,7 +83,7 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
         thumb = ensure_thumbnail(settings, s.post)
         d = s.post.to_dict()
         d.update({
-            "hot_detected_at": detections.get(s.post.shortcode),
+            **post_collection_dates(post_times[s.post.shortcode]['first_seen'], detections.get(s.post.shortcode)),
             "hot_detected_date_kst": (datetime.fromtimestamp(detections[s.post.shortcode], KST).strftime('%Y-%m-%d')
                                       if s.post.shortcode in detections else None),
             "metric_status": {"likes": "missing" if s.post.likes is None else "observed",
@@ -135,6 +137,7 @@ def build_report(settings: Settings, store: Storage, source: str, notes: list[st
     report = {
         "version": __version__,
         "generated_at": now,
+        "collection_started_at": (store.last_run() or {}).get("started_at", now),
         "generated_at_kst": datetime.fromtimestamp(now, KST).strftime("%Y-%m-%d %H:%M"),
         "source": source,
         "is_sample": source == "demo",

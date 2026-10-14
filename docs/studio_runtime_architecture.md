@@ -16,6 +16,7 @@ DB, 프로세스 잠금 및 워커 소유권을 초기화하고 아래 책임을
 | 최소 소스 수량·병렬 수집·검색 재개 | `hotpost/studio_sources.py` |
 | SQLite 트랜잭션·큐·복구 | `hotpost/studio_store.py` |
 | 로컬 대본·영상 검토·음성의 GPU 작업 직렬화 | `hotpost/local_compute.py` |
+| VoiceBench 시작 소유권·준비 대기 | `hotpost/studio_services.py` |
 
 ## 유지해야 하는 경계
 
@@ -26,6 +27,17 @@ DB, 프로세스 잠금 및 워커 소유권을 초기화하고 아래 책임을
   `prepare-caption-preview`는 명령 진입점에서 별도로 처리한다.
 - 소스·미디어 제작·Codex 대본 세 워커와 렌더 잠금, 파일 기반 작업 소유권을 보존한다. 모듈 import는
   워커를 시작하거나 운영 DB를 열지 않는다.
+
+`Studio.close()`는 stop 신호 뒤 처리 중인 worker와 watcher를 join한 다음 lease를 해제한다.
+일부 thread 시작 실패도 이미 시작한 실행기를 먼저 종료한다. HTTP 서버는 모든 주소를
+bind하고 최종 handler를 등록한 뒤 소비자를 시작하며, 초기화 실패와 마지막 서버 종료에서
+이미 수용한 HTTP 요청·legacy 큐·Studio 작업을 순서대로 마친다. 새 owner가 이전 실행과
+겹치지 않도록 종료 전에 lease를 풀지 않는다.
+
+사진 비활성의 공통 실행 검사는 정상 worker·직접 준비·reserved 복구에서 품질 permit과
+외부 호출 전에 적용한다. 모델 준비/용량·기존 음성 요청의 상태/파일 전송 대기는 같은
+job/request ID로 이어가며 누적 서비스 실패 횟수를 품질 중단 상한으로 쓰지 않는다.
+수동 ProductionManager는 실제 provider Retry-After가 끝나기 전에 다시 호출하지 않는다.
 
 Codex 집필은 `scripts`(rewrite/proposal) 워커, 원본 준비·음성·편집·등록·출력은
 `media` 워커가 담당한다. 로컬 미디어/모델 작업과 렌더는 여전히 한 제작 워커에서
@@ -53,7 +65,8 @@ Codex 집필은 `scripts`(rewrite/proposal) 워커, 원본 준비·음성·편�
 공유한다. 대본 작업 안에서 editorial을 호출해도 중복 잠금으로 멈추지 않는다.
 대본/시각 검토 시작 전과 성공한 음성 저장 직후에는 인증된 VoiceBench HTTP
 `POST /v1/resources/release-idle`로 유휴 모델 해제를 요청한다. 음성 작업이 있으면
-서버가 해제를 거절하며 대본은 기존 `studio_timeout` 한도 안에서 기다린다.
+서버가 해제를 거절하면 대본은 콘텐츠 실패 대신 attempted=False 서비스 대기로 저장된다.
+로컬 잠금·서비스 대기는 실제 모델 호출/품질 보완 사용량과 구분한다.
 성공한 음성 뒤의 선택적 정리 실패는 저장된 음성을 실패로 바꾸지 않는다.
 
 VoiceBench의 엔진·참조·목소리 선택은 기존 서버 정책을 유지한다. Hotpost는 다른

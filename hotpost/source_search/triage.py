@@ -1,5 +1,6 @@
 """Cheap inspection order and continuation of genuinely unprobed candidates."""
 import json
+import math
 import re
 from dataclasses import fields
 from pathlib import Path
@@ -63,7 +64,8 @@ def rank_candidates(candidates, plan):
 
 def discovery_duration_reasons(candidate, maximum):
     duration = (candidate.discovery_meta or {}).get('duration')
-    if isinstance(duration,(float,int)) and not isinstance(duration,bool) and not 4 <= duration <= maximum:
+    if isinstance(duration,(float,int)) and not isinstance(duration,bool) and (
+            not math.isfinite(duration) or not 0 < duration <= maximum):
         return ['invalid_duration']
     return []
 
@@ -79,18 +81,22 @@ def deferred_candidates(context, excluded_urls, maximum):
         except (OSError,ValueError,KeyError):
             continue
         for row in data.get('candidates',[]):
+            from ..source_attempts import candidate_execution
             url = row.get('original_url') or row.get('url','')
             identity = canonical_video_key(url)
             reasons = set(row.get('rejection_reasons') or [])
-            if (not video_url(url) or identity in seen or row.get('downloaded_file') or row.get('error')
-                    or row.get('download_attempted') is True
-                    or reasons - {'platform_budget_exhausted','not_probed','download_budget_deferred'}):
+            access_wait = candidate_execution(row)['waiting']
+            if (not video_url(url) or identity in seen or row.get('downloaded_file')
+                    or row.get('error') and not access_wait
+                    or row.get('download_attempted') is True and not access_wait
+                    or reasons - {'platform_budget_exhausted','not_probed','download_budget_deferred',
+                        *({'download_failed','platform_cooldown'} if access_wait else set())}):
                 continue
             # Empty rejection metadata after a global time/attempt stop also
             # denotes unprobed work, not permission to use the candidate.
             values = {k:v for k,v in row.items() if k in keys}
             values.update(url=url,selected_for_zip=False,rejection_reasons=None,download_attempted=None,
-                          selection_reason='',match_kind='deferred-candidate')
+                          download_diagnostics=None,error='',selection_reason='',match_kind='deferred-candidate')
             result.append(Candidate(**values)); seen.add(identity)
             if len(result) >= maximum:
                 return result

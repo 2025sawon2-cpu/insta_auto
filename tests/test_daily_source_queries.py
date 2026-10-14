@@ -2,6 +2,26 @@ from hotpost.source_queries import product_query_plan
 from hotpost.source_queries import feedback_queries
 
 
+def test_japanese_product_queries_reach_tiktok_without_latin_padding():
+    from hotpost.source_queries import language, platform_queries
+    words = ['ダントン ベスト', 'DANTON インナーダウンベスト', 'ダントン 軽量ベスト']
+    assert all(language(query) == 'ja' for query in words)
+    assert platform_queries(words, 'tiktok', 12) == words
+    assert platform_queries(words, 'youtube', 12) == words
+    assert platform_queries(words, 'bilibili', 12) == []
+    assert language('轻量羽绒背心') == 'zh'
+    assert language('단톤 경량 조끼') == 'ko'
+    assert language('Danton down vest') == 'en'
+    assert platform_queries(['down vest', '경량 조끼', '轻量羽绒背心', words[0]], 'tiktok', 4) == [
+        'down vest', '경량 조끼', '轻量羽绒背心', words[0]]
+
+
+def test_observed_japanese_fallback_is_preserved_without_inventing_translation():
+    plan = product_query_plan('', [], [], {}, ['ダントン ベスト'])
+    assert plan['query_details'] == [{'query': 'ダントン ベスト', 'language': 'ja',
+        'intent': 'fallback', 'role': 'product', 'sources': ['caption'], 'confidence': 'low'}]
+
+
 def test_daily_subjects_have_three_grounded_search_languages():
     captions = ['발바닥에 쏙 신어주는 전용 핫팩', '직접 만든 투두리스트',
                 '분사부터 문지르기, 물기 제거까지 3in1', '슬림신발장',
@@ -53,3 +73,31 @@ def test_model_only_subject_keeps_expanding_after_first_queries_are_used():
     result=next_round_queries(plan,1,[{'query':'unusual folding tool','status':'results'}])
     assert result and all(r['query'].startswith('unusual folding tool ') for r in result)
     assert all(r['origin']=='automatic_expansion' for r in result)
+
+
+def test_numeric_sku_survives_uncatalogued_product_and_action_routing():
+    from hotpost.source_search.planner import round_queries
+    from hotpost.source_queries import platform_queries
+    plan = product_query_plan('다이소 A7 파스텔 파일 홀더 6개입\n품번: 1064379', [], [], {}, [])
+    assert [m['value'] for m in plan['models']] == ['1064379']
+    # Reproduce the later model enrichment that previously erased SKU queries.
+    plan['query_details'].append({'query': '미니 파일 홀더 여닫기', 'language': 'ko',
+                                  'role': 'subject_action', 'intent': 'action',
+                                  'evidence_quote': '파일 홀더', 'sources': ['caption']})
+    for phase in ('product', 'clean_action', 'scene_discovery'):
+        routed = round_queries(plan, {'phase': phase})
+        model = [q for q in routed if q['intent'] == 'model']
+        assert {'en', 'ko', 'zh'} <= {q['language'] for q in model}
+        assert all('1064379' in q['query'] and q['evidence_quote'] == '품번: 1064379' for q in model)
+        selected = platform_queries([q['query'] for q in routed], 'tiktok', 3)
+        assert len(selected) == 3 and all('1064379' in q for q in selected)
+
+
+def test_numeric_sku_requires_complete_explicit_identifier_not_other_numbers():
+    plan = product_query_plan('다이소 2026년 1000원 6매 A7 문의 1599-2211', [], [], {}, [])
+    assert plan['models'] == []
+    plan = product_query_plan('SKU: 345678', [], ['품번: 999999'],
+                             {'screen_text': 'SKU: 345678'}, [])
+    assert [m['value'] for m in plan['models']] == ['345678']
+    assert plan['models'][0]['sources'] == ['caption', 'screen_text']
+    assert not product_query_plan('품번: 12345678901234567890', [], [], {}, [])['models']

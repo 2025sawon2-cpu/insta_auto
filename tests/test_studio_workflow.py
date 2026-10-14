@@ -495,9 +495,9 @@ def test_capcut_wait_does_not_consume_retry_and_survives_recovery(prepared):
     studio.store.defer(job,'CapCut 종료 대기',100,waiting=True)
     studio.store.recover();assert studio.store.claim() is None
     assert job['checkpoint'].get('auto_retries',0)==0
-    studio.store.defer(job,'connection timeout',100)
-    assert job['checkpoint']['auto_retries']==1
-    assert studio.store.get(task)['status']=='retry_wait'
+    assert studio.store.defer(job,'connection timeout',100) is False
+    assert job['checkpoint'].get('auto_retries',0)==0
+    assert studio.store.get(task)['status']=='waiting_capcut'
 
 
 def test_claim_retry_restores_running_task_state(prepared):
@@ -696,13 +696,19 @@ def test_frame_extraction_reuse_never_deletes_returned_scene_frame(tmp_path,monk
     monkeypatch.setattr(f.shutil,'which',lambda n:n)
     def run(args,**kwargs):
         if args[0]=='ffprobe': return SimpleNamespace(stdout='2',returncode=0)
-        pattern=args[-1];Path(pattern.replace('%03d','001')).write_bytes(b'frame')
+        pattern=args[-1]
+        count=int(args[args.index('-frames:v')+1])
+        for index in range(1,count+1):
+            Path(pattern.replace('%03d',f'{index:03d}')).write_bytes(b'frame')
         return SimpleNamespace(stdout='',stderr='',returncode=0)
     monkeypatch.setattr(f,'_run',run)
     monkeypatch.setattr(f,'dhash',lambda p:255 if '_scene_' in p.name else 0)
+    previous=[]
     for _ in range(2):
-        frames=f.extract_frames(tmp_path/'video.mp4',tmp_path/'frames',max_frames=2)
-        assert len(frames)==2 and all(p.is_file() for p in frames)
+        frames=f.extract_frames(tmp_path/'video.mp4',tmp_path/'frames',max_frames=3)
+        assert len(frames)==3 and any('_scene_' in p.name for p in frames)
+        assert all(p.is_file() for p in [*previous,*frames])
+        previous.extend(frames)
 
 @pytest.mark.parametrize('automatic',[True,False])
 def test_uploaded_sources_resume_without_search_and_preserve_concurrent_upload(tmp_path,monkeypatch,automatic):

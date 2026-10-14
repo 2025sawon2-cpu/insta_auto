@@ -10,10 +10,10 @@
     <label>작업 이름 <span class="self-shot-optional">선택</span><input name="title" maxlength="120" placeholder="비워두면 제품명 또는 대본으로 정합니다"></label>
     <div data-own-auto><label>주제 또는 제품명<input name="product" maxlength="300" required placeholder="예: 접이식 실리콘 도시락통"></label>
       <label>제품 링크 <span class="self-shot-optional">선택</span><input name="product_url" type="url" maxlength="2000" placeholder="https://"></label>
-      <details class="self-shot-extra"><summary>제품 특징·사용 경험·댓글 키워드 추가 <span class="self-shot-optional">선택</span></summary><div>
+      <details class="self-shot-extra"><summary>제품 특징·사용 경험 추가 <span class="self-shot-optional">선택</span></summary><div>
       <label>핵심 특징·제작 의도 <span class="self-shot-optional">선택</span><textarea name="details" maxlength="3000" rows="3" placeholder="예: 다 먹은 뒤 접어서 가방에 넣는 편리함을 강조해 주세요"></textarea></label>
       <label>실제 사용 경험 <span class="self-shot-optional">선택</span><textarea name="experience" maxlength="1500" rows="2" placeholder="직접 경험한 내용이 있다면 적어주세요"></textarea></label>
-      <label>댓글 키워드 <span class="self-shot-optional">선택</span><input name="comment_keyword" maxlength="40" placeholder="비워두면 ‘나도’"></label></div></details></div>
+      <p>댓글에 ‘나도’ 남겨주세요.<input type="hidden" name="comment_keyword" value="나도"></p></div></details></div>
     <div data-own-manual hidden><label>영상에서 읽을 대본<textarea name="text" maxlength="3000" rows="8" placeholder="입력한 대본 그대로 내 복제 목소리가 읽습니다"></textarea></label><p>문장 수정이나 댓글 문구 추가 없이 그대로 음성과 자막에 사용합니다.</p></div>
     <p class="self-shot-help">기본 음성은 내 목소리 복제입니다. 사용할 장면은 AI가 고르며, 분량이 부족하면 내 촬영 장면을 재사용하고 결과에 표시합니다.</p>
     <p data-own-error role="alert" hidden></p><div class="self-shot-footer"><button type="button" class="secondary" data-own-close>나중에</button><button type="submit" class="primary" data-own-submit>다음 · 촬영 영상 추가</button></div></form>`;
@@ -42,7 +42,7 @@
       else field(name).value=brief[name];
     }
     creationKey=existing?null:saved.creation_key||newKey();
-    dialog.querySelector('.self-shot-extra').open=Boolean(brief.details||brief.experience||brief.comment_keyword);
+    dialog.querySelector('.self-shot-extra').open=Boolean(brief.details||brief.experience);
     dialog.querySelector('#self-shot-title').textContent=existing?'제작 정보 수정':'새 쇼츠 만들기';
     dialog.querySelector('[data-own-submit]').textContent=existing?'제작 정보 저장':'다음 · 촬영 영상 추가';
     mode();error();dialog.showModal();

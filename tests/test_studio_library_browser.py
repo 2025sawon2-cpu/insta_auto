@@ -17,15 +17,15 @@ def test_server_outage_explains_missing_list_and_recovers_without_losing_cards(s
     expect(page.locator('#board-loading')).to_be_hidden()
     page.unroute('**/api/studio', unavailable)
     page.evaluate('refreshStudio()')
-    expect(page.locator('.work-card')).to_have_count(6)
+    expect(page.locator('.work-card')).to_have_count(4)
     expect(page.locator('#connection')).to_be_hidden()
     page.route('**/api/studio', unavailable)
     page.evaluate('refreshStudio()')
     expect(page.locator('#connection')).to_be_visible()
-    expect(page.locator('.work-card')).to_have_count(6)
+    expect(page.locator('.work-card')).to_have_count(4)
 
 
-def test_default_board_and_compact_three_summary_boxes(studio_page):
+def test_default_board_and_compact_summary_boxes(studio_page):
     from playwright.sync_api import expect
     page, _ = studio_page
     intake = dict(available=True, ready=True, selection_ready=True, enabled=True,
@@ -35,10 +35,10 @@ def test_default_board_and_compact_three_summary_boxes(studio_page):
         content_type='application/json', body=json.dumps(intake)))
     page.evaluate("localStorage.removeItem('studio-list-view')")
     page.reload()
-    expect(page.locator('#filters [data-filter=all]')).to_have_attribute('aria-pressed', 'true')
+    expect(page.locator('#filters')).to_have_count(0)
     expect(page.locator('#work-list')).to_have_attribute('data-view', 'board')
-    expect(page.locator('.kanban-column')).to_have_count(3)
-    expect(page.locator('.work-card')).to_have_count(6)
+    expect(page.locator('.kanban-column:visible')).to_have_count(2)
+    expect(page.locator('.work-card')).to_have_count(4)
     expect(page.locator('#collection-intake h2')).to_have_text('최근 수집')
     boxes = [page.locator(selector).bounding_box() for selector in
              ['.page-head', '#overview', '#collection-intake']]
@@ -48,17 +48,16 @@ def test_default_board_and_compact_three_summary_boxes(studio_page):
     page.locator('[data-intake-detail] > summary').click()
     expect(page.locator('.intake-policy')).to_be_visible()
     page.locator('[data-metric=finished]').click()
-    expect(page.locator('.work-card')).to_have_count(1)
+    expect(page.locator('[data-stage=finished] .work-card')).to_have_count(1)
 
 
-def test_view_switch_preserves_status_filter_and_restores_original_progress_cards(studio_page):
+def test_view_switch_preserves_date_and_restores_original_progress_cards(studio_page):
     from playwright.sync_api import expect
     page, _ = studio_page
-    page.locator('#filters [data-filter=running]').click()
-    expect(page.locator('.work-card')).to_have_count(2)
+    expect(page.locator('.work-card')).to_have_count(4)
     page.locator('[data-list-view=board]').click()
-    expect(page.locator('.kanban-column')).to_have_count(3)
-    expect(page.locator('#filters [data-filter=running]')).to_have_attribute('aria-pressed', 'true')
+    expect(page.locator('.kanban-column:visible')).to_have_count(2)
+    expect(page.locator('#date-range-label')).to_contain_text('오늘')
     card = page.locator('[data-work-card=voice]')
     card.locator('.card-progress-details summary').click()
     expect(card.locator('.milestone-progress')).to_be_visible()
@@ -67,8 +66,8 @@ def test_view_switch_preserves_status_filter_and_restores_original_progress_card
     expect(card.locator('.milestone-progress')).to_be_visible()
     page.locator('[data-list-view=grid]').click()
     expect(page.locator('.kanban-column')).to_have_count(0)
-    expect(page.locator('.work-card')).to_have_count(2)
-    expect(page.locator('#filters [data-filter=running]')).to_have_attribute('aria-pressed', 'true')
+    expect(page.locator('.work-card')).to_have_count(4)
+    expect(page.locator('#date-range-label')).to_contain_text('오늘')
     page.locator('[data-list-view=board]').click()
     expect(card.locator('.milestone-progress')).to_be_visible()
 
@@ -86,7 +85,7 @@ def test_board_columns_have_independent_bounded_pages(studio_page):
     finished = page.locator('[data-stage=finished]')
     working = page.locator('[data-stage=working]')
     expect(finished.locator('.work-card')).to_have_count(4)
-    expect(working.locator('.work-card')).to_have_count(2)
+    expect(working.locator('.work-card')).to_have_count(3)
     before = working.locator('.work-card').first.get_attribute('data-work-card')
     finished.locator('[data-lane-page="2"]').click()
     expect(finished.locator('.work-card')).to_have_count(4)
@@ -103,7 +102,7 @@ def test_board_cards_stay_one_per_row_at_every_breakpoint(studio_page, width):
     page, _ = studio_page
     page.set_viewport_size({'width':width, 'height':900})
     page.locator('[data-list-view=board]').click()
-    expect(page.locator('.kanban-column')).to_have_count(3)
+    expect(page.locator('.kanban-column:visible')).to_have_count(2)
     card = page.locator('[data-work-card=voice]')
     assert card.bounding_box()['width'] >= 200
     assert card.locator('h3').bounding_box()['width'] >= 80
@@ -138,11 +137,9 @@ def test_pagination_search_and_detail_return_keep_context(studio_page):
     expect(page.locator('.work-card')).to_have_count(1)
     expect(page.locator('#work-list')).to_have_attribute('data-page', '1')
     page.locator('#search').fill('')
-    page.locator('#filters [data-filter=running]').click()
     tasks[-1].update(status='completed', revision=2, jobs=[])
     page.evaluate('refreshStudio()')
-    expect(page.locator('#board-recent')).to_be_visible()
-    expect(page.locator('#board-recent')).to_contain_text('테스트 영상 28')
+    expect(page.locator('[data-work-card=work-28] .board-status')).to_have_text('제작 완료')
 
 
 def test_thumbnail_grid_mobile_and_dark_theme(studio_page):

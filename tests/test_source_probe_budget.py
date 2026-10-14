@@ -23,7 +23,7 @@ def probe_run(tmp_path, monkeypatch):
                         source_max_downloads=4, source_max_probe_downloads=4,
                         source_probe_time_budget=900, source_platform_probe_budget=300)
     monkeypatch.setattr(sf, '_post', lambda *_: Post('ref', 'u', 1, 'reel', caption='차 뒤에 달고 다니다 펼치는 텐트'))
-    monkeypatch.setattr(sf, '_download_reference', lambda *args: args[-1])
+    monkeypatch.setattr(sf, '_download_reference', lambda *args: (args[-1].write_bytes(b'reference'), args[-1])[1])
 
     def frames(_video, directory, *_args, **_kwargs):
         directory.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def probe_run(tmp_path, monkeypatch):
     monkeypatch.setattr(sf, 'compare_videos', compare)
     attempts, reviews = [], []
 
-    def download(candidate, directory, index, *_args, deadline, **_kwargs):
+    def download(candidate, directory, index, *_args, deadline=None, **_kwargs):
         attempts.append({'url': candidate.url, 'started': clock.now, 'deadline': deadline})
         clock.now += clock.network
         if clock.fail:
@@ -71,41 +71,46 @@ def probe_run(tmp_path, monkeypatch):
                            run=lambda: sf.find_sources(settings, 'ref'))
 
 
-def test_slow_local_ai_does_not_exhaust_platform_download_budget(probe_run):
+def test_visual_review_is_deferred_without_exhausting_platform_download_budget(probe_run):
     result = probe_run.run()
-    assert result['probe_attempts'] == len(probe_run.reviews) == 2
+    assert result['probe_attempts'] == 2 and not probe_run.reviews
     assert result['platform_probe_seconds'] == {'youtube': 4.0}
-    assert [call['deadline'] for call in probe_run.attempts] == [160.0, 562.0]
-    assert result['downloaded'] == 0  # Negative functional reviews still reject.
-    assert all('different_core_function' in c['rejection_reasons'] for c in result['candidates'])
+    assert [call['deadline'] for call in probe_run.attempts] == [None, None]
+    assert result['downloaded'] == result['review_pending'] == 1  # Identical fixture frames remain deduplicated.
+    assert all(c['relevance_review_required'] for c in result['candidates'])
+    assert all('different_core_function' not in c['rejection_reasons'] for c in result['candidates'])
+    assert not result['quota_ready']  # Acquisition is not a visual approval.
 
 
 @pytest.mark.parametrize('failed_download', [False, True])
-def test_network_time_and_failures_still_exhaust_platform_budget(probe_run, failed_download):
+def test_elapsed_network_time_never_exhausts_platform_execution_rights(probe_run, failed_download):
     probe_run.clock.network, probe_run.clock.review = 300.0, 0.0
     probe_run.clock.fail = failed_download
     result = probe_run.run()
-    assert result['probe_attempts'] == 1
-    assert probe_run.attempts[0]['deadline'] == 160.0
-    assert result['platform_probe_seconds'] == {'youtube': 300.0}
-    skipped = next(c for c in result['candidates'] if c['url'].endswith('second'))
-    assert skipped['rejection_reasons'] == ['platform_budget_exhausted']
+    assert result['probe_attempts'] == 2
+    assert all(c['deadline'] is None for c in probe_run.attempts)
+    assert result['platform_probe_seconds'] == {'youtube': 600.0}
 
 
-def test_local_review_still_counts_toward_overall_round_deadline(probe_run):
-    probe_run.clock.review = 1000.0
+def test_slow_local_verification_does_not_shorten_next_download(probe_run, monkeypatch):
+    from hotpost import source_finder as sf
+    compare = sf.compare_videos
+    def slow_compare(*args):
+        probe_run.clock.now += 1000.0
+        return compare(*args)
+    monkeypatch.setattr(sf, 'compare_videos', slow_compare)
     result = probe_run.run()
-    assert result['probe_attempts'] == 1
-    assert result['budget_stop'] == 'time_limit'
-    assert result['platform_probe_seconds'] == {'youtube': 2.0}
+    assert result['probe_attempts'] == 2
+    assert result['budget_stop'] == ''
+    assert result['platform_probe_seconds'] == {'youtube': 4.0}
 
 
-def test_download_deadline_remains_clamped_to_overall_budget(probe_run):
+def test_obsolete_total_budget_does_not_allocate_any_download_deadline(probe_run):
     probe_run.settings.source_probe_time_budget = 10
     probe_run.clock.network, probe_run.clock.review = 10.0, 0.0
     result = probe_run.run()
-    assert probe_run.attempts[0]['deadline'] == 110.0
-    assert result['probe_attempts'] == 1 and result['budget_stop'] == 'time_limit'
+    assert all(c['deadline'] is None for c in probe_run.attempts)
+    assert result['probe_attempts'] == 2 and result['budget_stop'] == ''
 
 
 def test_each_probe_checkpoint_survives_before_next_network_attempt(probe_run, monkeypatch):
@@ -121,23 +126,27 @@ def test_each_probe_checkpoint_survives_before_next_network_attempt(probe_run, m
     assert len(receipts)==2
     assert receipts[0]['candidates'][0]['download_attempted'] is True
     assert receipts[1]['candidates'][0]['downloaded_file']
-    assert 'different_core_function' in receipts[1]['candidates'][0]['rejection_reasons']
-    assert result['source_target']==10 and result['platform_targets']['tiktok']['target']==5
+    assert receipts[1]['candidates'][0]['relevance_review_required']
+    assert receipts[1]['candidates'][0]['similarity_warnings']
+    assert result['source_target']==1 and not result['platform_targets']
+    assert result['platform_preferences']['tiktok']['target']==5
+    assert result['platform_preferences']['tiktok']['required'] is False
     assert result['platform_outcomes']['tiktok']['search_attempts']==0
     assert result['platform_outcomes']['tiktok']['reasons']['not_attempted']==1
 
 
-def test_many_ranked_candidates_can_finish_within_unchanged_platform_cap(probe_run, monkeypatch):
+def test_many_ranked_candidates_are_not_prorated_by_platform_elapsed_time(probe_run, monkeypatch):
     from hotpost import source_finder as sf
     # Extraction, request pacing and a valid transfer need forty seconds.
     # Twelve proposals must not all be cancelled at 300/12=25 seconds.
     monkeypatch.setattr(sf, 'search_local_hints', lambda *_: [
         Candidate(f'https://youtube.com/watch?v=proposal-{i}', 'youtube') for i in range(12)])
+    probe_run.settings.source_max_probe_downloads=30
     probe_run.clock.network, probe_run.clock.review = 40.0, 0.0
     original_download = sf.download_candidate
 
-    def timed_transfer(candidate, directory, index, *args, deadline, **kwargs):
-        if probe_run.clock.now+40 > deadline:
+    def timed_transfer(candidate, directory, index, *args, deadline=None, **kwargs):
+        if deadline is not None and probe_run.clock.now+40 > deadline:
             probe_run.clock.now = deadline
             candidate.error = 'Valid transfer cancelled by deadline'
             return None
@@ -145,18 +154,12 @@ def test_many_ranked_candidates_can_finish_within_unchanged_platform_cap(probe_r
 
     monkeypatch.setattr(sf, 'download_candidate', timed_transfer)
     result = probe_run.run()
-    assert result['probe_attempts'] == len(probe_run.attempts) == 4
-    assert len(probe_run.reviews) >= 1  # Transfers reach the independent quality gate.
-    assert result['platform_probe_seconds']['youtube'] == 160
-    assert result['platform_probe_seconds']['youtube'] <= probe_run.settings.source_platform_probe_budget
-    assert result['downloaded'] == 0  # The negative function verdict is preserved.
+    assert result['probe_attempts'] == len(probe_run.attempts) == 12
+    assert result['review_pending'] == 1 and not probe_run.reviews
+    assert result['platform_probe_seconds']['youtube'] == 480
+    assert result['downloaded'] == 1 and not result['quota_ready']
 
 
-@pytest.mark.parametrize('candidate_cap,platform_left,overall_left,expected', [
-    (60, 300, 900, 60), (20, 300, 900, 20),
-    (60, 17, 900, 17), (60, 300, 9, 9), (60, 0, 900, 0),
-])
-def test_useful_download_slice_preserves_every_actual_cap(candidate_cap, platform_left, overall_left, expected):
-    from hotpost.source_search.budget import candidate_probe_seconds
-    settings = SimpleNamespace(source_candidate_download_budget=candidate_cap)
-    assert candidate_probe_seconds(settings, platform_left, overall_left, 12) == expected
+def test_time_allocator_has_been_removed():
+    from hotpost.source_search import budget
+    assert not hasattr(budget,'candidate_probe_seconds')

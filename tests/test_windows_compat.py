@@ -91,11 +91,12 @@ def test_bilibili_download_resumes_after_timeout_once(tmp_path, monkeypatch):
     monkeypatch.setattr(source_finder, "_executable", lambda _name: "yt-dlp.exe")
 
     timeouts = []
-    def timeout_stub(_command, *, timeout):
-        timeouts.append(timeout)
-        raise subprocess.TimeoutExpired("yt-dlp", timeout)
+    from hotpost import operation_progress
+    def timeout_stub(_command, **options):
+        timeouts.append(options)
+        raise operation_progress.NoProgressTimeout('No received media progress')
 
-    monkeypatch.setattr(source_finder, "_run", timeout_stub)
+    monkeypatch.setattr(operation_progress, "run_progress_command", timeout_stub)
     assert source_finder.download_candidate(candidate, tmp_path, 1, 100, None) is None
-    assert timeouts == [90, 150]
-    assert "150" in candidate.error
+    assert len(timeouts) == 2 and all('timeout' not in options for options in timeouts)
+    assert "No received media progress" in candidate.error

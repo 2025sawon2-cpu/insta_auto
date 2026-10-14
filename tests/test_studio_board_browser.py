@@ -4,6 +4,7 @@ import json
 import mimetypes
 import io
 import wave
+import time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -32,7 +33,7 @@ def task(key, status, stage, automatic=True, job_status='queued'):
     t = dict(id=key, shortcode=key, title={'source':'작은 주방을 바꾸는 정리 아이디어',
         'script':'출근 가방 속 공간 활용', 'voice':'책상 위 케이블 정리',
         'edit':'작은 방의 조명 바꾸기', 'export':'간편한 아침 준비', 'done':'여행 가방 수납법'}[key],
-        status=status, message='현재 작업 상태를 확인하세요', revision=1, created=1, updated=1,
+        status=status, message='현재 작업 상태를 확인하세요', revision=1, created=1, updated=1, collected_at=int(time.time()),
         scripts=[dict(id='s1',text='실제 입력 보존 테스트 대본',created=1,origin='recommended')],
         voices=[],edits=[],proposals=[],sources=[],script_id='s1',approved_script_id=None,
         voice_id=None,approved_voice_id=None,edit_id=None,original_text='원본 발화',events=[],
@@ -113,7 +114,6 @@ def studio_page():
         page.route('http://studio.test/**',route)
         page.goto('http://studio.test/studio.html')
         page.wait_for_selector('[data-work="voice"]')
-        page.locator('#filters [data-filter=all]').click()
         page.locator('[data-list-view=grid]').click()
         yield page,tasks
         browser.close()
@@ -123,7 +123,7 @@ def studio_page():
 def test_columns_filters_and_stable_polling(studio_page):
     page,tasks=studio_page
     assert page.locator('.kanban-column').count()==0
-    assert page.locator('.work-card').count()==6
+    assert page.locator('.work-card').count()==4
     assert page.locator('[data-work-card="export"] .board-status').inner_text()=='제작 대기'
     assert page.locator('.work-card.is-running').count()==1
     assert page.locator('[data-work-card="voice"] .card-cover').is_visible()
@@ -137,8 +137,9 @@ def test_columns_filters_and_stable_polling(studio_page):
     page.evaluate('refreshStudio()')
     assert page.locator('[data-work="voice"]').count()==1
     assert page.evaluate('keptCard===document.querySelector("[data-work-card=voice]")')
-    page.locator('#filters [data-filter="attention"]').click()
-    assert page.locator('.work-card').count()==3
+    page.locator('#attention-open').click()
+    page.wait_for_selector('[data-work=script]')
+    assert page.locator('.work-card').count()==2
     page.locator('#search').fill('없는 작업')
     assert page.locator('.work-card').count()==0
     assert page.locator('#board-empty').is_visible()
@@ -195,6 +196,7 @@ def test_results_version_and_keyboard_drawer(studio_page):
 
 def test_manual_approval_and_tab_input_preservation(studio_page):
     page,tasks=studio_page
+    page.locator('#attention-open').click()
     page.locator('[data-work="script"]').click()
     page.locator('[data-legacy-section=script] details').filter(has=page.locator('#script-request')).locator('summary').first.click()
     page.locator('#script-request').fill('도입부를 더 짧게')
@@ -242,6 +244,7 @@ def test_scroll_media_position_and_paused_refresh(studio_page):
     page.locator('[data-work="voice"]').click()
     page.wait_for_function('document.querySelector("[data-pf-section=voice] audio").currentTime>=1.9')
     page.locator('#detail-tabs [data-detail-tab="script"]').click()
+    page.locator('[data-pf-section=script] textarea[data-field=script]').fill('스크롤 위치를 보존할 긴 대본입니다.\n' * 40)
     page.locator('#drawer-scroll').evaluate('(e)=>e.scrollTop=200')
     top=page.locator('#drawer-scroll').evaluate('(e)=>e.scrollTop')
     assert top>0
@@ -252,6 +255,7 @@ def test_scroll_media_position_and_paused_refresh(studio_page):
 
 def test_dirty_manual_request_survives_poll_and_reopen(studio_page):
     page,tasks=studio_page
+    page.locator('#attention-open').click()
     page.locator('[data-work="script"]').click()
     page.locator('[data-legacy-section=script] details').filter(has=page.locator('#script-request')).locator('summary').first.click()
     page.locator('#script-request').fill('보존할 AI 수정 요청')
@@ -269,16 +273,20 @@ def test_attention_actions_and_reduced_motion(studio_page):
     tasks[2].update(status='attention',error='음성 연결 실패',revision=2)
     tasks[2]['jobs'][0]['status']='failed'
     page.evaluate('refreshStudio()')
+    page.locator('#attention-open').click()
+    page.wait_for_selector('[data-work=voice]')
     assert page.locator('[data-work-card="voice"] [class="board-status"]').inner_text()=='확인 필요'
     page.locator('[data-work="voice"]').click()
-    assert page.locator('#work-hero [data-action="retry"]').is_visible()
-    page.locator('#work-hero [data-action="retry"]').click()
-    page.wait_for_function('document.querySelector("#work-hero [data-action=retry]")===null')
+    assert page.locator('.pf-runtime [data-pf="retry"]').is_visible()
+    page.locator('.pf-runtime [data-pf="retry"]').click()
+    page.wait_for_function('document.querySelector(".pf-runtime [data-pf=retry]")===null')
     assert tasks[2]['_last_retry']==dict(task_id='voice',body=dict(revision=2))
     page.locator('#close-work').click()
     tasks[2].update(status='voice_generating',error='',revision=3)
     tasks[2]['jobs'][0]['status']='running'
     page.evaluate('refreshStudio()')
+    page.locator('#attention-back').click()
+    page.wait_for_selector('[data-work=voice]')
     page.emulate_media(reduced_motion='reduce')
     assert page.locator('[data-work-card="voice"] .studio-working-dots i').first.evaluate('(e)=>getComputedStyle(e).animationName')=='none'
 
@@ -307,14 +315,14 @@ def test_mobile_progress_expansion_and_stage_navigation(studio_page):
     page.set_viewport_size({'width':390,'height':844})
     assert page.locator('#work-list').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
     assert page.locator('.kanban-column').count()==0
-    assert page.locator('.work-card').count()==6
+    assert page.locator('.work-card').count()==4
     page.locator('[data-work="voice"]').click()
     assert page.locator('#journey-panel').get_attribute('open') is None
-    assert page.locator('#detail-tabs button').count()==5
-    assert page.locator('#detail-tabs [data-detail-tab=voice]').get_attribute('aria-current')=='page'
+    assert page.locator('#detail-tabs button').count()==4
+    assert page.locator('#detail-tabs [data-detail-tab=script]').get_attribute('aria-current')=='page'
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     page.locator('[data-detail-toggle$="-reference"]').click()
-    assert page.locator('.sd-reference article .sd-script-text').is_visible()
+    assert page.locator('[data-field=original]').is_visible()
     assert page.locator('#work-drawer').bounding_box()['width']<=390
 
 
@@ -322,7 +330,7 @@ def test_multiple_uploads_partial_failure_retry_and_continue_preserve_draft(stud
     page,tasks=studio_page
     t=tasks[0];t.update(status='attention',error='Source manifest contains no selected local videos.',revision=2)
     t['jobs'][0]['status']='failed';t['_fail_upload']='second.mp4'
-    page.evaluate('refreshStudio()');page.locator('[data-work="source"]').click()
+    page.evaluate('refreshStudio()');page.locator('#attention-open').click();page.locator('[data-work="source"]').click()
     assert page.locator('[data-upload-open]').is_visible()
     assert 'Source manifest' not in page.locator('#work-drawer').inner_text()
     assert page.locator('[data-upload-open]').is_visible()
@@ -362,6 +370,7 @@ def test_multiple_uploads_partial_failure_retry_and_continue_preserve_draft(stud
     page.locator('#detail-tabs [data-detail-tab="script"]').click()
     assert page.locator('[data-pf-section=script] [data-field="script"]').input_value()=='업로드 중에도 보존할 새 대본'
     page.locator('#close-work').click()
+    page.locator('#attention-back').click()
     page.locator('[data-work="voice"]').click()
     page.locator('#detail-tabs [data-detail-tab="sources"]').click()
     assert page.locator('[data-upload-list] li').count()==0
@@ -375,11 +384,12 @@ def test_mobile_source_hero_clear_actions_and_no_internal_identifiers(studio_pag
     t=tasks[0];t.update(shortcode='DdyQWlyKAv9',title='DdyQWlyKAv9',status='attention',error='Source manifest contains no selected local videos.',revision=2)
     t['jobs'][0]['status']='failed'
     page.set_viewport_size({'width':390,'height':844});page.evaluate('refreshStudio()')
+    page.locator('#attention-open').click()
     page.locator('[data-work="source"]').click()
     assert not page.locator('#journey-panel').evaluate('(e)=>e.open')
     text=page.locator('#work-drawer').inner_text()
     assert 'DdyQWlyKAv9' not in text and 'Source manifest' not in text
-    assert '영상 재료 준비' in text
+    assert '이번 영상에 사용할 소스' in text
     with page.expect_file_chooser() as chooser:
         page.locator('[data-upload-open]').click()
     assert chooser.value.is_multiple()
@@ -453,11 +463,11 @@ def test_original_and_script_are_separate_and_drafts_survive_navigation(studio_p
     page.locator('[data-work="voice"]').click()
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     reference=page.locator('[data-detail-toggle$="-reference"]')
-    original=page.locator('.sd-reference article .sd-script-text')
+    original=page.locator('[data-field=original]')
     editor=page.locator('[data-pf-section=script] [data-field=script]')
     reference.click()
-    assert original.inner_text()=='원본 발화'
-    assert page.locator('[data-field=original],[data-pf=save-original]').count()==0
+    assert original.input_value()=='원본 발화'
+    assert page.locator('[data-pf=save-original]').count()==1
     assert page.locator('.pf-actionbar').is_visible()
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     reference.click()
@@ -465,11 +475,11 @@ def test_original_and_script_are_separate_and_drafts_survive_navigation(studio_p
     editor.fill('새로운 제작 대본 초안')
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     reference.click()
-    assert original.inner_text()=='원본 발화'
+    assert original.input_value()=='원본 발화'
     page.evaluate('refreshStudio()')
     page.locator('#detail-tabs [data-detail-tab=script]').click()
     assert editor.input_value()=='새로운 제작 대본 초안'
     assert tasks[2]['original_text']=='원본 발화'
-    assert page.locator('#detail-tabs [data-state=current]').get_attribute('data-detail-tab')=='voice'
+    assert page.locator('#detail-tabs [data-state=current]').get_attribute('data-detail-tab')=='script'
     assert page.locator('#detail-tabs [aria-current=page]').get_attribute('data-detail-tab')=='script'
     assert page.locator('#detail-tabs [aria-pressed=true]').get_attribute('data-detail-tab')=='script'

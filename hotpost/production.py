@@ -248,6 +248,11 @@ class ProductionManager:
     def run(self, job_id, action):
         with file_lock(self.folder(job_id) / 'job.lock'):
             job = self.get(job_id)
+            # A new script selection may clear the old request ID but cannot
+            # shorten the provider's outstanding transport/service cooldown.
+            if ((job.get('status') == 'service_wait' or action == 'build')
+                    and time.time() < float(job.get('service_retry_at') or 0)):
+                return job
             try:
                 with file_lock(self.root / 'execution.lock'):
                     if action == 'rewrite':
@@ -257,7 +262,12 @@ class ProductionManager:
                     else:
                         raise ValueError('알 수 없는 제작 명령')
             except Exception as exc:
-                self.save(job, status='blocked', error=str(exc)[:1500])
+                from .model_service import ModelServiceUnavailable
+                if isinstance(exc, ModelServiceUnavailable):
+                    self.save(job, status='service_wait', service_retry_at=exc.retry_at,
+                              error=str(exc)[:1500])
+                else:
+                    self.save(job, status='blocked', error=str(exc)[:1500])
             return job
 
     def _rewrite(self, job):
@@ -273,17 +283,23 @@ class ProductionManager:
             if remote['state'] in ('failed', 'cancelled', 'interrupted'):
                 retried = self.studio.retry(job['id'], job['studio_job_id'])
                 self.save(job, studio_job_id=retried['id'])
-        deadline = time.monotonic() + self.settings.studio_timeout
-        while time.monotonic() < deadline:
-            if self.refresh_scripts(job)['state'] == 'completed':
+        from .operation_progress import ProgressWatch
+        watch = ProgressWatch(self.settings.studio_timeout, '선택 제작 대본 유효 진전')
+        while True:
+            remote = self.refresh_scripts(job)
+            if remote['state'] == 'completed':
                 return
+            if remote['state'] in {'failed', 'cancelled', 'interrupted'}:
+                raise ValueError('대본 작업 종료: '+str(remote.get('error') or remote.get('message') or remote['state'])[:500])
+            if remote['state'] == 'queued':
+                watch.reset()
+            watch.observe('progress', float(remote.get('progress') or 0))
+            if getattr(self.studio, 'jobs', None):
+                self.studio.jobs.observe_progress(job['studio_job_id'], watch)
+            watch.check()
             time.sleep(2)
-        raise ValueError('대본 작업 대기 시간이 초과됐습니다. 같은 작업 ID로 재개할 수 있습니다.')
 
     def _build(self, job):
-        if (job.get('editing') or {}).get('status') == 'completed':
-            self.save(job, status='draft_ready', error='')
-            return
         if not job.get('script_path') or not job.get('transformation'):
             raise ValueError('재가공 대본과 변환 계획을 먼저 선택하세요.')
         script_path = self.asset_path(job['script_path'])
@@ -300,12 +316,31 @@ class ProductionManager:
             self.save(job, status='synthesizing', error='')
             voice = self.voice.synthesize(text, voice_path,
                 request_id=job.get('voicebench_request_id'),
+                generation_key='prod-'+job['id']+'-'+job['script_sha256'][:32],
                 on_submitted=lambda request_id: self.save(job, voicebench_request_id=request_id))
             self.save(job, voice={**voice, 'sha256': file_digest(voice_path),
                                  'script_sha256': job['script_sha256']})
         if (file_digest(voice_path) != job['voice']['sha256']
                 or job['voice']['script_sha256'] != job['script_sha256']):
             raise ValueError('음성 파일 또는 대본 버전이 변경됐습니다.')
+        inputs = {'script_sha256':job['script_sha256'], 'voice_sha256':job['voice']['sha256'],
+                  'videos':[[str(path), file_digest(path), scene['range']] for scene,path in zip(job['scenes'], videos)],
+                  'edit_style':job['edit_style'], 'audio_profile':'clean_tts','narration_speed':1.0}
+        input_signature = digest(json.dumps(inputs,sort_keys=True,ensure_ascii=False))
+        def checked_edit(value):
+            if value.get('hotpost_input_signature') != input_signature:
+                raise ValueError('기존 편집 결과의 소스·구간·음성·스타일 계약이 현재 선택과 결속하지 않습니다. 파일은 보존했습니다.')
+            content = Path(value.get('draft_path') or '__missing__')/'draft_content.json'
+            if not content.is_file():
+                raise ValueError('완료 기록의 CapCut 초안 파일이 소실되었습니다. 자동 재제작 없이 확인이 필요합니다.')
+            if value.get('draft_content_sha256') and file_digest(content)!=value['draft_content_sha256']:
+                raise ValueError('완료 이후 CapCut 초안이 변경되었습니다. 사용자 편집은 보존하고 자동 재제작하지 않습니다.')
+            return value
+        if (job.get('editing') or {}).get('status') == 'completed':
+            # Reuse only after validating immutable script/source/voice inputs.
+            checked_edit(job['editing'])
+            self.save(job, status='draft_ready', error='')
+            return
         self.save(job, status='editing', error='')
         edit_id = job['id'] + '-v' + str(job['revision'])
         result_path = self.settings.editing_dir / edit_id / 'result.json'
@@ -313,6 +348,10 @@ class ProductionManager:
             previous = json.loads(result_path.read_text('utf-8'))
             if (previous.get('status') == 'completed' and previous.get('job_id') == edit_id
                     and previous.get('script_sha256') == job['script_sha256']):
+                try: checked_edit(previous)
+                except ValueError:
+                    self.save(job,editing={},editing_cache_hold={'result_path':str(result_path),'current_input_signature':input_signature})
+                    raise
                 self.save(job, editing=previous, status='draft_ready')
                 return
         result = self.editor.build(job_id=edit_id, video_paths=videos,
@@ -320,6 +359,12 @@ class ProductionManager:
             video_labels=[scene['label'] for scene in job['scenes']],
             audio_profile='clean_tts', narration_speed=1.0,
             edit_style=job['edit_style'], source_ranges=[scene['range'] for scene in job['scenes']])
+        if result.get('status') == 'completed':
+            result={**result,'hotpost_input_signature':input_signature}
+            checked_edit(result)
+            result['draft_content_sha256']=file_digest(Path(result['draft_path'])/'draft_content.json')
+            if result_path.is_file():
+                _atomic_json(result_path, result)
         self.save(job, editing=result,
                   status='draft_ready' if result['status'] == 'completed' else 'blocked',
                   error='' if result['status'] == 'completed' else result.get('message', '편집 중단'))

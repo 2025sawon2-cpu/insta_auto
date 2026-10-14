@@ -10,12 +10,16 @@ def candidate():
 
 def test_functional_review_requires_actual_frames_and_matching_file():
     c=candidate();meta={'duration':37,'width':800,'height':720}
-    assert relevance_reasons(c,meta,'functional')
+    # Low similarity is not a rejection, but pending footage cannot be edited.
+    c.relevance_review_required=True
+    assert not relevance_reasons(c,meta,'functional')
+    assert not editing_ready(vars(c))
     c.functional_review={'reviewed':True,'same_core_function':True,'observed_actions':['packing stove'],
                          'evidence_frames':['frame.jpg'],'source_sha256':'abc'}
     assert relevance_reasons(c,meta,'functional')==[]
     c.functional_review['source_sha256']='changed'
-    assert relevance_reasons(c,meta,'functional')
+    assert not relevance_reasons(c,meta,'functional')
+    assert not editing_ready(vars(c))
     c.functional_review['source_sha256']='abc';c.functional_review['same_core_function']=False
     assert relevance_reasons(c,meta,'functional')
 

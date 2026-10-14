@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -28,7 +29,7 @@ def dashboard(tmp_path):
     store.upsert_posts(posts,collected_at=now)
     report=build_report(settings,store,'test',[],['creator']);store.close()
     report['acquisition_candidates']=[dict(shortcode='camp',username='creator',views_per_follower=30,views=30000)]
-    state={'display':dict(DEFAULTS),'report':report,
+    state={'display':dict(DEFAULTS),'report':report,'tasks':[],
            'health':{'collection':{'state':'success','newest_post_update':now},'schedule':{},'hot_tracking':{}},
            'notifications':[dict(id=1,message='새로운 게시물이 있습니다',created_at=now,seen_at=None),
                             dict(id=2,message='이전에 읽은 알림',created_at=now,seen_at=now)]}
@@ -60,7 +61,7 @@ def dashboard(tmp_path):
                 result={'seen':True}
             elif path=='/api/collection-status':result=state['health']
             elif path=='/api/report':result=state['report']
-            elif path=='/api/studio':result={'tasks':[]}
+            elif path=='/api/studio':result={'tasks':state['tasks']}
             elif path=='/api/jobs':result={'jobs':[]}
             elif path.startswith('/api/'):
                 result={}
@@ -146,9 +147,12 @@ def test_settings_save_survives_navigation_and_reload(dashboard):
     page.locator('#presets [data-preset="views"]').click()
     page.locator('#settings-save').click()
     page.wait_for_function("document.querySelector('#settings-status').textContent.startsWith('저장했습니다')")
+    assert page.locator('#settings-toast').inner_text()=='설정을 저장했습니다'
+    assert page.url=='http://dashboard.test/settings.html'
+    assert page.locator('#settings-save').inner_text()=='설정 저장'
     assert state['display']['period']==72 and state['display']['sort']=='views'
     assert state['report']['criteria']['values']['wvViews']==70
-    page.goto('http://dashboard.test/');page.wait_for_selector('.card')
+    page.locator('.settings-back').click();page.wait_for_selector('.card')
     assert '3일' in page.locator('#current-settings').text_content() and '조회수순' in page.locator('#current-settings').text_content()
     page.goto('http://dashboard.test/settings.html');page.wait_for_function("!document.querySelector('#settings-save').disabled")
     assert page.locator('#period [data-v="72"]').get_attribute('aria-pressed')=='true'
@@ -157,6 +161,25 @@ def test_settings_save_survives_navigation_and_reload(dashboard):
     page.locator('#display-reset').click()
     assert page.locator('#period [data-v="72"]').is_disabled()
     assert page.locator('#detection [data-v="today"]').get_attribute('aria-pressed')=='true'
+
+
+@pytest.mark.parametrize('endpoint',['criteria','display-settings'])
+def test_settings_failed_save_does_not_show_success_toast(dashboard,endpoint):
+    page,state=dashboard
+    page.goto('http://dashboard.test/settings.html')
+    page.wait_for_function("!document.querySelector('#settings-save').disabled")
+    page.locator('#settings-save').click()
+    page.wait_for_selector('#settings-toast:not([hidden])')
+    def fail_save(route):
+        if route.request.method=='PUT':
+            route.fulfill(status=500,content_type='application/json',body=json.dumps({'error':'저장 실패'}))
+        else:route.fallback()
+    page.route('**/api/'+endpoint,fail_save)
+    page.locator('#settings-save').click()
+    page.wait_for_function("document.querySelector('#settings-status').textContent==='저장 실패'")
+    assert not page.locator('#settings-toast').is_visible()
+    assert page.locator('#settings-save').is_enabled()
+    assert page.url=='http://dashboard.test/settings.html'
 
 
 def test_removed_account_warning_is_hidden_but_current_failures_remain(dashboard):
@@ -193,7 +216,8 @@ def test_collection_bell_read_state_persists_and_new_issue_reappears(dashboard):
     assert '해결 방법:' in page.locator('#collection-health').inner_text()
     assert '로그인 복구 방법' in page.locator('#collection-health').inner_text()
     page.locator('#collection-health a').first.click()
-    assert page.locator('#collection-help').get_attribute('open') is not None
+    page.wait_for_url('**/accounts.html#help-login')
+    page.wait_for_function("document.querySelector('#collection-help').open")
     assert page.locator('#help-login').is_visible()
 
 
@@ -240,7 +264,7 @@ def test_mobile_layout_fits_viewport(dashboard,path):
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
 
 @pytest.mark.parametrize('width',[1440,390])
-def test_detail_prioritizes_production_and_collapses_analysis(dashboard,width):
+def test_detail_shows_video_information_without_an_extra_click(dashboard,width):
     page,state=dashboard
     page.set_viewport_size({'width':width,'height':1000})
     original=json.dumps(state['report'],sort_keys=True)
@@ -249,24 +273,144 @@ def test_detail_prioritizes_production_and_collapses_analysis(dashboard,width):
     for label in ['핫 최초 감지일','신뢰도','잠정 후보','비교 게시물']:
         assert label not in card.inner_text()
     assert '조회수' in card.inner_text()
-    card.locator('.card-open-production').click()
+    card.locator('.thumb').click()
     page.wait_for_selector('#begin-auto')
     assert page.locator('.benchmark-performance').is_visible()
     assert page.locator('#production-flow').is_visible()
     info=page.locator('.video-info')
-    assert not info.evaluate('(el)=>el.open')
-    assert not info.locator('.kv').is_visible()
-    assert not page.locator('#source-download').is_visible()
+    assert info.locator('summary').count()==0
+    assert info.locator('.video-info-title').inner_text()=='영상 정보'
+    assert info.locator('.fullcap').is_visible()
+    assert info.locator('.cmp').is_visible()
     assert '추가 확인 사항' not in page.locator('#modal-body').inner_text()
-    info.locator('summary').click()
     assert info.locator('.kv').is_visible()
-    for label in ['핫 최초 감지일','팔로워','비교 게시물','반응 성숙도','신뢰도','판정 상태']:
+    for label in ['처음 발견한 시각','팔로워','비교 게시물']:
         assert label in info.inner_text()
-    assert page.locator('#source-download').is_visible()
-    assert page.locator('#transcript-extract').is_visible()
+    for label in ['반응 성숙도','신뢰도','보정 전 배수','시스템 판정 참고','최근 조회 상태','최근 조회 속도','가속도','조회 성공 관측','성장 비교','판정 상태','14일 추적']:
+        assert label not in info.inner_text()
+    assert info.locator('.kv>div').count()==3
+    metrics=info.locator('.detail-metric')
+    assert metrics.count()==3
+    boxes=[metrics.nth(i).bounding_box() for i in range(3)]
+    assert len({box['y'] for box in boxes})==1
+    assert boxes[0]['x']<boxes[1]['x']<boxes[2]['x']
+    assert page.locator('.pr-stage').count()==4
+    assert page.locator('.pr-stage:disabled').count()==4
+    assert page.get_by_role('button',name='완성 영상 보기',exact=True).is_disabled()
+    assert page.get_by_role('button',name='↓ 영상 다운로드',exact=True).is_disabled()
+    assert page.locator('#source-download,#transcript-extract,#source-status,#transcript-status').count()==0
+    assert '개별 소스·대본 도구' not in info.inner_text()
     assert page.locator('#production-flow').is_visible()
     assert page.locator('.modal-card').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
-    info.locator('summary').click()
     page.keyboard.press('Escape')
     assert not page.locator('#modal').is_visible()
+    card.locator('.card-open-production').click()
+    assert info.locator('.fullcap').is_visible()
+    assert info.locator('.kv').is_visible()
+    page.keyboard.press('Escape')
     assert json.dumps(state['report'],sort_keys=True)==original
+
+
+def snapshot(page,name):
+    directory=os.environ.get('HOTPOST_UI_SNAPSHOT_DIR')
+    if directory:
+        target=Path(directory);target.mkdir(parents=True,exist_ok=True)
+        page.screenshot(path=str(target/(name+'.png')),full_page=False)
+
+
+def production_task(code):
+    return {'id':'work-'+code,'shortcode':code,'status':'rewriting',
+            'automation':{'protocol':2,'active':True},'run_id':'current',
+            'source_goal':{'count':0,'target':10,'platforms':{},'ready':False},
+            'scripts':[],'voices':[],'sources':[],
+            'jobs':[{'kind':'rewrite','status':'running'}],
+            'pipeline':[{'id':'current','status':'running','created':int(time.time()),'steps':[]}]}
+
+
+@pytest.mark.parametrize('width',[1440,390])
+def test_dashboard_states_and_perimeter_animation_follow_current_production(dashboard,width):
+    page,state=dashboard
+    page.set_viewport_size({'width':width,'height':1000})
+    task=production_task('camp');state['tasks']=[task]
+    page.clock.install()
+    page.goto('http://dashboard.test/');page.wait_for_selector('.card[data-production-state="working"]')
+    card=page.locator('.card[data-code="camp"]')
+    assert card.locator('.production-badge').inner_text()=='제작중'
+    assert card.locator('.cap,.production-link').count()==0
+    assert '캠핑 여행 수납 가방' not in card.inner_text()
+    assert card.locator('.card-open-production').inner_text()=='제작 보기 →'
+    assert card.locator('.production-status a').count()==0
+    assert card.evaluate("el=>getComputedStyle(el,'::after').animationName")=='production-border'
+    start=card.evaluate("el=>getComputedStyle(el,'::after').getPropertyValue('--production-angle')")
+    page.wait_for_timeout(150)
+    assert card.evaluate("el=>getComputedStyle(el,'::after').getPropertyValue('--production-angle')")!=start
+    page.emulate_media(reduced_motion='reduce')
+    assert card.evaluate("el=>getComputedStyle(el,'::after').animationName")=='none'
+    page.emulate_media(reduced_motion='no-preference')
+    snapshot(page,f'cards-working-{width}')
+    task.update(status='completed',jobs=[])
+    task['pipeline'][0].update(status='completed',video_url='/complete.mp4')
+    page.clock.fast_forward(4100)
+    page.wait_for_function("document.querySelector('[data-code=camp]').dataset.productionState==='completed'")
+    assert card.locator('.production-badge').inner_text()=='완성'
+    assert card.locator('.card-open-production').inner_text()=='완성 영상 보기 →'
+    assert card.evaluate("el=>getComputedStyle(el,'::after').animationName")=='none'
+    task.update(status='attention',error='음성 설정을 확인해 주세요.')
+    task['pipeline'].append({'id':'revision','status':'failed','steps':[]})
+    task['run_id']='revision'
+    page.clock.fast_forward(4100)
+    page.wait_for_function("document.querySelector('[data-code=camp]').dataset.productionState==='attention'")
+    assert card.locator('.production-badge').inner_text()=='확인필요'
+    assert card.evaluate("el=>getComputedStyle(el,'::after').animationName")=='none'
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+
+
+@pytest.mark.parametrize('width',[1440,390])
+def test_result_buttons_enable_when_assets_arrive_and_preserve_playback(dashboard,width):
+    page,state=dashboard
+    page.set_viewport_size({'width':width,'height':1000})
+    task=production_task('camp');state['tasks']=[task]
+    page.clock.install()
+    page.goto('http://dashboard.test/');page.wait_for_selector('.card')
+    page.locator('.card[data-code="camp"] .thumb').click()
+    page.wait_for_selector('.pr-stage.is-running')
+    assert page.locator('.pr-stage').count()==4
+    assert page.locator('.pr-stage:disabled').count()==4
+    assert '작업 중' in page.locator('[data-stage="script"]').inner_text()
+    assert page.get_by_role('button',name='완성 영상 보기',exact=True).is_disabled()
+    assert page.get_by_role('button',name='↓ 영상 다운로드',exact=True).is_disabled()
+    assert page.get_by_role('link',name='제작실에서 수정',exact=True).is_visible()
+    snapshot(page,f'detail-pending-{width}')
+    task.update(status='completed',jobs=[],script_id='s1',voice_id='v1')
+    task['scripts']=[{'id':'s1','text':'완성된 제작 대본'}]
+    task['voices']=[{'id':'v1','script_id':'s1','path_url':'/voice.wav'}]
+    task['source_goal'].update(count=2,ready=True)
+    task['pipeline'][0].update(status='completed',video_url='/complete.mp4',
+        steps=[{'key':'export','status':'completed','download_url':'/download.mp4'}])
+    page.clock.fast_forward(3100)
+    page.wait_for_selector('.pr-video video[src="/complete.mp4"]')
+    assert page.locator('.pr-stage:disabled').count()==0
+    assert page.get_by_role('button',name='완성 영상 보기',exact=True).is_enabled()
+    assert page.get_by_role('link',name='↓ 영상 다운로드',exact=True).get_attribute('href')=='/download.mp4'
+    page.evaluate("window.resultPlayer=document.querySelector('video[src=\"/complete.mp4\"]')")
+    page.locator('[data-stage="script"]').click()
+    assert page.locator('.pr-script').inner_text()=='완성된 제작 대본'
+    page.clock.fast_forward(3100)
+    assert page.evaluate("window.resultPlayer===document.querySelector('video[src=\"/complete.mp4\"]')")
+    assert page.locator('[data-stage="script"]').get_attribute('aria-expanded')=='true'
+    assert page.locator('.modal-card').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
+    snapshot(page,f'detail-completed-{width}')
+    page.locator('.video-info').scroll_into_view_if_needed()
+    snapshot(page,f'detail-information-{width}')
+    task.update(status='rewriting',run_id='remake',script_id=None,voice_id=None,
+                jobs=[{'kind':'rewrite','status':'running'}])
+    task['source_goal'].update(count=0,ready=False)
+    task['pipeline'].append({'id':'remake','status':'running','steps':[]})
+    page.clock.fast_forward(3100)
+    page.wait_for_selector('.pr-waiting-wrap')
+    assert page.evaluate("window.resultPlayer===document.querySelector('video[src=\"/complete.mp4\"]')")
+    assert page.locator('[data-stage="final"]').is_enabled()
+    assert page.locator('[data-stage="script"]').is_disabled()
+    assert page.locator('.pr-waiting-wrap [data-view-result]').is_disabled()
+    assert page.locator('.pr-result-card [data-view-result]').is_enabled()
+    assert page.get_by_role('link',name='↓ 영상 다운로드',exact=True).get_attribute('href')=='/download.mp4'

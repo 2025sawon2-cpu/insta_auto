@@ -1,4 +1,4 @@
-/* Optional source ZIP / original transcript extraction in the reference disclosure. */
+/* Optional reference extraction in Studio's collapsed auxiliary tools. */
 (() => {
   'use strict';
   function create({modal, esc}) {
@@ -18,9 +18,11 @@
   }
 
   async function pollSourceJob(id, button, status) {
+    if(!status.isConnected||!button.isConnected)return;
     try {
       const response = await fetch('/api/source-jobs/' + encodeURIComponent(id));
       const job = await response.json();
+      if(!status.isConnected||!button.isConnected)return;
       if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
       if (job.status === 'error') throw new Error(job.error || '탐색 작업이 실패했습니다.');
       const notes = job.notes && job.notes.length ? `<small class="source-note">${job.notes.map(esc).join('<br>')}</small>` : '';
@@ -53,9 +55,11 @@
   }
 
   async function pollTranscriptJob(id, button, status) {
+    if(!status.isConnected||!button.isConnected)return;
     try {
       const response = await fetch('/api/transcript-jobs/' + encodeURIComponent(id));
       const job = await response.json();
+      if(!status.isConnected||!button.isConnected)return;
       if (!response.ok) throw new Error(job.error || '상태를 확인하지 못했습니다.');
       if (job.status === 'error') throw new Error(job.error || '대본 추출에 실패했습니다.');
       if (job.status === 'done') {
@@ -77,5 +81,20 @@
 
     return {startSourceJob, startTranscriptJob};
   }
-  window.ReferenceJobs = {create};
+  function mount(root,task) {
+    if(!root)return;
+    const available=task?.shortcode&&task.creation_mode!=='self_shot';
+    root.hidden=!available;
+    if(!available){root.replaceChildren();delete root._referenceTask;return;}
+    const key=task.id+':'+task.shortcode;
+    if(root._referenceTask===key)return;
+    root._referenceTask=key;
+    root.innerHTML='<details class="studio-reference-tools"><summary>보조 도구</summary><div class="reference-tools-body"><p>필요할 때 원본을 기준으로 자료를 따로 추출합니다. 추출 결과는 현재 제작에 자동으로 반영되지 않습니다.</p><div class="reference-tools-actions"><button type="button" class="secondary" id="source-download">편집용 영상 후보 찾기</button><button type="button" class="secondary" id="transcript-extract">원본 대사·화면 글자 추출</button></div><div class="source-status" id="source-status" role="status" hidden></div><div class="source-status transcript-status" id="transcript-status" role="status" hidden></div></div></details>';
+    const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const jobs=create({modal:root,esc});
+    const source=root.querySelector('#source-download'),transcript=root.querySelector('#transcript-extract');
+    source.onclick=()=>jobs.startSourceJob(task.shortcode,source);
+    transcript.onclick=()=>jobs.startTranscriptJob(task.shortcode,transcript);
+  }
+  window.ReferenceJobs = {create,mount};
 })();

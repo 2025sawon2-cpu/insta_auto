@@ -51,6 +51,49 @@ def _settings(tmp_path: Path) -> Settings:
                     voicebench_poll_interval=.01, voicebench_timeout=10)
 
 
+def test_increasing_completed_audio_segments_survive_total_elapsed_timeout(tmp_path, monkeypatch):
+    from hotpost import operation_progress
+    clock = [0]
+    monkeypatch.setattr(operation_progress.time, 'monotonic', lambda: clock[0])
+    class Advancing(Session):
+        def get(self, url, **kwargs):
+            if url.endswith('/audio'):
+                return Response(content=self.wav)
+            self.gets += 1
+            return Response({'id':17, 'status':'succeeded' if self.gets == 4 else 'running',
+                             'completed_segments':self.gets, 'segment_count':4})
+    def sleep(_): clock[0] += 6
+    session = Advancing(valid_wav())
+    VoiceBenchAdapter(_settings(tmp_path), session=session, sleep=sleep).synthesize('실제 대본', tmp_path/'data'/'voice.wav')
+    assert clock[0] == 24 and session.posts == 1
+
+
+def test_running_heartbeat_without_audio_progress_stops_without_resubmit(tmp_path, monkeypatch):
+    from hotpost import operation_progress
+    clock = [0]
+    monkeypatch.setattr(operation_progress.time, 'monotonic', lambda: clock[0])
+    class Stalled(Session):
+        def get(self, url, **kwargs):
+            self.gets += 1
+            return Response({'id':17, 'status':'running', 'completed_segments':0,
+                             'message':f'heartbeat {self.gets}'})
+    def sleep(_): clock[0] += 6
+    session = Stalled(valid_wav())
+    with pytest.raises(TimeoutError):
+        VoiceBenchAdapter(_settings(tmp_path), session=session, sleep=sleep).synthesize('실제 대본', tmp_path/'data'/'voice.wav')
+    assert session.posts == 1 and session.gets == 3
+
+
+def test_late_voice_result_cannot_replace_current_audio_when_claim_is_lost(tmp_path):
+    target = tmp_path/'data'/'voice.wav'; target.parent.mkdir(); target.write_bytes(b'existing approved audio')
+    from hotpost.studio_store import StaleClaim
+    def lost(): raise StaleClaim('new owner')
+    with pytest.raises(StaleClaim):
+        VoiceBenchAdapter(_settings(tmp_path), session=Session(valid_wav()), sleep=lambda _:None).synthesize(
+            '실제 대본', target, before_save=lost)
+    assert target.read_bytes() == b'existing approved audio'
+
+
 @pytest.mark.parametrize('status,data,expected', [
     (200, {'status': 'released', 'released': True}, 'released'),
     (200, {'status': 'busy', 'released': False, 'active_jobs': 1}, 'busy'),
@@ -227,3 +270,72 @@ def test_explicit_retry_only_replaces_terminal_request(tmp_path,status,posts):
     VoiceBenchAdapter(settings,session=session,sleep=lambda _:None).synthesize(
         '실제 대본', settings.data_dir/'voice.wav',request_id=17,retry_failed=True)
     assert session.posts==posts
+
+
+@pytest.mark.parametrize('phase', ['status', 'poll', 'audio'])
+@pytest.mark.parametrize('failure', ['connection', 'timeout', 'chunked', 'decoding', '429', '503'])
+def test_transport_wait_resumes_saved_request_without_another_post(tmp_path, phase, failure, monkeypatch):
+    import requests
+    from hotpost.model_service import ModelServiceUnavailable
+    monkeypatch.setattr('hotpost.voicebench_adapter.time.time', lambda: 1000.0)
+    class InterruptOnce(Session):
+        interrupted = False
+        polling = 0
+        def get(self, url, **kwargs):
+            self.polling += 1
+            should_interrupt = ((phase == 'status' and not url.endswith('/audio')) or
+                                (phase == 'poll' and self.polling == 2) or
+                                (phase == 'audio' and url.endswith('/audio')))
+            if should_interrupt and not self.interrupted:
+                self.interrupted = True
+                if failure == 'connection': raise requests.ConnectionError()
+                if failure == 'timeout': raise requests.Timeout()
+                if failure == 'chunked': raise requests.exceptions.ChunkedEncodingError()
+                if failure == 'decoding': raise requests.exceptions.ContentDecodingError()
+                response = Response(status=int(failure))
+                response.headers = {'Retry-After': '120'}
+                return response
+            if phase == 'poll' and self.polling == 1:
+                return Response({'id': 17, 'status': 'running', 'completed_segments': 0})
+            return super().get(url, **kwargs)
+    session = InterruptOnce(valid_wav())
+    adapter = VoiceBenchAdapter(_settings(tmp_path), session=session, sleep=lambda _: None)
+    target = _settings(tmp_path).data_dir/'voice.wav'
+    target.parent.mkdir(); target.write_bytes(b'previous approved voice')
+    with pytest.raises(ModelServiceUnavailable) as waiting:
+        adapter.synthesize('실제 대본', target, request_id=17)
+    assert waiting.value.retry_at == (1120 if failure.isdigit() else 1060)
+    assert target.read_bytes() == b'previous approved voice'
+    result = adapter.synthesize('실제 대본', target, request_id=17)
+    assert result['voicebench_request_id'] == 17 and session.posts == 0
+    assert target.read_bytes() == valid_wav()
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_synthesis_auth_failure_remains_configuration_error(tmp_path, status):
+    import requests
+    from hotpost.model_service import ModelServiceUnavailable
+    class Unauthorized(Session):
+        def get(self, url, **kwargs):
+            response = requests.Response(); response.status_code = status
+            return response
+    with pytest.raises(requests.HTTPError) as failure:
+        VoiceBenchAdapter(_settings(tmp_path), session=Unauthorized(valid_wav())).synthesize(
+            '실제 대본', _settings(tmp_path).data_dir/'voice.wav', request_id=17,
+            require_personal_clone=True)
+    assert not isinstance(failure.value, ModelServiceUnavailable)
+
+
+def test_uncertain_submit_requires_server_idempotency_key_before_automatic_retry(tmp_path):
+    import requests
+    from hotpost.model_service import ModelServiceUnavailable
+    class Uncertain(Session):
+        def post(self, url, **kwargs):
+            raise requests.Timeout()
+    adapter = VoiceBenchAdapter(_settings(tmp_path), session=Uncertain(valid_wav()))
+    target = _settings(tmp_path).data_dir/'voice.wav'
+    with pytest.raises(RuntimeError, match='요청 기록') as unsafe:
+        adapter.synthesize('실제 대본', target)
+    assert not isinstance(unsafe.value, ModelServiceUnavailable)
+    with pytest.raises(ModelServiceUnavailable):
+        adapter.synthesize('실제 대본', target, generation_key='stable-job-script')

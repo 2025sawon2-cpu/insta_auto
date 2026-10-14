@@ -7,3 +7,7 @@ data/*
 web/data.js
 web/thumbs/
 docs/HANDOFF.md
+docs/SESSION_HANDOFF_20261015.md
+.runtime/
+remotion/node_modules/
+web/remotion-editor.js

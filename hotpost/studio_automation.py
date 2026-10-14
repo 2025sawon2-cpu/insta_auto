@@ -1,6 +1,8 @@
 """Select every newly detected hot video and hand it off to the studio."""
 from __future__ import annotations
 
+from .studio_store import change_claimed
+
 import hashlib
 import json
 import re
@@ -8,10 +10,11 @@ import subprocess
 import sys
 import time
 from .daily_hot import daily_state, date_key
+from .collection_window import in_collection_window
 
 
 def selection_key(run_key, now=None):
-    return f'{run_key}:daily-hot-all-v2:{date_key(time.time() if now is None else now)}'
+    return f'{run_key}:daily-hot-24h-v3:{date_key(time.time() if now is None else now)}'
 
 
 def all_today(report, settings, now=None):
@@ -19,7 +22,8 @@ def all_today(report, settings, now=None):
     if report.get('is_sample') or now - report.get('generated_at', 0) > settings.metric_freshness_hours * 3600:
         return []
     rows = [p for p in report.get('posts', []) if p.get('kind') in ('reel', 'video')
-            and daily_state(p, now)['hot_today'] and p.get('taken_at', 0) <= now]
+            and daily_state(p, now)['hot_today']
+            and in_collection_window(p.get('taken_at', 0), report.get('collection_started_at', report['generated_at']))]
     rows.sort(key=lambda p: (p.get('rank_score', 0), p.get('taken_at', 0)), reverse=True)
     result = []
     for rank, p in enumerate(rows, 1):
@@ -41,10 +45,20 @@ def top_two(report, settings, now=None):
 def enqueue_top(settings, report, run_key):
     if not settings.studio_auto_top_enabled or report.get('is_sample'):
         return []
+    if settings.studio_auto_start_date_kst and date_key(time.time()) < settings.studio_auto_start_date_kst:
+        return []
     from .studio import Studio
     studio = Studio(settings, workers=False)
     daily_run_key = selection_key(run_key)
-    selection = studio.store.freeze_selection(daily_run_key, all_today(report, settings))
+    limit = max(0, int(settings.studio_auto_top_limit))
+    candidates = all_today(report, settings)
+    if limit:
+        candidates = candidates[:limit]
+    selection = studio.store.freeze_selection(daily_run_key, candidates)
+    # A saved wider selection is historical evidence, not permission to start
+    # work outside the current limit. Never backfill a stopped/completed rank.
+    if limit:
+        selection = [row for row in selection if row['rank'] <= limit]
     results = []
     for row in selection:
         if not row['eligible']:
@@ -53,7 +67,7 @@ def enqueue_top(settings, report, run_key):
         task, created = studio.create(row['shortcode'], automation={
             **row, 'active':True, 'protocol':2, 'run_key':str(run_key), 'selected_at':time.time(),
             'selection_date_kst':date_key(time.time()),
-            'policy':'한국시간 오늘 최초 감지 핫 영상 전체 · 급상승순 제작 · 이전 감지일은 소모 처리', 'stage':'prepare',
+            'policy':'수집 시작 전 24시간 게시된 오늘 최초 감지 핫 영상 · 급상승순 제작', 'stage':'prepare',
             'selection_mode':'automatic', 'reviewed_by_user':False,
             'finish_selected_batch':True,
         }, with_created=True)
@@ -103,6 +117,7 @@ def ensure_worker(settings):
 
 
 def rewrite(studio, state, job):
+    job.setdefault('task_id', state['id'])
     from .studio_adapter import StudioAdapter
     from .editing_adapter import _atomic_json
     adapter = StudioAdapter(studio.settings)
@@ -113,8 +128,11 @@ def rewrite(studio, state, job):
         from .reference_context import post_caption, reference_kind
         manifest_path = Path(state.get('manifest_path', ''))
         manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.is_file() else {}
+        # The preparation manifest may contain only the display title/CTA.
+        # Subject resolution needs the full source caption, like the writer.
+        manifest = {**manifest, 'caption':post_caption(studio.settings,state) or manifest.get('caption','')}
         product = state.get('product_override') or identify_subject(manifest, state['original_text'], state.get('product') or state['title'])
-        studio.store.change(state['id'], lambda s, db: s.update(product=product))
+        change_claimed(studio.store, job, lambda s, db: s.update(product=product))
         # Benchmark the original narration, never replace its topic with B-roll.
         rewrite_video = state['reference_video']
         remote = adapter.submit(state['id'], Path(rewrite_video), state.get('reviewed_original_text', state['original_text']),
@@ -125,25 +143,30 @@ def rewrite(studio, state, job):
                                  'reference_kind':reference_kind(state),
                                  'notes':'공통 대본 계약으로 자동 제작합니다. '
                                          + state.get('rewrite_instructions',''),
-                                 'generation_key':checkpoint.get('generation_key','')})
+                                 'generation_key':checkpoint.get('generation_key',job['payload'].get('generation_key',''))})
         request_id = remote['id']
         checkpoint['studio_job_id'] = request_id
-        studio.store.checkpoint(job['id'], checkpoint)
-        studio.store.change(state['id'], lambda s, db: s.update(studio_job_id=request_id))
-    deadline = time.monotonic() + studio.settings.studio_timeout
-    while time.monotonic() < deadline:
+        studio.store.checkpoint(job, checkpoint)
+        change_claimed(studio.store, job, lambda s, db: s.update(studio_job_id=request_id))
+    from .operation_progress import ProgressWatch
+    from .model_service import ModelServiceUnavailable
+    watch=ProgressWatch(studio.settings.studio_timeout,'대본 작업 응답')
+    seen=set()
+    while True:
         remote = adapter.get(request_id)
         if checkpoint.get('retry_requested'):
             if remote['state'] in ('failed', 'cancelled', 'interrupted'):
                 remote = adapter.retry(state['id'], request_id)
                 request_id = remote['id']
                 checkpoint['studio_job_id'] = request_id
-                studio.store.change(state['id'], lambda s, db: s.update(studio_job_id=request_id))
+                change_claimed(studio.store, job, lambda s, db: s.update(studio_job_id=request_id))
             checkpoint.pop('retry_requested', None)
-            studio.store.checkpoint(job['id'], checkpoint)
+            studio.store.checkpoint(job, checkpoint)
         if remote['state'] == 'completed':
+            if job.get('claim_token'):
+                studio.store.assert_owned(job)
             _atomic_json(studio.folder(state['id']) / 'script-candidates.json', remote['result'])
-            studio.store.change(state['id'], lambda s, db: s.update(
+            change_claimed(studio.store, job, lambda s, db: s.update(
                 script_candidates=remote['result']['scripts'],
                 benchmark_analysis=remote['result'].get('benchmark',{}).get('analysis',{})))
             candidates = remote['result'].get('scripts', [])
@@ -169,17 +192,28 @@ def rewrite(studio, state, job):
             else:
                 index, item = valid[0]
                 evaluation = {'reason':'버전이 일치하는 첫 번째 후보 자동 선택 · 내용 판단은 완성 영상에서'}
+            if job.get('claim_token'):
+                studio.store.assert_owned(job)
             _atomic_json(studio.folder(state['id']) / 'script-candidates.json', remote['result'])
             return {'text':item['text'], 'script_candidates':candidates, 'studio_job_id':request_id,
                     'benchmark_analysis':remote['result'].get('benchmark',{}).get('analysis',{}),
                     'selected_candidate':index, 'rewrite_review':item['rewrite_review'],
                     'top_pick':evaluation, 'selection_reason':evaluation['reason']}
         if remote['state'] in ('failed', 'cancelled', 'interrupted'):
+            failure=remote.get('result') or {}
+            if failure.get('error_reason')=='model_capacity':
+                raise ModelServiceUnavailable(str(remote.get('error')),failure.get('retry_at'),failure.get('attempted',True))
             raise ValueError('대본 재가공 실패: ' + str(remote.get('error') or remote.get('message') or request_id)[:500])
+        identity=(remote['state'],remote.get('progress'))
+        if identity not in seen:
+            seen.add(identity);watch.observe('states',len(seen))
+        if remote['state']=='queued':watch.reset()
+        adapter.jobs.observe_progress(request_id,watch)
+        watch.check()
         message = '대본 재가공 · ' + str(remote.get('message') or remote['state'])[:250]
         progress = round(float(remote.get('progress') or 0) * 100)
         if (message, progress) != checkpoint.get('_last_progress'):
-            studio.store.change(state['id'], lambda s, db: s.update(message=message, progress=progress))
+            change_claimed(studio.store, job, lambda s, db: s.update(message=message, progress=progress))
             checkpoint['_last_progress'] = (message, progress)
         time.sleep(2)
     raise RuntimeError('대본 생성 대기 시간 초과. 재시도하면 기존 내장 Codex 작업을 조회합니다.')
@@ -189,19 +223,35 @@ def identify_subject(manifest, speech, fallback):
     from .source_queries import product_query_plan
     caption = manifest.get('caption', '')
     text = caption+'\n'+speech
+    from .source_planning import primary_subject
+    # The accepted source manifest stores reviewed frame text with its query
+    # evidence; it does not duplicate screen_text at the top level.
+    query_evidence = manifest.get('product_evidence',{}).get('query_evidence',{})
+    screen_text = manifest.get('screen_text') or query_evidence.get('screen_text','')
+    if isinstance(screen_text,list):
+        screen_text = ' '.join(str(row.get('text','')) if isinstance(row,dict) else str(row) for row in screen_text)
+    evidence = {'caption':caption, 'speech':speech, 'screen_text':screen_text}
+    subject = primary_subject(manifest.get('product_evidence',{}).get('primary_subject'), evidence)
+    if subject:
+        return subject['name']
     # A cabinet's contents are not the promoted product. Require storage
     # evidence before resolving an implicit cabinet name from the narration.
     if re.search(r'진열장|장식장|진열.{0,35}(?:문|닫)|(?:문|닫).{0,35}진열', text, re.S):
         return '원목 진열장' if re.search(r'원목|대나무', text) else '진열장'
     # Direct wording takes precedence over broad visual catalog guesses.
     direct = product_query_plan(caption, [], [], {'speech':speech}, [])['products']
-    products = direct or manifest.get('product_evidence', {}).get('products', [])
+    products = direct or [p for p in manifest.get('product_evidence', {}).get('products', [])
+                          if set(p.get('sources', [])) & {'caption','speech','screen_text'}]
     if products:
         return (products[0].get('ko') or products[0].get('en') or fallback)[:300]
     # Keep observed context when no category matches; never invent a model name.
-    lines = [re.sub(r'^[^가-힣A-Za-z0-9]+', '', line).strip() for line in (caption+'\n'+speech).splitlines()]
-    lines = [line for line in lines if len(line)>8 and not re.search(r'댓글|남겨|DM|프로필|팔로우|숨김|메시지|파트너스',line,re.I)]
-    return (' '.join(lines[:2]) or fallback)[:300]
+    # A story introduction is not an unknown product's name. The full source
+    # evidence still reaches the writer, while unresolved metadata stays honest.
+    noun = re.sub(r'^[^가-힣A-Za-z0-9]+', '', str(fallback)).strip()
+    if 2 <= len(noun) <= 50 and len(noun.split()) <= 6 and not re.search(
+            r'댓글|남겨|DM|프로필|팔로우|숨김|메시지|파트너스|[.!?]|거예요|전화|티타임',noun,re.I):
+        return noun
+    return '원작 중심 대상 미확인'
 
 
 def main():

@@ -1,0 +1,102 @@
+/* Approved four-tab concept. Scoped to the item modal; controls keep their APIs. */
+html body.studio-glass #work-drawer{--sd-bg:#f5f6f9;--sd-surface:#fff;--sd-text:#111c36;--sd-muted:#54627b;--sd-line:#e3e7ef;--sd-primary:#2455e6;--sd-soft:#edf2ff;background:var(--sd-surface);width:min(1320px,calc(100vw - 64px));max-width:none;inset:28px 32px 28px auto;height:calc(100dvh - 56px);border:0;border-radius:22px;box-shadow:0 28px 100px #101a3940}
+html[data-theme=dark] body.studio-glass #work-drawer{--sd-bg:#192439;--sd-surface:#111c2e;--sd-text:#f0f4ff;--sd-muted:#b4c2d9;--sd-line:#2c3b53;--sd-primary:#abc5ff;--sd-soft:#243754}
+html body.studio-glass #work-drawer.expanded{inset:12px;width:calc(100vw - 24px);height:calc(100dvh - 24px)}
+.work-backdrop{background:#18243c65;backdrop-filter:blur(3px)}
+html body.studio-glass #work-drawer .drawer-head{padding:26px 32px 12px;border:0;background:var(--sd-surface);align-items:flex-start}
+html body.studio-glass #work-drawer .drawer-head>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;min-width:0}
+html body.studio-glass #work-drawer #drawer-code{display:block;flex-basis:100%;margin:0;color:var(--sd-muted);font-size:14px!important;letter-spacing:0}
+html body.studio-glass #work-drawer #drawer-title{font-size:clamp(23px,2.5vw,34px);font-weight:750;line-height:1.35;letter-spacing:-.8px;max-width:100%;overflow-wrap:anywhere}
+html body.studio-glass #work-drawer #drawer-status{display:inline-flex;align-items:center;margin:0;padding:5px 13px;border-radius:30px;background:var(--sd-soft);color:var(--sd-primary);font-weight:650;font-size:14px!important}
+html body.studio-glass #work-drawer #drawer-status[data-state=completed]{background:var(--sd-success);color:var(--sd-success-text)}
+html body.studio-glass #work-drawer #drawer-status:is([data-state=error],[data-state=paused]){background:var(--sd-warning);color:var(--sd-warning-text)}
+html body.studio-glass #work-drawer :is(#journey-panel,#work-hero){display:none}
+html body.studio-glass #work-drawer[data-protocol="1"] #work-hero{display:block}
+html body.studio-glass #work-drawer .drawer-controls button{background:transparent;border:0;min-height:48px;color:var(--sd-muted)}
+html body.studio-glass #work-drawer #detail-tabs{padding:0 32px;gap:20px;border-bottom:1px solid var(--sd-line);background:var(--sd-surface)}
+html body.studio-glass #work-drawer #detail-tabs button{flex:0 0 auto;min-width:100px;min-height:64px;justify-content:center;align-items:center;padding:12px 16px;flex-direction:row;border:0!important;border-bottom:3px solid transparent!important;border-radius:0;background:transparent!important;color:var(--sd-muted)!important;box-shadow:none!important}
+html body.studio-glass #work-drawer .detail-tabs#detail-tabs button:is([aria-pressed=true],[aria-pressed=false]) strong{color:inherit!important;font-size:18px!important}
+html body.studio-glass #work-drawer #detail-tabs button:not(:focus-visible){outline:0}
+html body.studio-glass #work-drawer #detail-tabs button[aria-pressed=true]{background:transparent!important;border:0!important;border-bottom:3px solid var(--sd-primary)!important;color:var(--sd-primary)!important;border-bottom-color:var(--sd-primary)!important;box-shadow:none!important}
+html body.studio-glass #work-drawer #detail-tabs :is(.glass-step-number,.glass-step-status,small){display:none}
+html body.studio-glass #work-drawer #detail-tabs button[data-live=true]::after{display:block;content:'';width:7px;height:7px;border-radius:50%;background:var(--sd-primary);position:static}
+html body.studio-glass #work-drawer .drawer-scroll{padding:28px 32px 0;background:var(--sd-surface);scroll-padding-bottom:120px}
+html body.studio-glass #work-drawer :is(.sd-stage,.pf-summary,.re-host){margin:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+html body.studio-glass #work-drawer h3{font-size:28px!important;letter-spacing:-.6px}
+html body.studio-glass #work-drawer .pf-editor{margin:0}
+html body.studio-glass #work-drawer .pf-runtime[data-kind=completed]{display:none}
+html body.studio-glass #work-drawer .pf-runtime:not([data-kind=completed]){display:block}
+html body.studio-glass #work-drawer .sd-status{border:0;border-radius:12px;padding:16px 20px;margin-bottom:24px}
+html body.studio-glass #work-drawer :is(.sd-disclosed,.sd-script-card,.sd-audio-card,.sd-empty){border:0;background:var(--sd-bg);box-shadow:none}
+html body.studio-glass #work-drawer :is(.sd-details-button,details>summary){border:0;border-bottom:1px solid var(--sd-line);border-radius:0;background:transparent;padding:16px 0;min-height:56px;box-shadow:none}
+html body.studio-glass #work-drawer :is(button,input,select,textarea){border-color:var(--sd-line);box-shadow:none}
+html body.studio-glass #work-drawer :is(.sd-secondary,[data-pf=discard-feedback]){background:var(--sd-bg);border:0;min-height:52px;padding:12px 20px}
+html body.studio-glass #work-drawer :is(.sd-primary,[data-pf=make-video],.pf-primary-next,.re-primary){min-height:56px;border-radius:12px;padding:14px 24px;font-size:18px!important}
+.sd-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+html body.studio-glass #work-drawer .sd-script-layout{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(270px,1fr);gap:32px;align-items:start}
+.sd-script-main,.sd-script-assistant,.sd-source-main{min-width:0}
+html body.studio-glass #work-drawer .sd-script-assistant{border-left:1px solid var(--sd-line);padding-left:28px}
+html body.studio-glass #work-drawer .sd-script-assistant>p{margin-bottom:24px}
+html body.studio-glass #work-drawer .sd-script-assistant>.sd-disclosure:first-of-type>.sd-details-button{padding:18px;background:var(--sd-bg);border:0;border-radius:12px}
+html body.studio-glass #work-drawer .glass-writing{background:var(--sd-bg);border:0;border-radius:14px;padding:24px;margin:0;box-shadow:none}
+html body.studio-glass #work-drawer #detail textarea[data-field=script]{font-size:23px!important;font-weight:400!important;line-height:1.9!important;min-height:310px;padding:0;border:0;background:transparent;color:var(--sd-text)}
+html body.studio-glass #work-drawer .sd-writing-meta{display:flex;justify-content:space-between;gap:12px;color:var(--sd-muted);font-size:14px;padding-top:20px}
+html body.studio-glass #work-drawer .sd-voice-stage h3{font-size:22px!important}
+html body.studio-glass #work-drawer .sd-script-assistant .pf-evidence-grid{grid-template-columns:minmax(0,1fr)}
+html body.studio-glass #work-drawer .sd-script-assistant .sd-disclosed{padding:16px}
+html body.studio-glass #work-drawer .sd-actionbar{position:sticky;bottom:0;z-index:5;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px 24px;margin:28px -32px 0;padding:20px 32px;background:var(--sd-surface);border:0;border-top:1px solid var(--sd-line);border-radius:0;box-shadow:none}
+html body.studio-glass #work-drawer .sd-actionbar>[data-change-status]{grid-column:2;grid-row:1;min-width:0}
+html body.studio-glass #work-drawer .sd-actionbar>[data-pf=discard-feedback]{grid-column:1;grid-row:1}
+html body.studio-glass #work-drawer .sd-actionbar>[data-pf=make-video]{grid-column:3;grid-row:1}
+html body.studio-glass #work-drawer .sd-actionbar>.pf-impact{display:none}
+html body.studio-glass #work-drawer .sd-actionbar>[data-action-notice]{grid-column:1/-1}
+html body.studio-glass #work-drawer .pf-change-status{border:0;background:none;padding:0;margin:0}
+html body.studio-glass #work-drawer .pf-change-status strong{font-size:15px;font-weight:500;color:var(--sd-muted)}
+html body.studio-glass #work-drawer .pf-change-status p{font-size:14px!important;margin:4px 0}
+html body.studio-glass #work-drawer .sd-source-layout{display:grid;grid-template-columns:minmax(0,3fr) minmax(250px,1fr);gap:24px;align-items:start}
+html body.studio-glass #work-drawer .sd-source-sidebar{background:var(--sd-bg);border-radius:16px;padding:24px;position:sticky;top:0;min-width:0}
+html body.studio-glass #work-drawer .pf-source-selection{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:0;border:0;background:none}
+html body.studio-glass #work-drawer .sd-source-total{font-size:64px;line-height:1.1;color:var(--sd-primary);letter-spacing:-3px}
+html body.studio-glass #work-drawer .sd-source-total b{font-weight:750}
+html body.studio-glass #work-drawer .sd-source-total span{font-size:40px;letter-spacing:-1px}
+html body.studio-glass #work-drawer .pf-source-tools{display:flex;flex-wrap:wrap;gap:8px}
+html body.studio-glass #work-drawer .pf-source-tools button{font-size:15px!important;min-height:44px;background:var(--sd-surface);border:0}
+html body.studio-glass #work-drawer .pf-source-upload{padding:24px 0 0;margin-top:24px;border:0;border-top:1px solid var(--sd-line);background:none}
+html body.studio-glass #work-drawer .sd-source-sidebar .upload-dropzone{display:flex;flex-direction:column;align-items:stretch;gap:12px;min-width:0;padding:16px;text-align:left}
+html body.studio-glass #work-drawer .sd-source-sidebar .upload-symbol{align-self:center}
+html body.studio-glass #work-drawer .sd-source-sidebar .upload-dropzone :is(h4,p,small){min-width:0;margin:0;line-height:1.6;word-break:keep-all;overflow-wrap:anywhere}
+html body.studio-glass #work-drawer .sd-source-sidebar .upload-dropzone button{width:100%;min-width:0;white-space:normal;min-height:48px;padding:12px;font-size:16px!important}
+html body.studio-glass #work-drawer .pf-source-group{border:0;background:none;padding:0;margin:0 0 24px}
+html body.studio-glass #work-drawer .pf-sources{grid-template-columns:repeat(3,minmax(0,1fr));gap:24px 16px}
+html body.studio-glass #work-drawer .pf-source-card{border:0;background:none;padding:0;box-shadow:none}
+html body.studio-glass #work-drawer .pf-source-card video{width:100%;height:auto;aspect-ratio:4/3;object-fit:contain;border-radius:10px;background:#172033}
+html body.studio-glass #work-drawer .sd-source-title{display:block;margin:10px 0 4px;font-size:17px;line-height:1.5;overflow-wrap:anywhere}
+html body.studio-glass #work-drawer .pf-source-card .pf-source-usage{font-size:13px!important}
+html body.studio-glass #work-drawer .pf-source-card details{margin:0}
+html body.studio-glass #work-drawer .pf-source-card summary{font-size:14px!important;min-height:40px;padding:6px 0}
+html body.studio-glass #work-drawer .pf-source-save{grid-column:1/-1;padding:0;border:0;background:none}
+html body.studio-glass #work-drawer .pf-summary>.pf-heading{text-align:center;display:block;margin:4px 0 24px}
+html body.studio-glass #work-drawer .pf-summary>.pf-heading h3{font-size:32px!important}
+html body.studio-glass #work-drawer .pf-comparison-grid{gap:28px}
+html body.studio-glass #work-drawer .pf-comparison>header{display:none}
+html body.studio-glass #work-drawer .pf-summary>.pf-heading:not(:first-child){display:flex;justify-content:center;align-items:center;gap:16px;margin:20px 0 0}
+html body.studio-glass #work-drawer .pf-summary>.pf-heading:not(:first-child) h4{font-size:16px;font-weight:500}
+html body.studio-glass #work-drawer .pf-version-help{max-width:640px;margin:0 auto 20px}
+html body.studio-glass #work-drawer .sd-result-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid var(--sd-line);padding:20px 0;margin-top:20px}
+html body.studio-glass #work-drawer .sd-result-actions .pf-download-final{margin:0;min-width:260px}
+html body.studio-glass #work-drawer .pf-comparison-grid>*{background:none;border:0;padding:0;box-shadow:none}
+html body.studio-glass #work-drawer .pf-comparison-grid video{width:100%;height:min(45vh,440px);max-height:none;object-fit:contain;border-radius:12px;background:#141a24}
+html body.studio-glass #work-drawer .pf-version-picker{max-width:640px;margin:0 auto 24px}
+html body.studio-glass #work-drawer .pf-downloads{border:0;padding:0;background:none}
+html body.studio-glass #work-drawer .pf-download-final{margin:24px 0 12px auto;max-width:380px;border:0;background:var(--sd-primary);color:var(--sd-primary-text);border-radius:12px;padding:16px 24px;min-height:60px;box-shadow:none}
+html body.studio-glass #work-drawer .pf-download-final :is(strong,small){color:inherit!important}
+html body.studio-glass #work-drawer .pf-download-final small{display:none}
+html body.studio-glass #work-drawer .re-workspace{grid-template-columns:minmax(180px,.9fr) minmax(240px,1.5fr) minmax(230px,1fr);gap:24px}
+html body.studio-glass #work-drawer .re-tools>button{border:0;background:var(--sd-bg);min-height:56px}
+html body.studio-glass #work-drawer .re-canvas{max-width:260px}
+html body.studio-glass #work-drawer .re-properties{border-left:1px solid var(--sd-line)}
+html body.studio-glass #work-drawer .re-footer{position:sticky;bottom:0;background:var(--sd-surface);z-index:5;padding:18px 0;margin-top:16px}
+html body.studio-glass #work-drawer :is(button,a,input,textarea,select):focus-visible{outline:3px solid var(--sd-focus);outline-offset:3px}
+@media(max-width:700px){html body.studio-glass #work-drawer .sd-result-actions{flex-wrap:wrap}html body.studio-glass #work-drawer .sd-result-actions .pf-download-final{min-width:0;width:100%}}
+@media(max-width:1000px){html body.studio-glass #work-drawer{inset:16px;width:calc(100vw - 32px);height:calc(100dvh - 32px)}html body.studio-glass #work-drawer .sd-script-layout{grid-template-columns:minmax(0,1.6fr) minmax(230px,1fr);gap:24px}html body.studio-glass #work-drawer .pf-sources{grid-template-columns:repeat(2,minmax(0,1fr))}html body.studio-glass #work-drawer .sd-source-layout{grid-template-columns:minmax(0,1fr) 240px}html body.studio-glass #work-drawer .re-workspace{grid-template-columns:160px minmax(200px,1fr)}html body.studio-glass #work-drawer .re-properties{grid-column:1/-1;border-left:0}}
+@media(max-width:700px){html body.studio-glass #work-drawer{inset:0;width:100vw;height:100dvh;border-radius:0}html body.studio-glass #work-drawer .drawer-head{padding:18px 18px 8px}html body.studio-glass #work-drawer #expand-work{display:none}html body.studio-glass #work-drawer #detail-tabs{padding:0 12px;gap:0}html body.studio-glass #work-drawer #detail-tabs button{flex:1;min-width:0;min-height:58px;padding:10px 8px}html body.studio-glass #work-drawer #detail-tabs button strong{font-size:16px!important;white-space:nowrap}html body.studio-glass #work-drawer .drawer-scroll{padding:22px 18px 0}html body.studio-glass #work-drawer :is(.sd-script-layout,.sd-source-layout){display:flex;flex-direction:column;gap:24px}html body.studio-glass #work-drawer :is(.sd-script-main,.sd-source-main,.sd-script-assistant,.sd-source-sidebar){width:100%;box-sizing:border-box}html body.studio-glass #work-drawer .sd-script-assistant{border-left:0;border-top:1px solid var(--sd-line);padding:24px 0 0}html body.studio-glass #work-drawer .sd-source-sidebar{position:static}html body.studio-glass #work-drawer #detail textarea[data-field=script]{font-size:21px!important}html body.studio-glass #work-drawer .glass-writing{padding:20px}html body.studio-glass #work-drawer .sd-actionbar{margin:24px -18px 0;padding:16px 18px;grid-template-columns:auto minmax(0,1fr);gap:10px}html body.studio-glass #work-drawer .sd-actionbar>[data-change-status]{grid-column:1/-1;grid-row:1}html body.studio-glass #work-drawer .sd-actionbar>[data-pf=discard-feedback]{grid-column:1;grid-row:2}html body.studio-glass #work-drawer .sd-actionbar>[data-pf=make-video]{grid-column:2;grid-row:2;font-size:16px!important;padding:12px}html body.studio-glass #work-drawer .pf-comparison-grid{grid-template-columns:1fr}html body.studio-glass #work-drawer .re-workspace{display:flex;flex-direction:column}html body.studio-glass #work-drawer .re-canvas{max-width:240px}html body.studio-glass #work-drawer h3{font-size:25px!important}html body.studio-glass #work-drawer .pf-download-final{max-width:none}}

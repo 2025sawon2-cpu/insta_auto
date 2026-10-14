@@ -15,7 +15,6 @@
       const brief=t.self_shot||{},research=t.research||{};
       return `<div class="self-shot-brief"><h4>제품 정보와 집필 근거</h4><p>${esc(brief.product||t.title)}</p>${brief.details?`<p>${esc(brief.details)}</p>`:''}${brief.experience?`<p>직접 제공한 사용 경험: ${esc(brief.experience)}</p>`:''}${(research.facts||[]).map(f=>`<p>${esc(f.text)}<br><a href="${esc(f.source_url)}" target="_blank" rel="noopener">${esc(f.source_title||'출처 확인')}</a></p>`).join('')}${(research.warnings||[]).map(w=>`<p class="pf-help">${esc(window.StudioBoard.message(w))}</p>`).join('')}${brief.script_mode==='manual'?'<p>직접 입력한 대본을 그대로 사용합니다.</p>':''}</div>`;
     }
-    if(expanded)return `<div class="pf-original sd-reference"><div class="pf-evidence-grid"><div>${t.reference_url?`<video data-reference-preview controls playsinline preload="metadata" src="${esc(t.reference_url)}"></video>`:'<p>원본 영상 미리보기가 없습니다.</p>'}</div><article><h4>${esc(referenceLabel)}</h4><p class="sd-script-text">${esc(t.reviewed_original_text??t.original_text??'아직 원본 대본이 없습니다.')}</p></article></div></div>`;
     const evidence=t.original_evidence||{},speech=evidence.speech||[],screen=evidence.screen_text||[];
     return `${expanded?'<div class="pf-original">':`<details class="pf-original"><summary>${esc(referenceLabel)} 확인 · 필요할 때 교정</summary>`}<p class="pf-help">${esc(referenceHelp)} 교정본 저장은 제작 대본·음성을 바꾸지 않으며, 다음 AI 수정 요청과 문장 검사의 참고 자료로 사용됩니다.</p>
       ${evidence.speech_unavailable&&!visual&&!mixed?'<p class="pf-version-note">원본의 말을 자동으로 가져오지 못했습니다. 영상을 들으며 아래에 직접 입력하고 ‘참고 내용 저장’을 누를 수 있습니다.</p>':''}<div class="pf-evidence-grid">${t.reference_url?`<video data-reference-preview controls playsinline preload="metadata" src="${esc(t.reference_url)}"></video>`:'<p>원본 영상 미리보기가 없습니다. 확보한 원본을 확인한 뒤 교정하세요.</p>'}<div>${speech.length?`<details><summary>시간별 자동 인식 발화</summary>${speech.map(row=>`<p><button data-reference-seek="${Number(row.start)||0}" ${t.reference_url?'':'disabled'}>${(Number(row.start)||0).toFixed(1)}초 ▷</button> ${esc(row.text)}</p>`).join('')}</details>`:''}<label>${esc(referenceLabel)} · 필요할 때 교정<textarea data-field="original" maxlength="12000">${esc(t.reviewed_original_text??t.original_text??'')}</textarea></label><button data-pf="save-original">참고 내용 저장</button><details><summary>자동 인식 원문 · 보존됨</summary><p class="pf-text">${esc(t.reference_speech_text??t.original_text??'아직 발화를 추출하지 못했어요.')}</p></details>${screen.length?`<details><summary>화면 속 글자 · 발화와 별도 자료</summary>${screen.map(row=>`<p>${esc(row.text)}</p>`).join('')}</details>`:''}</div></div>${expanded?'</div>':'</details>'}`;
@@ -90,18 +89,16 @@
     const final=url('export');
     const materials=`<div class="pf-download-grid">${files.map(([key,title,description,format,href,icon])=>{const content=`<span class="pf-file-icon">${fileIcon(icon)}</span><span class="pf-file-copy"><strong>${title}</strong><small>${description}</small><span class="pf-file-format">${href?format:'아직 없음'}</span></span><span class="pf-file-save">${href?fileIcon('download'):''}</span>`;return href?`<a class="pf-file-card" data-download-asset="${key}" href="${esc(href)}" download aria-label="${title} ${format} 다운로드">${content}</a>`:`<div class="pf-file-card is-unavailable" data-download-asset="${key}" aria-disabled="true">${content}</div>`;}).join('')}</div>${url('project')?`<footer class="pf-download-edit"><p>CapCut에서 바꾼 내용은 이 화면에 자동 반영되지 않습니다.</p><button type="button" data-pf="open-capcut" data-edit-id="${esc(run.artifacts.edit_id)}">CapCut에서 편집하기 · 별도 앱</button></footer>`:''}`;
     return `<section class="pf-downloads" aria-label="영상과 제작 자료 받기">
-      ${final?`<a class="pf-download-final" href="${esc(final)}" download><span class="pf-file-icon">${fileIcon('video')}</span><span class="pf-file-copy"><strong>완성 영상 내려받기</strong><small>지금 보고 있는 버전의 영상</small></span>${fileIcon('download')}</a>`:'<p class="sd-result-empty">아직 완성 영상이 없습니다. 제작이 끝나면 내려받기 버튼이 나타납니다.</p>'}
+      <div class="sd-result-actions"><button type="button" class="sd-secondary" data-pf-tab="edit">최신 편집본 수정하기</button>${final?`<a class="pf-download-final" href="${esc(final)}" download><span class="pf-file-icon">${fileIcon('video')}</span><span class="pf-file-copy"><strong>완성 영상 내려받기</strong><small>지금 보고 있는 버전의 영상</small></span>${fileIcon('download')}</a>`:'<p class="sd-result-empty">아직 완성 영상이 없습니다. 제작이 끝나면 내려받기 버튼이 나타납니다.</p>'}</div>
       ${window.StudioDetail.disclosure(t,'materials-'+run.id,'대본·음성 등 제작 자료 받기',materials)}</section>`;
   }
   function summary(t,selected){
     const runs=t.pipeline||[], active=runs.find(r=>r.id===t.run_id)||runs.at(-1);
     const display=runs.find(r=>r.id===selected)||runs.find(r=>r.id===t.latest_completed_run_id)||active;
     if(!display)return '';
-    return `<div class="pf-summary"><div class="pf-heading"><h3>${display.video_url?'완성 영상':'제작 결과'}</h3></div>
-      ${window.StudioWorkspace.versionPicker(t,display)}
-      ${Object.keys(t.feedback||{}).length||t.pending_reproduction?'<p class="pf-version-note">저장한 변경사항은 이 결과물에 아직 반영되지 않았어요. 새 버전이 완성되면 비교해 주세요.</p>':''}${display.id!==t.run_id?'<p class="pf-version-note">이전 제작 버전을 보고 있어요. 진행 중인 수정은 이 영상에 반영되지 않았습니다.</p>':''}${window.StudioWorkspace.comparison(t,display)}
+    return `<div class="pf-summary"><div class="pf-heading"><h3>${display.video_url?'완성 영상을 확인하세요':'제작 결과'}</h3><p>${display.video_url?'영상을 재생하고, 원하는 버전을 내려받으세요.':'제작이 끝나면 결과가 여기에 표시됩니다.'}</p></div>
+      ${Object.keys(t.feedback||{}).length||t.pending_reproduction?'<p class="pf-version-note">저장한 변경사항은 이 결과물에 아직 반영되지 않았어요. 새 버전이 완성되면 비교해 주세요.</p>':''}${display.id!==t.run_id?'<p class="pf-version-note">이전 제작 버전을 보고 있어요. 수정은 최신 편집본에 적용됩니다. 내려받기는 지금 선택한 버전을 사용합니다.</p>':''}${window.StudioWorkspace.comparison(t,display)}${window.StudioWorkspace.versionPicker(t,display)}
       ${t.creation_mode==='self_shot'?(item(t,'edits',display.artifacts.edit_id)?.plan?.warnings||[]).filter(w=>w.startsWith('촬영 장면 재사용:')).map(w=>`<p class="pf-version-note" data-owned-reuse>${esc(w)}</p>`).join(''):''}${downloads(t,display)}${display.video_url?window.StudioDetail.disclosure(t,'result-review-'+display.id,'영상 확인 체크리스트',resultReview(t,display)):''}
-      <button type="button" class="sd-secondary" data-pf-tab="edit">장면·자막 수정하기</button>
       ${t.automation?.protocol!==2?'<details><summary>자동 제작 도구</summary><button type="button" data-pf="start-auto">이 작업을 자동 제작으로 이어가기</button></details>':''}<details class="pf-result-progress"><summary>이번 제작의 단계별 기록</summary>${progress(t,active)}</details></div>`;
   }
   function benchmarkAnalysis(a){
@@ -125,7 +122,7 @@
   function impact(f){return Object.keys(f).length?'아래 제작 버튼을 누르면 수정 내용을 영상에 반영합니다. 기존 완성 영상은 보관됩니다.':'대본이나 설정을 바꾸면 영상 만들기 버튼을 누를 수 있습니다.';}
   function runtime(t){
     const control=t.automation?.active&&t.status!=='completed'?window.StudioDetail.disclosure(t,'production-control','제작 제어 더 보기','<button type="button" class="sd-secondary" data-pf="pause-auto">자동 제작 잠시 멈추기</button><p>진행 중인 작업은 마무리될 수 있습니다.</p>'):'';
-    return `<div class="pf-runtime">${window.StudioDetail.status(t,'runtime')}${control}</div>`;
+    return `<div class="pf-runtime" data-kind="${window.StudioDetail.view(t).kind}">${window.StudioDetail.status(t,'runtime')}${control}</div>`;
   }
   function syncFields(root,id){
     const fields=[...root.querySelectorAll('[data-field]')];
@@ -189,6 +186,8 @@
   function refreshActions(root){
     const t=root._task,local=JSON.parse(localStorage.getItem(storageKey(t))||'{}'),f=t.feedback||{};
     const changed=Object.keys(local).some(k=>/^(script$|speed$|pronunciation$|voice-profile$|source:)/.test(k))||Object.keys(f).length>0;
+    const voiceNote=root.querySelector('[data-voice-draft-note]');
+    if(voiceNote)voiceNote.hidden=!Object.keys(local).some(k=>/^(script|speed|pronunciation|voice-profile)$/.test(k))&&!['script_text','speed','pronunciations','voice_profile_id','regenerate_voice'].some(k=>k in f);
     const button=root.querySelector('[data-pf="make-video"]');
     if(button)button.disabled=!changed||!!t.pending_reproduction||!!root._saving;
     const discard=root.querySelector('[data-pf="discard-feedback"]');if(discard)discard.disabled=!Object.keys(local).length&&!Object.keys(f).length||!!root._saving;
@@ -202,14 +201,14 @@
     updateSourceSearch(root,t);
     const status=root.querySelector('[data-change-status]');if(status)status.innerHTML=changeStatus(t);
     const runningNote=root.querySelector('.pf-runtime');
-    if(runningNote){const temp=document.createElement('div');temp.innerHTML=runtime(t);if(runningNote.querySelector('.pf-script-read')?.open&&temp.querySelector('.pf-script-read'))temp.querySelector('.pf-script-read').open=true;const content=temp.firstElementChild.innerHTML;if(runningNote.innerHTML!==content)runningNote.innerHTML=content;}
+    if(runningNote){runningNote.dataset.kind=window.StudioDetail.view(t).kind;const temp=document.createElement('div');temp.innerHTML=runtime(t);if(runningNote.querySelector('.pf-script-read')?.open&&temp.querySelector('.pf-script-read'))temp.querySelector('.pf-script-read').open=true;const content=temp.firstElementChild.innerHTML;if(runningNote.innerHTML!==content)runningNote.innerHTML=content;}
     for(const box of root.querySelectorAll('[data-ai-status]')){
       const kind=box.dataset.aiStatus,html=aiStatus(t,kind);if(box.innerHTML!==html)box.innerHTML=html;
       const button=root.querySelector('[data-pf="'+(kind==='proposal'?'propose-script':'request-edit')+'"]');
       if(button)button.disabled=['queued','running'].includes((t.jobs||[]).find(j=>j.kind===kind)?.status)||(kind==='proposal'&&!t.script_id);
     }
     const playing=[...root.querySelectorAll('video,audio')].some(v=>!v.paused||v.seeking);
-    if(playing||root._dirty||root._uploading||root.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select')){
+    if(playing||root._dirty||root._remotionDirty||root._remotionPlaying||root._uploading||root.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select')){
       const temp=document.createElement('div');temp.innerHTML=summary(t,root._selected);
       const panel=root.querySelector('.pf-progress'),fresh=temp.querySelector('.pf-progress');
       if(panel&&fresh){
@@ -249,6 +248,7 @@
     if(root._renderedRevision===t.revision && root._renderedSelected===root._selected && root.querySelector('.production-flow')){window.StudioDetail.restore(root);options.onRender?.();return;}
     root._renderedRevision=t.revision;root._renderedSelected=root._selected;root._renderedEditId=t.edit_id;
     const mediaPositions=new Map([...root.querySelectorAll('video,audio')].map(m=>[m.getAttribute('src'),m.currentTime]));
+    window.RemotionEditor?.unmount(root);
     const opens=[...root.querySelectorAll('details[open]')].map(d=>d.querySelector('summary')?.textContent);
     const searchOpen=root.querySelector('[data-search-options]')?.open;
     root.innerHTML=`<section class="production-flow">${options.editor&&t.automation?.protocol===2?runtime(t):''}${options.editor&&t.automation?.protocol===2?editor(t):''}${summary(t,root._selected)}<p class="pf-message" role="status"></p></section>`;

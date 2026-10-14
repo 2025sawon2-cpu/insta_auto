@@ -1,3 +1,4 @@
+import time
 import json
 import subprocess
 import xml.etree.ElementTree as ET
@@ -10,7 +11,7 @@ from hotpost.scheduler import windows_task_xml
 def report():
     return {'is_sample': False, 'accounts': [{'username': 'small', 'followers': 1000},
         {'username': 'large', 'followers': 1000000}, {'username': 'unknown', 'followers': 0}],
-        'posts': [{'shortcode': user, 'username': user, 'kind': 'reel', 'views': 10000}
+        'posts': [{'shortcode': user, 'username': user, 'kind': 'reel', 'views': 10000, 'taken_at':int(time.time())-3600}
                   for user in ('small', 'large', 'unknown')]}
 
 

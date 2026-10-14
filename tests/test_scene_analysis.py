@@ -23,6 +23,16 @@ def beat(id='b1'):
     return {'id': id, 'text': '와이어를 당겨 고리에 연결해요', 'start': 0, 'end': 2,
             'options': [{'shot_id': 'cyclic-fallback', 'relation': 'direct'}]}
 
+def test_repetition_feedback_retains_six_grounded_alternatives(monkeypatch,tmp_path):
+    shots=catalog(tmp_path,7)
+    def generate(settings,instruction,evidence,*,media):
+        if media:return {'shots':[{'id':sid,'observation':'실제로 보이는 제품 장면'} for sid in evidence['shot_ids']]}
+        assert 'up to 6 distinct' in instruction
+        return {'beats':[{'id':'b1','options':[{'shot_id':f's{i}','relation':'context','reason':'확인한 상황'} for i in range(7)]}]}
+    monkeypatch.setattr(studio_ai,'_generate',generate)
+    _,choices=studio_ai.describe_shots(None,shots,[beat()],review_feedback=[{'kind':'repetition','reason':'같은 구도 반복'}])
+    assert len(choices['b1']['options'])==6
+
 
 def test_33_shots_keep_all_99_frames_in_bounded_groups_then_rank_text(monkeypatch, tmp_path):
     shots = catalog(tmp_path, 33)
@@ -43,7 +53,9 @@ def test_33_shots_keep_all_99_frames_in_bounded_groups_then_rank_text(monkeypatc
             return {'shots': [{'id': sid, 'observation': f'{sid}의 확인된 실제 장면'} for sid in ids]}
         assert len(evidence['shots']) == 33
         assert all(s['evidence_status'] == 'observed' for s in evidence['shots'])
-        assert evidence['beats'] == [{k: beat()[k] for k in ('id', 'text', 'start', 'end')}]
+        assert evidence['beats'] == [{**{k: beat()[k] for k in ('id', 'text', 'start', 'end')},
+                                     'adjacent_narration':beat()['text']}]
+        assert evidence['narration_text']==beat()['text']
         return {'beats': [{'id': 'b1', 'options': [{'shot_id': 's32', 'relation': 'direct', 'reason': '실제 고리 연결'}]}]}
 
     monkeypatch.setattr(studio_ai, '_generate', generate)
@@ -53,6 +65,26 @@ def test_33_shots_keep_all_99_frames_in_bounded_groups_then_rank_text(monkeypatc
     assert Counter(received) == Counter(f'actual-shot-{i}-frame-{j}'.encode() for i in range(33) for j in range(3))
     assert len(observed) == 33
     assert choices['b1']['options'][0]['shot_id'] == 's32'
+
+
+@pytest.mark.parametrize('rank_options',[[],[{'shot_id':'s0','relation':'context','reason':'다른 도포 용기는 해당 스프레이가 아님'}]])
+def test_incompatible_product_is_not_resurrected_by_context_or_fallback(monkeypatch,tmp_path,rank_options):
+    shots=catalog(tmp_path,2)
+    beats=[{**beat('story'),'text':'나갈 준비를 했는데'},
+           {**beat('intro'),'text':'이런 스프레이 하나 두고 싶네요'}]
+    def generate(settings,instruction,evidence,*,media):
+        if media:
+            return {'shots':[{'id':'s0','observation':'빨간 접촉식 도포 용기'},
+                             {'id':'s1','observation':'의류와 에어로졸 스프레이 캔'}]}
+        assert evidence['narration_text']=='나갈 준비를 했는데 이런 스프레이 하나 두고 싶네요'
+        assert evidence['beats'][1]['adjacent_narration']==evidence['narration_text']
+        return {'beats':[{'id':'story','options':[{'shot_id':'s0','relation':'context','reason':'일상 의류 관리 상황'}]},
+                         {'id':'intro','incompatible_subject_shot_ids':['s0','invented'], 'options':rank_options}]}
+    monkeypatch.setattr(studio_ai,'_generate',generate)
+    _,choices=studio_ai.describe_shots(None,shots,beats)
+    assert choices['story']['options'][0]['shot_id']=='s0'
+    assert [o['shot_id'] for o in choices['intro']['options']]==['s1']
+    assert choices['intro']['incompatible_subject_shot_ids']==['s0']
 
 
 def test_image_limit_is_enforced_for_variable_frame_counts(monkeypatch, tmp_path):
@@ -190,7 +222,7 @@ def test_normal_white_background_product_is_not_a_blank_opening(tmp_path):
     assert not blank_opening({'frames':[str(frame)]})
 
 
-def test_all_blank_samples_remain_an_explicit_fallback_without_stopping_narration(monkeypatch,tmp_path):
+def test_all_blank_samples_require_recollection_without_reusing_excluded_frames(monkeypatch,tmp_path):
     from PIL import Image
     shots=catalog(tmp_path,1)
     Image.new('RGB',(1080,1920),'white').save(shots[0]['frames'][0])
@@ -200,9 +232,8 @@ def test_all_blank_samples_remain_an_explicit_fallback_without_stopping_narratio
     monkeypatch.setattr(studio_ai,'_generate',generate)
     observations,choices=studio_ai.describe_shots(None,shots,[beat()])
     assert observations['s0']['selection_exclusion']=='blank_opening'
-    assert choices['b1']['analysis_status']=='fallback'
-    assert choices['b1']['options'][0]['relation']=='illustration'
-    assert '미확인' in choices['b1']['options'][0]['reason']
+    assert choices['b1']['analysis_status']=='no_usable_scenes'
+    assert choices['b1']['options']==[]
 
 
 def test_core_function_acceptance_preserves_product_specific_limits_through_ranking(monkeypatch,tmp_path):
@@ -238,3 +269,62 @@ def test_usage_limits_from_a_different_file_hash_are_not_carried_forward(tmp_pat
     plan={'shots':[{'id':'shoe','path':str(path)}],'beats':[]}
     studio_ai.restrict_context_shots(plan,[source])
     assert 'context_usage_limits' not in plan['shots'][0]
+
+
+@pytest.mark.parametrize('relation', ['direct', 'context', 'illustration'])
+def test_opposite_motion_cannot_return_as_context_or_fallback(monkeypatch, tmp_path, relation):
+    shots = catalog(tmp_path, 2)
+    def generate(settings, instruction, evidence, *, media):
+        if media:
+            return {'shots': [{'id': 's0', 'observation': '다리를 밖으로 펼친다'},
+                              {'id': 's1', 'observation': '이미 다리가 접힌 카트를 보여준다'}]}
+        return {'beats': [{'id': 'b1', 'options': [
+            {'shot_id': 's0', 'relation': relation, 'action_match': 'opposite'},
+            # The duplicate cannot reintroduce an excluded shot either.
+            {'shot_id': 's0', 'relation': 'context'}]}]}
+    monkeypatch.setattr(studio_ai, '_generate', generate)
+    _, choices = studio_ai.describe_shots(None, shots, [dict(beat(), text='다리를 접어 카트로 바꿔요')])
+    assert choices['b1']['opposite_shot_ids'] == ['s0']
+    assert choices['b1']['analysis_status'] == 'fallback'
+    assert [o['shot_id'] for o in choices['b1']['options']] == ['s1']
+
+
+def test_folded_state_is_usable_context_and_unknown_exclusion_is_ignored(monkeypatch, tmp_path):
+    shots = catalog(tmp_path, 2)
+    def generate(settings, instruction, evidence, *, media):
+        if media:
+            return {'shots': [{'id': 's0', 'observation': '다리를 펼친다'},
+                              {'id': 's1', 'observation': '다리가 접힌 카트의 바퀴'}]}
+        return {'beats': [{'id': 'b1', 'opposite_shot_ids': ['s0', 'invented'],
+            'options': [{'shot_id': 's1', 'relation': 'direct', 'action_match': 'not_established'}]}]}
+    monkeypatch.setattr(studio_ai, '_generate', generate)
+    _, choices = studio_ai.describe_shots(None, shots, [beat()])
+    assert choices['b1']['analysis_status'] == 'ranked'
+    assert choices['b1']['opposite_shot_ids'] == ['s0']
+    assert choices['b1']['options'][0]['action_match'] == 'not_established'
+    assert choices['b1']['options'][0]['relation'] == 'context'
+
+
+def test_all_opposed_shots_are_not_silently_reused(monkeypatch, tmp_path):
+    shots = catalog(tmp_path, 1)
+    def generate(settings, instruction, evidence, *, media):
+        if media: return {'shots': [{'id': 's0', 'observation': '다리를 펼친다'}]}
+        return {'beats': [{'id': 'b1', 'opposite_shot_ids': ['s0'], 'options': []}]}
+    monkeypatch.setattr(studio_ai, '_generate', generate)
+    _, choices = studio_ai.describe_shots(None, shots, [beat()])
+    assert choices['b1']['options'] == []
+    assert choices['b1']['analysis_status'] == 'opposite_only'
+
+
+def test_logo_only_card_is_excluded_but_brand_on_actual_garment_remains(monkeypatch,tmp_path):
+    shots=catalog(tmp_path,2)
+    def generate(settings,instruction,evidence,*,media):
+        if media:
+            return {'shots':[{'id':'s0','observation':'로고만 표시된 카드','visual_type':'logo_only'},
+                {'id':'s1','observation':'브랜드 로고가 있는 패딩 전체 착용','visual_type':'product'}]}
+        assert [s['id'] for s in evidence['shots']]==['s1']
+        return {'beats':[{'id':'b1','options':[{'shot_id':'s0','relation':'context'},{'shot_id':'s1','relation':'context'}]}]}
+    monkeypatch.setattr(studio_ai,'_generate',generate)
+    observations,choices=studio_ai.describe_shots(None,shots,[beat()])
+    assert observations['s0']['selection_exclusion']=='logo_only'
+    assert [o['shot_id'] for o in choices['b1']['options']]==['s1']

@@ -14,10 +14,21 @@ def main():
     args = parser.parse_args()
     request = json.loads(args.request.read_text(encoding='utf-8'))
     notes = []
+    partial = []
+    def progress(segment):
+        from .editing_adapter import _atomic_json
+        # A CPU fallback starts a fresh hypothesis; preserve only increasing
+        # decoded timestamps and never promote this receipt to completion.
+        if partial and segment['end'] <= partial[-1]['end']:
+            return
+        partial.append(segment)
+        _atomic_json(Path(request['audio']).parent / 'speech-partial.json',
+            {'status':'partial', 'audio':request['audio'], 'speech':partial})
+        print(f"out_time_us={int(segment['end'] * 1_000_000)}", flush=True)
     try:
         settings = Settings(data_dir=Path(request['data_dir']),
                             transcript_faster_whisper_model=request['model'])
-        speech, language, method = _speech(settings, Path(request['audio']), notes)
+        speech, language, method = _speech(settings, Path(request['audio']), notes, progress=progress)
         value = {'speech': speech, 'language': language, 'method': method, 'notes': notes}
         code = 0
     except Exception as error:

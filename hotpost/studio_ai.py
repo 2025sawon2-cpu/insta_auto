@@ -79,10 +79,10 @@ def restrict_context_shots(plan, sources):
                 option.update(relation='context', reason='보조 상황 장면 · 핵심 동작의 증거로 사용하지 않음. '+str(option.get('reason','')))
 
 
-def describe_shots(settings, catalog, beats):
+def describe_shots(settings, catalog, beats, review_feedback=None):
     """Stable entry point for bounded observations followed by text-only ranking."""
     from .scene_analysis import analyze_shots
-    return analyze_shots(settings, catalog, beats, _generate)
+    return analyze_shots(settings, catalog, beats, _generate, review_feedback=review_feedback)
 
 
 def plan_revision(settings, plan, request, start, end):

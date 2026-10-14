@@ -4,6 +4,12 @@ const $=s=>document.querySelector(s), $$=(s,el)=>Array.from((el||document).query
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt=n=>Number(n||0).toLocaleString('ko-KR');
 const R=window.HOTPOST_REPORT||{}, S=R.settings||{posts_per_account:30,maturity_hours:72};
+const toast=$('#settings-toast');let toastTimer;
+function hideSaveToast(){clearTimeout(toastTimer);toast.hidden=true;toast.textContent='';}
+function showSaveToast(){
+ toast.hidden=false;toast.textContent='설정을 저장했습니다';
+ toastTimer=setTimeout(hideSaveToast,4000);
+}
 window.HotpostDisplay.theme($('#theme-toggle'));
 try {
 const response=await fetch('/api/criteria');if(!response.ok)throw new Error('판정 기준을 불러오지 못했습니다.');
@@ -113,13 +119,14 @@ for(const k of ['tier','sort','assessment','account'])$('#'+k).addEventListener(
 $('#display-reset').onclick=()=>{display={...defaults};syncDisplay();applyCriteria();};
 syncDisplay();syncPanel();$('#settings-status').textContent='현재 저장된 설정입니다.';$('#settings-save').disabled=false;
 $('#settings-save').onclick=async()=>{
- const button=$('#settings-save');button.disabled=true;
+ const button=$('#settings-save');button.disabled=true;hideSaveToast();
  try{
   const response=await fetch('/api/criteria',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:C})});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'판정 기준 저장 실패');
   C={...data.criteria.values};syncPanel();
   await window.HotpostDisplay.save(display);
   $('#settings-status').textContent='저장했습니다. 터진 게시물 페이지에서 변경된 결과를 확인하세요.';
+  showSaveToast();
  }catch(e){$('#settings-status').textContent=e.message;}
  finally{button.disabled=false;}
 };

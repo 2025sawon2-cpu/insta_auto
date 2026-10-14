@@ -29,6 +29,7 @@ class Candidate:
     source_score: float | None = None
     platform: str = "other"
     video_meta: dict | None = None
+    search_stats: dict | None = None
     file_sha256: str = ""
     frame_hashes: list[str] | None = None
     selection_reason: str = ""
@@ -36,9 +37,15 @@ class Candidate:
     selected_for_zip: bool = False
     error: str = ""
     download_attempted: bool | None = None
+    download_diagnostics: dict | None = None
     original_downloaded_file: str = ""
     source_interval: dict | None = None
     functional_review: dict | None = None
+    relevance_review_required: bool = False
+    similarity_warnings: list[str] | None = None
+    format_warnings: list[str] | None = None
+    portrait_geometry: dict | None = None
+    presentation_review_required: bool = False
     blur_required: bool = False
     watermark_masks: list[dict] | None = None
     discovery_meta: dict | None = None

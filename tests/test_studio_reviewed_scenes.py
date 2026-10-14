@@ -32,3 +32,21 @@ def test_changed_or_unreviewed_sources_fail_before_render(change):
 def test_missing_clause_mapping_is_not_replaced_with_default_cycle():
     plan,rules=fixture()
     with pytest.raises(ValueError):apply_reviewed_scenes(plan,rules[:1])
+
+
+def test_unreviewed_gap_between_approved_windows_is_not_a_valid_rule():
+    plan,rules=fixture()
+    plan['shots']=[{'id':'a','sha256':'hash','start':0,'end':4},
+                   {'id':'b','sha256':'hash','start':18,'end':20}]
+    with pytest.raises(ValueError,match='승인 구간'):
+        apply_reviewed_scenes(plan,rules)
+
+
+def test_bounded_manual_shot_preserves_parent_and_function_limits():
+    plan,rules=fixture()
+    plan['shots'][0].update(parent_original_sha256='parent',creator_overlay_present=True,
+        context_usage_limits=['State is visible; the opening action is not demonstrated.'])
+    result=apply_reviewed_scenes(plan,rules)
+    assert result['shots'][-1]['parent_original_sha256']=='parent'
+    assert result['shots'][-1]['creator_overlay_present'] is True
+    assert result['shots'][-1]['context_usage_limits']==plan['shots'][0]['context_usage_limits']

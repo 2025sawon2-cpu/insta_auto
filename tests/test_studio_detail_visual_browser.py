@@ -5,7 +5,7 @@ import pytest
 
 from test_studio_board_browser import studio_page
 
-OUT = Path('C:/Codex/outputs/studio-detail-refresh-20261007')
+OUT = Path(__file__).parents[1] / 'data/workflow-audit-20261014/ui-integration/screenshots'
 LONG = '\n'.join(f'{i + 1}. 다진 마늘을 얼려 놓으면 꺼낼 때마다 불편하죠. 한 스푼씩 편하게 보관하고 필요한 만큼 꺼내 쓰세요.' for i in range(28))
 
 
@@ -42,6 +42,8 @@ def prepare(page, tasks):
                           body=video_bytes[start:end + 1])
         page.route('**/reference.mp4', reference_route)
     page.evaluate('refreshStudio()')
+    if t.get('source_acquisition', {}).get('hold'):
+        page.locator('#attention-open').click()
     page.locator('#work-list [data-work=source]').click()
 
 
@@ -67,21 +69,21 @@ def test_detail_all_requested_views_render_without_overflow(studio_page, width, 
     suffix = f'{width}-{"dark" if dark else "light"}'
 
     tabs = page.locator('#detail-tabs button')
-    for tab in ['sources', 'script', 'voice', 'edit', 'results']:
+    for tab in ['sources', 'script', 'edit', 'results']:
         page.locator(f'#detail-tabs [data-detail-tab={tab}]').click()
         expect(page.locator('#detail-tabs [aria-pressed=true]')).to_have_count(1)
         page.wait_for_timeout(350)  # Let the existing tab background transition settle.
         active = page.locator(f'#detail-tabs [data-detail-tab={tab}]')
         assert active.get_attribute('aria-pressed') == 'true'
-        active_color = active.evaluate('(e)=>getComputedStyle(e).backgroundColor')
+        active_color = active.evaluate('(e)=>getComputedStyle(e).borderBottomColor')
         contrast = active.evaluate('''(e)=>{
             const rgb=v=>v.match(/[\\d.]+/g).slice(0,3).map(Number);
             const luminance=v=>rgb(v).map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4;}).reduce((s,x,i)=>s+x*[.2126,.7152,.0722][i],0);
-            const title=e.querySelector('strong'), a=luminance(getComputedStyle(e).backgroundColor),b=luminance(getComputedStyle(title).color);
+            const title=e.querySelector('strong'), a=luminance(getComputedStyle(e.parentElement).backgroundColor),b=luminance(getComputedStyle(title).color);
             return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
         }''')
         assert contrast >= 4.5
-        assert tabs.evaluate_all('(buttons)=>buttons.filter(b=>b.getAttribute("aria-pressed")!=="true").every(b=>getComputedStyle(b).backgroundColor!==getComputedStyle(buttons.find(x=>x.getAttribute("aria-pressed")==="true")).backgroundColor)')
+        assert tabs.evaluate_all('(buttons)=>buttons.filter(b=>b.getAttribute("aria-pressed")!=="true").every(b=>getComputedStyle(b).borderBottomColor!==getComputedStyle(buttons.find(x=>x.getAttribute("aria-pressed")==="true")).borderBottomColor)')
         assert active_color not in ['rgba(0, 0, 0, 0)', 'transparent']
         assert active.evaluate('''(e)=>{
             const button=e.getBoundingClientRect(),nav=e.parentElement.getBoundingClientRect();
@@ -90,16 +92,18 @@ def test_detail_all_requested_views_render_without_overflow(studio_page, width, 
             const n=e.parentElement,b=e.getBoundingClientRect(),r=n.getBoundingClientRect();
             return {button:[b.left,b.right],nav:[r.left,r.right],scroll:n.scrollLeft,width:n.clientWidth,total:n.scrollWidth,overflow:getComputedStyle(n).overflowX};
         }'''))
-        # The state beside the selected title must remain readable, not wrap
-        # each Korean character into a vertical strip on narrow windows.
+        # The four-tab UI keeps stage state in the header rather than each tab.
+        # The state must remain readable on narrow windows.
         status = active.locator('.glass-step-status')
-        assert status.bounding_box()['height'] <= 56
+        assert not status.is_visible()
+        assert page.locator('#drawer-status').is_visible()
+        assert page.locator('#drawer-status').bounding_box()['height'] <= 56
 
     page.locator('#detail-tabs [data-detail-tab=sources]').click()
     grid = page.locator('.pf-source-used .pf-sources')
     cards = grid.locator('.pf-source-card')
     expect(cards).to_have_count(77)
-    expected_columns = 2 if width <= 750 else 3 if width <= 1100 else 5
+    expected_columns = 2 if width <= 1000 else 3
     assert grid.evaluate('(e)=>getComputedStyle(e).gridTemplateColumns.split(" ").length') == expected_columns
     b = [cards.nth(i).bounding_box() for i in range(expected_columns + 1)]
     assert max(v['y'] for v in b[:expected_columns]) - min(v['y'] for v in b[:expected_columns]) < 2
@@ -131,27 +135,30 @@ def test_detail_all_requested_views_render_without_overflow(studio_page, width, 
     script = page.locator('[data-pf-section=script] textarea[data-field=script]')
     expect(script).to_have_value(LONG)
     assert script.evaluate('(e)=>e.scrollHeight<=e.clientHeight+2 && getComputedStyle(e).overflowY==="hidden"')
-    assert page.locator('.sd-script-candidates article').count() == 3
+    page.get_by_role('button', name='다른 대본 후보', exact=True).click()
+    expect(page.locator('.sd-script-candidates article')).to_have_count(3)
     assert page.get_by_text('이전 대본 복원하기', exact=True).count() == 0
     assert page.get_by_text('후보·이전 대본과 검사 도구', exact=True).count() == 0
     script.scroll_into_view_if_needed()
     assert_no_overflow(page)
     capture(page, f'script-{suffix}.png')
-    page.get_by_role('button', name='참고할 원본 영상과 대본 보기', exact=True).click()
-    reference = page.locator('.sd-reference')
+    page.get_by_role('button', name='원본 영상·대본 보기', exact=True).click()
+    reference = page.locator('[data-detail-panel=sd-source-reference]')
     expect(reference).to_be_visible()
     expect(reference.locator('[data-reference-preview]')).to_be_visible()
-    assert reference.locator('.sd-script-text').inner_text() == LONG
-    assert reference.locator('textarea,button').count() == 0
+    expect(reference.locator('textarea[data-field=original]')).to_have_value(LONG)
+    expect(reference.locator('[data-pf=save-original]')).to_be_visible()
+    reference.get_by_text('자동 인식 원문 · 보존됨', exact=True).click()
+    assert reference.locator('.pf-text').inner_text() == LONG
     assert reference.evaluate('(e)=>e.scrollWidth<=e.clientWidth+1')
     reference.locator('[data-reference-preview]').scroll_into_view_if_needed()
     assert_no_overflow(page)
     capture(page, f'reference-{suffix}.png')
 
-    page.locator('#detail-tabs [data-detail-tab=voice]').click()
+    page.get_by_role('button', name='목소리 듣기·설정', exact=True).click()
     expect(page.get_by_role('heading', name='현재 음성', exact=True)).to_be_visible()
-    page.get_by_role('button', name='수정하기', exact=True).click()
-    voice_script = page.locator('[data-pf-section=voice] textarea[data-field=script]')
+    # Voice is embedded in the script assistant; script edits remain in the main editor.
+    voice_script = script
     expect(voice_script).to_be_visible()
     assert voice_script.evaluate('(e)=>e.scrollHeight<=e.clientHeight+2 && getComputedStyle(e).overflowY==="hidden"')
     voice_script.fill(LONG + '\n' + '아래 내용을 고치면 대본에 반영됩니다. ' * 30)
@@ -162,7 +169,7 @@ def test_detail_all_requested_views_render_without_overflow(studio_page, width, 
     assert settings.locator('[data-field=speed]').is_visible()
     assert page.get_by_text('수정 전 음성', exact=True).count() == 0
     settings.scroll_into_view_if_needed()
-    assert page.locator('#detail-tabs [data-detail-tab=voice]').evaluate('''(e)=>{
+    assert page.locator('#detail-tabs [data-detail-tab=script]').evaluate('''(e)=>{
         const b=e.getBoundingClientRect();return b.left>=-1 && b.right<=innerWidth+1;
     }''')
     assert_no_overflow(page)
@@ -196,7 +203,7 @@ def test_selected_menu_remains_visible_when_window_narrows(studio_page):
     }''')
 
 
-@pytest.mark.parametrize('work,tab', [('voice', 'voice'), ('edit', 'edit'), ('done', 'results')])
+@pytest.mark.parametrize('work,tab', [('voice', 'script'), ('edit', 'edit'), ('done', 'results')])
 @pytest.mark.parametrize('entry', ['card', 'link'])
 def test_initial_selected_menu_visible_on_mobile_and_reopen(studio_page, work, tab, entry):
     from playwright.sync_api import expect
@@ -205,6 +212,8 @@ def test_initial_selected_menu_visible_on_mobile_and_reopen(studio_page, work, t
     if entry == 'link':
         page.goto(f'http://studio.test/studio.html?work={work}')
     else:
+        if work == 'edit':
+            page.locator('#attention-open').click()
         page.locator(f'[data-work="{work}"]').click()
     expect(page.locator('#work-drawer')).to_be_visible()
     active = page.locator(f'#detail-tabs [data-detail-tab={tab}]')
@@ -221,7 +230,8 @@ def test_initial_selected_menu_visible_on_mobile_and_reopen(studio_page, work, t
     # bring the remembered selected menu back into view.
     page.locator('#detail-tabs').evaluate('(e)=>e.scrollLeft=0')
     page.locator('#close-work').click()
-    page.locator('#filters [data-filter=all]').click()
+    if work == 'edit' and page.locator('#attention-open').is_visible():
+        page.locator('#attention-open').click()
     page.locator('[data-list-view=grid]').click()
     page.locator(f'[data-work="{work}"]').click()
     expect(active).to_have_attribute('aria-pressed', 'true')
@@ -245,9 +255,9 @@ def test_selected_page_color_wins_over_completed_and_blocked_pipeline(studio_pag
         t['source_acquisition'] = dict(hold=True)
         t['pipeline'][1]['steps'][0]['status'] = 'blocked'
     prepare(page, tasks)
-    for name in ['sources', 'script', 'voice', 'edit', 'results']:
+    for name in ['sources', 'script', 'edit', 'results']:
         active = page.locator(f'#detail-tabs [data-detail-tab={name}]')
         active.click()
         expect(active).to_have_attribute('aria-pressed', 'true')
         page.wait_for_timeout(350)
-        assert page.locator('#detail-tabs button').evaluate_all('(buttons)=>buttons.filter(b=>b.getAttribute("aria-pressed")!=="true").every(b=>getComputedStyle(b).backgroundColor!==getComputedStyle(buttons.find(x=>x.getAttribute("aria-pressed")==="true")).backgroundColor)')
+        assert page.locator('#detail-tabs button').evaluate_all('(buttons)=>buttons.filter(b=>b.getAttribute("aria-pressed")!=="true").every(b=>getComputedStyle(b).borderBottomColor!==getComputedStyle(buttons.find(x=>x.getAttribute("aria-pressed")==="true")).borderBottomColor)')

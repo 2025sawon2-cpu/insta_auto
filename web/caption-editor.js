@@ -28,6 +28,7 @@
       <details class="ce-scene-library"><summary>사용된 장면 · ${e.plan.beats.length}개</summary><div class="ce-scene-strip">${e.plan.beats.map((b,i)=>{const shot=e.plan.shots?.find(s=>s.id===b.selected_shot_id);return `<button type="button" data-timeline-scene="${i}" title="${esc(b.reason||b.text)}">${shot?.thumbnail_url?`<img src="${esc(shot.thumbnail_url)}" loading="lazy" alt="장면 ${i+1}">`:`<span class="ce-scene-placeholder">${i+1}</span>`}<strong>${i+1}. ${esc(b.text)}</strong><small>${Number(b.start).toFixed(1)}–${Number(b.end).toFixed(1)}초</small></button>`;}).join('')}</div></details></section>`;
   }
   function markup(t,e){
+    if(e?.plan&&t.remotion_editor_supported&&window.RemotionEditor)return window.RemotionEditor.markup(e);
     if(!e?.plan)return '<section data-pf-section="edit" class="sd-stage"><div class="sd-empty"><h3>편집할 영상이 아직 없습니다</h3><p>대본과 음성 제작이 끝나면 장면과 자막을 확인할 수 있습니다.</p></div></section>';
     const f=t.feedback||{},conflict=f.changes?.length&&(f.base_edit_id!==e.id||f.changes.some(c=>Object.keys(c).some(k=>!['beat_id','text','start','end'].includes(k))));
     return `<section data-pf-section="edit" class="ce-editor sd-stage" data-caption-edit="${esc(e.id)}"><header class="sd-section-title"><h3>장면·자막 수정</h3><p>자막을 고친 뒤 ‘수정 영상 내려받기’를 누르면 영상에 반영됩니다. 장면 교체·효과는 아래 추가 도구의 CapCut에서 진행합니다.</p><p>편집 대상 · ${esc((t.pipeline||[]).find(r=>r.artifacts?.edit_id===e.id)?.number?'제작 버전 v'+(t.pipeline||[]).find(r=>r.artifacts?.edit_id===e.id).number:'현재 선택된 편집 영상')}</p></header>
@@ -50,6 +51,7 @@
     return !!(t.caption_editor_supported&&e?.clean_preview_url&&box?.dataset.captionEdit===e.id);
   }
   function refresh(root,t){
+    if(root.querySelector('[data-remotion-edit]')){window.RemotionEditor?.bind(root,t);return;}
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
     const e=current(t),ok=ready(root,t),busy=(t.jobs||[]).some(j=>['queued','running'].includes(j.status)&&!['refresh_sources','proposal','suggest_edit'].includes(j.kind));
     const f=t.feedback||{},savedConflict=f.changes?.length&&(f.base_edit_id!==e?.id||f.changes.some(c=>Object.keys(c).some(k=>!['beat_id','text','start','end'].includes(k))));
@@ -72,6 +74,7 @@
     box._timeline?.();box._paint?.();
   }
   function bind(root,t){
+    if(root.querySelector('[data-remotion-edit]')){window.RemotionEditor?.bind(root,t);return;}
     const box=root.querySelector('[data-caption-edit]');if(!box)return;
     if(box._bound){refresh(root,t);return;}box._bound=true;
     const video=box.querySelector('video'),canvas=box.querySelector('canvas'),ctx=canvas.getContext('2d');

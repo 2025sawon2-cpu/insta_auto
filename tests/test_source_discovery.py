@@ -5,6 +5,7 @@ from hotpost.config import Settings
 from hotpost.source_finder import Candidate
 from hotpost.source_finder import search_local_cache
 from hotpost.source_search.discovery import discover
+import pytest
 
 
 def test_untried_public_hints_are_prioritized_and_canonical_duplicates_excluded(tmp_path):
@@ -78,3 +79,35 @@ def test_cache_requires_existing_file_and_preserves_origin_without_granting_appr
     assert len(found) == 1 and found[0].url.endswith('valid123')
     assert found[0].rights == 'unknown-check-before-reuse'
     assert found[0].match_quality == 'unverified'
+
+
+@pytest.mark.parametrize('rows,status', [
+    ([{'url':'https://www.youtube.com/shorts/abcdefghijk', 'provider':'playwright-youtube'}], 'results'),
+    ([], 'login_required'), ([], 'connection_failed')])
+def test_browser_mode_never_uses_separate_search_even_when_youtube_first_or_blocked(tmp_path, monkeypatch, rows, status):
+    def forbidden(*args):
+        raise AssertionError('Browser mode cannot fall back to an external search provider')
+    calls = []
+    def search(settings, frames, queries, limit, root, **kwargs):
+        calls.append(kwargs)
+        return {'candidates':rows, 'terms':[], 'notes':[],
+                'searches':[{'provider':'youtube', 'query':'cart', 'status':status, 'candidates':len(rows)}]}
+    monkeypatch.setattr('hotpost.browser_search.browser_search', search)
+    services = SimpleNamespace(search_local_hints=lambda *_: [], search_local_cache=lambda *_: [],
+        search_web=forbidden, search_bing=forbidden, search_youtube=forbidden,
+        search_pexels=forbidden, Candidate=Candidate)
+    candidates, _, _, audit, _ = discover(Settings(data_dir=tmp_path), 'post', [], ['cart'],
+        {'search_strategy':{'routes':['youtube', 'bing'], 'skipped_routes':{}}}, [], tmp_path,
+        [], [], lambda *_:None, services)
+    assert len(candidates) == len(rows)
+    assert calls[0]['routes'] == ['youtube', 'bing'] and audit[0]['status'] == status
+    assert all(c.match_quality == 'unverified' and not c.downloaded_file for c in candidates)
+
+
+def test_browser_mode_does_not_send_frames_to_google_vision_api(tmp_path, monkeypatch):
+    from hotpost import source_finder as sf
+    monkeypatch.setattr(sf.requests, 'post', lambda *args, **kwargs:pytest.fail('Use current browser image search'))
+    audit = []
+    assert sf.search_google_vision(Settings(data_dir=tmp_path, source_google_vision_api_key='test-key'),
+                                  [tmp_path/'unread.jpg'], 5, audit) == ([], [])
+    assert audit[0]['status'] == 'not_attempted'

@@ -102,27 +102,115 @@ def detail_page():
 
 
 def tab(page, name):
-    page.locator(f'#detail-tabs [data-detail-tab={name}]').click()
+    page.locator(f'#detail-tabs [data-detail-tab={"script" if name == "voice" else name}]').click()
+    if name == 'voice':
+        toggle = page.locator('[data-detail-toggle$="-voice-settings"]')
+        if toggle.get_attribute('aria-expanded') != 'true':
+            toggle.click()
+
+
+@pytest.mark.parametrize('width',[1440,390])
+def test_reference_tools_are_collapsed_and_keep_job_results_across_studio_refresh(detail_page,width):
+    page,t,calls=detail_page
+    page.set_viewport_size(dict(width=width,height=1000))
+    page.clock.install()
+    created=[]
+    source={'status':'running'}
+    def jobs(route):
+        path=urlparse(route.request.url).path
+        if route.request.method=='POST':
+            created.append((path,route.request.post_data_json))
+            result={'id':'source-test' if 'source-jobs' in path else 'transcript-test'}
+        elif 'source-jobs' in path:
+            result=dict(id='source-test',status=source['status'],message='영상 후보 찾는 중',progress=50,
+                        downloaded=2,download_url='/sources.zip')
+        else:
+            result=dict(id='transcript-test',status='done',download_txt_url='/original.txt',download_json_url='/original.json',
+                        result=dict(speech=[{}],screen_text=[],notes=[],lines=[dict(start=0,source='speech',text='원본에서 들리는 말')]))
+        route.fulfill(content_type='application/json',body=json.dumps(result))
+    page.route('http://detail.test/api/source-jobs**',jobs)
+    page.route('http://detail.test/api/transcript-jobs**',jobs)
+    tools=page.locator('#studio-reference-tools')
+    source_button=tools.get_by_role('button',name='편집용 영상 후보 찾기')
+    transcript_button=tools.get_by_role('button',name='원본 대사·화면 글자 추출')
+    assert not source_button.is_visible()
+    tools.locator('summary').click()
+    assert created==[] and calls==[]
+    source_button.click()
+    page.wait_for_function("document.querySelector('#source-status').textContent.includes('영상 후보 찾는 중')")
+    assert source_button.is_disabled()
+    page.evaluate("window.referenceStatus=document.querySelector('#source-status')")
+    t['revision']+=1
+    page.evaluate('refreshStudio()')
+    assert page.evaluate("window.referenceStatus===document.querySelector('#source-status')")
+    assert tools.locator('details').evaluate('(el)=>el.open')
+    assert source_button.is_disabled()
+    source['status']='done'
+    page.clock.fast_forward(1600)
+    page.wait_for_selector('#source-status a')
+    assert tools.get_by_role('link',name='ZIP 다운로드 (2개)').get_attribute('href')=='/sources.zip'
+    transcript_button.click()
+    page.wait_for_selector('#transcript-status a')
+    assert tools.get_by_role('link',name='TXT 다운로드').get_attribute('href')=='/original.txt'
+    assert tools.get_by_role('link',name='JSON 다운로드').get_attribute('href')=='/original.json'
+    assert '원본에서 들리는 말' in tools.inner_text()
+    tab(page,'results')
+    t['revision']+=1
+    page.evaluate('refreshStudio()')
+    assert tools.get_by_role('link',name='ZIP 다운로드 (2개)').is_visible()
+    assert tools.get_by_role('link',name='TXT 다운로드').is_visible()
+    assert created==[('/api/source-jobs',{'shortcode':t['shortcode']}),('/api/transcript-jobs',{'shortcode':t['shortcode']})]
+    assert calls==[]
+    assert page.locator('#drawer-scroll').evaluate('(el)=>el.scrollWidth<=el.clientWidth')
 
 
 def script(page, section='script'):
-    return page.locator(f'[data-pf-section={section}] textarea[data-field=script]')
+    return page.locator('[data-pf-section=script] textarea[data-field=script]')
 
 
 def disclosure(page, suffix):
     page.locator(f'[data-detail-toggle$="-{suffix}"]').click()
 
 
-def test_script_voice_edit_mirror_poll_backdrop_reopen_and_exact_production_request(detail_page):
+@pytest.mark.parametrize('width,theme', [(1440, 'light'), (390, 'light'), (390, 'dark')])
+def test_four_tab_modal_readable_selection_and_responsive_layout(detail_page, width, theme):
+    page, _, _ = detail_page
+    page.set_viewport_size(dict(width=width, height=900))
+    page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
+    assert page.locator('#detail-tabs button').count() == 4
+    selected = page.locator('#detail-tabs [aria-pressed=true]')
+    assert selected.evaluate('(e)=>getComputedStyle(e).color===getComputedStyle(e.querySelector("strong")).color')
+    assert selected.bounding_box()['height'] >= 48
+    assert script(page).evaluate('(e)=>parseFloat(getComputedStyle(e).fontSize)>=20')
+    assert script(page).count() == 1
+    assert page.locator('#drawer-scroll').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+    main = page.locator('.sd-script-main').bounding_box()
+    helper = page.locator('.sd-script-assistant').bounding_box()
+    assert helper['x'] > main['x'] if width > 700 else helper['y'] > main['y']
+    for name in ['sources', 'results', 'script']:
+        tab(page, name)
+        assert page.locator('#drawer-scroll').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+        if name == 'sources':
+            title = page.locator('.upload-dropzone h4')
+            assert title.bounding_box()['width'] >= 130
+            assert title.bounding_box()['height'] <= 100
+            assert page.locator('.upload-dropzone').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
+    tab(page, 'voice')
+    assert page.locator('[data-pf-section=voice] audio').is_visible()
+    assert script(page).count() == 1
+
+
+def test_shared_script_voice_settings_poll_backdrop_reopen_and_exact_production_request(detail_page):
     page, t, calls = detail_page
     original_artifacts = copy.deepcopy(t['pipeline'])
     long_text = '직접 고친 마늘 대본입니다.\n' * 70
     script(page).fill(long_text)
     assert script(page).evaluate('(e)=>e.scrollHeight<=e.clientHeight+2')
     tab(page, 'voice')
-    disclosure(page, 'voice-script-edit')
     assert script(page, 'voice').input_value() == long_text
-    assert script(page, 'voice').evaluate('(e)=>e.scrollHeight<=e.clientHeight+2'), 'Opening the voice script editor must resize the long mirrored script immediately'
+    assert page.locator('[data-voice-draft-note]').is_visible()
+    assert page.locator('.pf-audio-card audio').get_attribute('src') == '/tone.wav'
+    assert script(page, 'voice').evaluate('(e)=>e.scrollHeight<=e.clientHeight+2'), 'Opening voice settings must retain the expanded script input'
     script(page, 'voice').fill('목소리 화면에서 최종 수정한 대본')
     tab(page, 'script')
     assert script(page).input_value() == '목소리 화면에서 최종 수정한 대본'
@@ -193,6 +281,7 @@ def test_voice_preview_filter_select_restore_default_and_dialog_backdrop(detail_
 
 def test_candidates_apply_and_still_work_after_manual_script_edit(detail_page):
     page, _, calls = detail_page
+    disclosure(page, 'script-candidates')
     page.locator('[data-pf=candidate][data-index="1"]').click()
     page.wait_for_function('document.querySelector("#detail")._task.selected_candidate===1')
     assert script(page).input_value() == '두 번째 마늘 대본 후보'
@@ -217,7 +306,6 @@ def test_partial_upload_retry_preserves_voice_script_draft(detail_page):
     assert len(t['sources']) == 9
     assert [v['name'] for a,v in calls if a=='upload-source'] == ['first.mp4','second.mp4','second.mp4']
     tab(page, 'voice')
-    disclosure(page, 'voice-script-edit')
     assert script(page, 'voice').input_value() == '업로드를 해도 보존할 대본'
 
 
@@ -304,6 +392,7 @@ def test_actual_http_script_source_voice_changes_create_one_run_preserve_complet
 
     monkeypatch.setattr('hotpost.source_policy.current_policy', lambda settings=None: dict(version=2, minimum_total=1, platform_minimums={}))
     monkeypatch.setattr(VoiceBenchAdapter, 'voices', lambda self: dict(personal_default=dict(available=True), voices=[dict(id='qwen-sohee',name='소희',gender='female',model='Qwen',available=True)]))
+    monkeypatch.setattr(VoiceBenchAdapter, 'default_voice_status', lambda self: dict(ready=True, default_voice_kind='personal', errors=[]))
     studio, task_id = prepared.__wrapped__(tmp_path)
     def add_source(s, db):
         second = copy.deepcopy(s['sources'][0])

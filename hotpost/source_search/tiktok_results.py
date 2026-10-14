@@ -19,6 +19,10 @@ def search_response_candidates(response_url, body, query):
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get('video'), dict):
             continue
+        # TikTok photo items also have a video object (observed duration 0)
+        # and otherwise identical IDs/authors. Do not invent /video/ URLs.
+        if isinstance(item.get('imagePost'),dict) and item['imagePost'].get('images'):
+            continue
         author = item.get('author') or {}
         user = (author.get('uniqueId') or author.get('unique_id')) if isinstance(author, dict) else ''
         video_id = str(item.get('id') or '')
@@ -27,5 +31,7 @@ def search_response_candidates(response_url, body, query):
         link = f'https://www.tiktok.com/@{user}/video/{video_id}'
         candidates[link] = {'url': link, 'provider': 'playwright-tiktok',
                             'title': str(item.get('desc') or '')[:240],
-                            'query': query, 'match_kind': 'platform-search'}
+                            'query': query, 'match_kind': 'platform-search',
+                            'video_meta': {k: item['video'].get(k) for k in ('width','height','duration')},
+                            'search_stats': {k: (item.get('stats') or {}).get(k) for k in ('playCount','diggCount')}}
     return list(candidates.values())

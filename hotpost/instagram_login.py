@@ -56,7 +56,7 @@ def login_in_browser(settings: Settings, user: str, timeout: float = 900) -> Pat
             if browser.page.is_closed():
                 raise CollectError("전용 로그인 창이 닫혔습니다.")
             try:
-                browser.verify_identity()
+                detected_user = browser.verify_identity()
             except CollectError:
                 browser.page.wait_for_timeout(2000)
                 continue
@@ -69,7 +69,7 @@ def login_in_browser(settings: Settings, user: str, timeout: float = 900) -> Pat
             profile, posts, observations = collector.fetch(names[0], 1)
             target = settings.data_dir / "instagram_browser_ready.json"
             with private_output_path(target) as temp:
-                temp.write_text(json.dumps({"verified_at": int(time.time()), "posts_checked": len(posts),
+                temp.write_text(json.dumps({"verified_at": int(time.time()), "username": detected_user, "posts_checked": len(posts),
                                             "exact_view_observations": sum(o.success for o in observations)},
                                            ensure_ascii=False), encoding="utf-8")
             print("전용 브라우저 로그인과 실제 게시물 접근 확인 완료.", flush=True)

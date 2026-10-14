@@ -84,6 +84,8 @@ def test_broader_ingredient_title_precedes_unrelated_leftovers_without_approval(
 
 def test_only_known_discovery_duration_is_prechecked_not_unknown_metadata():
     c=Candidate('https://youtube.com/watch?v=short','youtube',discovery_meta={'duration':2})
+    assert not discovery_duration_reasons(c,1800)
+    c.discovery_meta={'duration':0}
     assert discovery_duration_reasons(c,1800)==['invalid_duration']
     c.discovery_meta={'duration':800}
     assert not discovery_duration_reasons(c,1800)
@@ -110,24 +112,24 @@ def test_deferred_shortlist_excludes_failed_rejected_checked_and_canonical_dupli
 def test_first_timeout_leaves_same_platform_next_candidate_a_real_inspection_opportunity(probe_run,monkeypatch):
     from hotpost import source_finder as sf
     original=sf.download_candidate
-    def download(candidate,directory,index,*args,deadline,**kwargs):
+    def download(candidate,directory,index,*args,deadline=None,**kwargs):
         if candidate.url.endswith('first'):
             probe_run.attempts.append({'url':candidate.url,'started':probe_run.clock.now,'deadline':deadline})
-            probe_run.clock.now=deadline
+            probe_run.clock.now+=60
             raise subprocess.TimeoutExpired('download',60)
         return original(candidate,directory,index,*args,deadline=deadline,**kwargs)
     monkeypatch.setattr(sf,'download_candidate',download)
     result=probe_run.run()
     assert len(probe_run.attempts)==2 and result['platform_probe_seconds']=={'youtube':62.0}
     second=next(c for c in result['candidates'] if c['url'].endswith('second'))
-    assert second['downloaded_file'] and 'different_core_function' in second['rejection_reasons']
-    assert result['downloaded']==0  # Giving it a chance never lowers eligibility.
+    assert second['downloaded_file'] and second['relevance_review_required']
+    assert result['downloaded']==1 and not result['quota_ready']
 
 
 def test_discovery_length_failure_uses_no_download_or_heavy_review_budget(probe_run,monkeypatch):
     from hotpost import source_finder as sf
     monkeypatch.setattr(sf,'search_local_hints',lambda *_:[
-        Candidate('https://youtube.com/watch?v=short','youtube',discovery_meta={'duration':2}),
+        Candidate('https://youtube.com/watch?v=empty','youtube',discovery_meta={'duration':0}),
         Candidate('https://youtube.com/watch?v=valid','youtube')])
     result=probe_run.run()
     assert [c['url'] for c in probe_run.attempts]==['https://youtube.com/watch?v=valid']

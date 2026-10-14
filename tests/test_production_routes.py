@@ -12,8 +12,8 @@ def test_integrated_and_legacy_production_routes_are_separate(tmp_path, monkeypa
 
     registered = {}
     queue = SimpleNamespace(register=lambda key, work: registered.update({key: work}),
-                            resume_queued=lambda: None)
-    monkeypatch.setattr(server, "JobQueue", lambda settings: queue)
+                            resume_queued=lambda: None, close=lambda: None, start_workers=lambda: None)
+    monkeypatch.setattr(server, "JobQueue", lambda settings, **options: queue)
     for name in ("SourceJobManager", "TranscriptJobManager", "PlatformSessionManager",
                  "AccountRegistry"):
         monkeypatch.setattr(server, name, lambda *args: SimpleNamespace())
@@ -25,7 +25,7 @@ def test_integrated_and_legacy_production_routes_are_separate(tmp_path, monkeypa
         dispatch=lambda job, action: {"id": job, "action": action})
     monkeypatch.setattr(server, "ProductionManager", lambda settings: modern)
     studio = SimpleNamespace(store=SimpleNamespace(list=lambda: [{"id": "studio-job"}]),
-                             public=lambda job: job, create=lambda code: {"shortcode": code})
+                             public=lambda job: job, create=lambda code: {"shortcode": code}, close=lambda:None)
     monkeypatch.setattr(server, "Studio", lambda settings: studio)
     httpd = server.serve(Settings(data_dir=tmp_path), port=0)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)

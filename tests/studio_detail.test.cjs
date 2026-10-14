@@ -21,7 +21,7 @@ test('required clone registration and recheck are visible outside hidden help pa
  assert.match(beforeHelp,/href="http:\/\/127\.0\.0\.1:8765\/"/);assert.match(beforeHelp,/target="_blank" rel="noopener"/);
  assert.match(beforeHelp,/data-pf="resume-auto"/);assert.match(html,/핵심 장면은 자동으로 추가 확보/);
  assert.doesNotMatch(html,/승인 불필요|전사 도구 설치/);
- t.production_blockers=['core_footage_gap'];assert.match(detail.view(t).body,/플랫폼 합산 최소 10개/);assert.equal(detail.view(t).action,'sources');
+ t.production_blockers=['core_footage_gap'];assert.match(detail.view(t).body,/핵심 동작이 담긴 장면과 편집에 충분한 영상 분량/);assert.equal(detail.view(t).action,'sources');
 });
 
 test('running, queued, paused and failed views expose different truthful next actions',()=>{
@@ -41,7 +41,7 @@ test('script viewing is a real accessible button, with isolated escaped card and
 
 test('current audio remains unchanged while the inline editor holds the next script',()=>{
  const t=task();t.voice_id='voice1';t.voices=[{id:'voice1',script_id:'old',spoken_text:'이전 음성이 읽는 실제 문장',path_url:'/old.wav'}];t.feedback={script_text:'새로 고친 대본'};
- const html=flow.editor(t);assert.match(html,/<h4>현재 음성<\/h4>/);assert.match(html,/>수정하기<\/span>/);
+ const html=flow.editor(t);assert.match(html,/<h4>현재 음성<\/h4>/);assert.match(html,/>목소리 듣기·설정<\/span>/);assert.equal((html.match(/data-field="script"/g)||[]).length,1);
  assert.doesNotMatch(html,/수정 전 음성|새로 읽을 대본 보기/);assert.match(html,/새로 고친 대본/);assert.match(html,/src="\/old.wav"/);
 });
 
@@ -71,7 +71,7 @@ test('an entire disclosure button toggles a panel, and polling restores its open
  let listener,count=0;
  const button={dataset:{detailToggle:'one'},attributes:{'aria-expanded':'false'},getAttribute(n){return this.attributes[n]},setAttribute(n,v){this.attributes[n]=v}};
  const panel={dataset:{detailPanel:'one'},hidden:true};
- const root={addEventListener(type,callback){assert.equal(type,'click');listener=callback;count++},contains:n=>n===button,querySelectorAll:s=>s==='[data-detail-panel]'?[panel]:s==='[data-detail-toggle]'?[button]:[]};
+ const root={addEventListener(type,callback){if(type==='click'){listener=callback;count++}},contains:n=>n===button,querySelectorAll:s=>s==='[data-detail-panel]'?[panel]:s==='[data-detail-toggle]'?[button]:[]};
  detail.bind(root);detail.bind(root);assert.equal(count,1);
  listener({target:{closest:()=>button}});assert.equal(panel.hidden,false);assert.equal(button.attributes['aria-expanded'],'true');
  panel.hidden=true;button.attributes['aria-expanded']='false';detail.restore(root);assert.equal(panel.hidden,false);

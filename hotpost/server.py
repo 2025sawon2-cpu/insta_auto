@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
+import socket
 import re
 import threading
 import time
@@ -48,18 +50,33 @@ def schedule_health(schedule: dict, last_attempt_at: int | None, now: int | None
 
 
 def make_handler(settings: Settings):
-    job_queue = JobQueue(settings)
-    manager = SourceJobManager(settings, job_queue)
-    transcripts = TranscriptJobManager(settings, job_queue)
-    production = LegacyProductionManager(settings, job_queue)
-    studio = Studio(settings)
-    # Old queued automatic jobs now enter the approval workflow. Legacy results
-    # remain readable; no new background watcher bypasses the approval gates.
-    job_queue.register("production", lambda code, progress: {"studio": studio.create(code)})
-    job_queue.resume_queued()
-    sessions = PlatformSessionManager(settings)
-    accounts = AccountRegistry(settings)
-    productions = ProductionManager(settings)
+    try:
+        job_queue = JobQueue(settings, autostart=False)
+    except RuntimeError as exc:
+        if '큐가 실행 중' not in str(exc):
+            raise
+        job_queue = JobQueue(settings, workers=False)
+    studio = None
+    try:
+        manager = SourceJobManager(settings, job_queue)
+        transcripts = TranscriptJobManager(settings, job_queue)
+        production = LegacyProductionManager(settings, job_queue)
+        sessions = PlatformSessionManager(settings)
+        accounts = AccountRegistry(settings)
+        productions = ProductionManager(settings)
+        studio = Studio(settings)
+        # Never consume queued production through the temporary legacy worker
+        # while the Studio owner is still being constructed.
+        job_queue.register("production", lambda code, progress: {"studio": studio.create(code)})
+        job_queue.start_workers()
+        job_queue.resume_queued()
+    except Exception:
+        try:
+            job_queue.close()
+        finally:
+            if studio is not None:
+                studio.close()
+        raise
     criteria_lock = threading.Lock()
 
     class Handler(StudioHTTP, SimpleHTTPRequestHandler):
@@ -489,12 +506,54 @@ def make_handler(settings: Settings):
             except (ValueError, OSError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
-    return partial(Handler, directory=str(settings.web_dir))
+    handler = partial(Handler, directory=str(settings.web_dir))
+    handler.job_queue = job_queue
+    handler.studio_resource = studio
+    handler.server_count = 0
+    handler.resource_lock = threading.Lock()
+    return handler
+
+
+class ManagedHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = os.name != 'nt'
+    # Finish already accepted API requests before draining the queues they may
+    # enqueue into. The shared resource stays alive until the last socket closes.
+    daemon_threads = False
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def server_close(self):
+        super().server_close()
+        handler = vars(self).pop('_managed_handler', None)
+        if handler is None:
+            return
+        with handler.resource_lock:
+            handler.server_count -= 1
+            close = handler.server_count == 0
+        if close:
+            try:
+                handler.job_queue.close()
+            finally:
+                handler.studio_resource.close()
 
 
 def serve(settings: Settings, port: int = 8775, host: str = "127.0.0.1",
           handler=None) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), handler or make_handler(settings))
+    # Bind first: a port conflict must not create orphan workers/queue leases.
+    httpd = ManagedHTTPServer((host, port), handler or SimpleHTTPRequestHandler)
+    try:
+        httpd.RequestHandlerClass = handler or make_handler(settings)
+        if hasattr(httpd.RequestHandlerClass, 'job_queue'):
+            with httpd.RequestHandlerClass.resource_lock:
+                httpd.RequestHandlerClass.server_count += 1
+            httpd._managed_handler = httpd.RequestHandlerClass
+        return httpd
+    except Exception:
+        httpd.server_close()
+        raise
 
 
 def serve_many(settings: Settings, hosts: list[str], port: int = 8775) -> list[ThreadingHTTPServer]:
@@ -502,11 +561,19 @@ def serve_many(settings: Settings, hosts: list[str], port: int = 8775) -> list[T
     hosts = list(dict.fromkeys(hosts))
     if not hosts:
         raise ValueError("하나 이상의 바인드 주소가 필요합니다.")
-    handler = make_handler(settings)
     servers = []
     try:
+        # The CLI uses this multi-interface path. Bind every socket before
+        # constructing managers/owners, so one occupied interface cannot leave
+        # a half-started Studio or alter the durable queues.
         for host in hosts:
-            servers.append(serve(settings, port, host, handler))
+            servers.append(ManagedHTTPServer((host, port), SimpleHTTPRequestHandler))
+        handler = make_handler(settings)
+        with handler.resource_lock:
+            handler.server_count = len(servers)
+            for httpd in servers:
+                httpd.RequestHandlerClass = handler
+                httpd._managed_handler = handler
     except Exception:
         for httpd in servers:
             httpd.server_close()

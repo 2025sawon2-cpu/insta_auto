@@ -1,0 +1,17 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {bundle} from '@remotion/bundler';
+import {selectComposition,renderStill} from '@remotion/renderer';
+const root=path.dirname(fileURLToPath(import.meta.url));
+const request=JSON.parse(await fs.readFile(process.argv[2],'utf8'));
+const output=request.output_dir;
+const serveUrl=await bundle({entryPoint:path.join(root,'root.jsx'),outDir:path.join(output,'thumbnail-bundle')});
+const assets=path.join(output,'thumbnail-bundle','public');await fs.mkdir(assets,{recursive:true});
+await fs.copyFile(request.background,path.join(assets,'background.png'));
+await fs.copyFile(path.join(root,'../web/assets/fonts/DoHyeon-Regular.ttf'),path.join(assets,'DoHyeon.ttf'));
+const props={background:'/public/background.png',document:{...request.document,frame:-1},fontUrl:'/public/DoHyeon.ttf'};
+const composition=await selectComposition({serveUrl,id:'InstaThumbnail',inputProps:props});
+const target=path.join(output,'thumbnail.png');
+await renderStill({serveUrl,composition,inputProps:props,frame:0,output:target,imageFormat:'png'});
+await fs.writeFile(process.argv[3],JSON.stringify({cover_path:target}));

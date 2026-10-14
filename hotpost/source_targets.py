@@ -23,7 +23,13 @@ def candidate_batch(candidates, limit, target):
     return (first + [c for c in ordered if id(c) not in ids])[:limit]
 
 
-def select_sources(candidates, limit, target):
+def select_sources(candidates, limit, target, *, required=True):
+    if not required:
+        # Only prefer TikTok among equally ranked candidates. Never reserve
+        # mandatory slots ahead of more relevant footage from another site.
+        ordered = sorted(candidates, key=lambda c: (c.source_score or 0,
+                         c.similarity or 0, c.platform == 'tiktok'), reverse=True)
+        return select_valid_candidates(ordered, limit)
     # Probe a copy so duplicate/limit annotations do not reject the final pool.
     preferred = select_valid_candidates(copy.deepcopy([c for c in candidates if usable_tiktok(c)]),
                                         min(limit, max(0, target)))

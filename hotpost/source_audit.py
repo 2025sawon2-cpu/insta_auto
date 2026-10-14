@@ -30,7 +30,8 @@ def reviewed_candidates(path, data, sources):
             # acquisition evidence unchanged instead of revoking completion.
             continue
         for key in ('source_quality', 'blur_required', 'watermark_masks', 'reviewed_intervals',
-                    'mask_review', 'functional_review'):
+                    'mask_review', 'functional_review', 'relevance_review_required', 'video_meta', 'source_role',
+                    'presentation_review_required', 'presentation_review', 'presentation_rejection_reasons'):
             if key in source:
                 row[key] = deepcopy(source[key])
         row['editing_eligible'] = bool(source.get('editing_eligible') is True and editing_ready(source) and verified)
@@ -57,6 +58,9 @@ def summarize(path, reviewed_sources=None):
         data['candidates'] = reviewed_candidates(path, data, reviewed_sources)
         if data.get('execution_audit_available', 'search_audit' in data):
             data['platform_outcomes'] = reviewed_platform_outcomes(path, data, reviewed_sources)
+            for platform, preference in data.get('platform_preferences', {}).items():
+                preference['usable'] = data['platform_outcomes'].get(platform, {}).get('usable', 0)
+                preference['status'] = 'met' if preference['usable'] >= preference['target'] else 'shortfall'
     platforms = {}
     reasons = Counter()
     failures = Counter()
@@ -74,6 +78,7 @@ def summarize(path, reviewed_sources=None):
         usable += bool(row.get('selected_for_zip') and row.get('editing_eligible', True)
                        and (data.get('user_supplied') or editing_ready(row)))
         reasons.update(row.get('rejection_reasons') or [])
+        reasons.update(row.get('presentation_rejection_reasons') or [])
         if 'download_failed' in (row.get('rejection_reasons') or []):
             error = row.get('error', '').lower()
             reason = ('다운로드 실행 환경 오류' if 'challenge solving' in error or 'javascript runtime' in error else
@@ -88,7 +93,10 @@ def summarize(path, reviewed_sources=None):
             'inspection': [{'title':row.get('title',''), 'score':row.get('discovery_score'),
                             'reasons':row.get('discovery_reasons',[]), 'duration':(row.get('discovery_meta') or {}).get('duration'),
                             'download_budget_seconds':row.get('download_budget_seconds'),
-                            'download_attempted':row.get('download_attempted'), 'rejections':row.get('rejection_reasons',[])}
+                            'download_attempted':row.get('download_attempted'),
+                            'format_warnings':row.get('format_warnings', []), 'portrait_geometry':row.get('portrait_geometry'),
+                            'presentation_review':{k:(row.get('presentation_review') or {}).get(k) for k in ('usable','reason')},
+                            'rejections':[*(row.get('rejection_reasons') or []), *(row.get('presentation_rejection_reasons') or [])]}
                            for row in data.get('candidates',[])[:40]],
             'platform_probe_seconds':data.get('platform_probe_seconds',{}),
             'execution_audit_available': data.get('execution_audit_available', 'search_audit' in data),
@@ -96,6 +104,9 @@ def summarize(path, reviewed_sources=None):
             'usable': usable, 'needs_review': max(0, data.get('downloaded', 0) - usable),
             'target': data.get('source_target'), 'stop_reason': data.get('budget_stop', ''),
             'platform_targets': data.get('platform_targets', {}),
+            'platform_preferences': data.get('platform_preferences', {}),
+            'similarity_warnings': dict(Counter(reason for row in data.get('candidates', []) for reason in row.get('similarity_warnings') or [])),
+            'format_warnings': dict(Counter(reason for row in data.get('candidates', []) for reason in row.get('format_warnings') or [])),
             'source_policy': data.get('source_policy'), 'platform_outcomes':data.get('platform_outcomes', {}),
             'notes': data.get('browser_notes', []) + data.get('verification_notes', [])}
     if reviewed_sources is not None:

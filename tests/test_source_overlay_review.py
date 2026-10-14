@@ -301,10 +301,11 @@ def test_saved_source_review_precedes_search_and_checks_only_editable_frames(tmp
                 {'path':str(inside),'source_timestamp':3.},{'path':str(outside),'source_timestamp':8.}]})
         return value
     monkeypatch.setattr(module,'review_source_overlays',overlay)
-    def function(settings,candidate,reference_frames,candidate_frames):
-        assert candidate_frames==[inside]
+    def function(settings,candidate,reference_frames,candidate_frames,reference_info=None):
+        assert candidate_frames==[{'path':str(inside),'source_timestamp':3.}]
         return source['functional_review']
     monkeypatch.setattr(source_functional,'review_function',function)
+    monkeypatch.setattr(source_functional,'reference_review_info',lambda state,folder:{'original_product_text':state['original_text']})
     job=studio.store.claim('sources');result=studio._collect_sources(studio.store.get(tid),job)
     assert result['visual_review_only'] and result['attempted_urls']==[]
     finish(studio,job,result)
@@ -320,6 +321,7 @@ def test_rejected_saved_overlay_is_retained_excluded_and_not_retried_forever(tmp
     from test_parallel_sources import task,asset,finish
     from hotpost import source_finder
     studio,tid,folder=task(tmp_path);source=asset(folder,0,quality='light-overlay',core=True)
+    studio.settings.source_browser_search=False  # The next indexed finder is mocked below.
     manifest=folder/'manifest.json';manifest.write_text(json.dumps({'candidates':[]}))
     studio.store.change(tid,lambda s,db:s.update(sources=[source],manifest_path=str(manifest)))
     monkeypatch.setattr(source_finder,'find_sources',lambda *a,**k:pytest.fail('unnecessary external search'))

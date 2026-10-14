@@ -51,6 +51,35 @@ def _fingerprint(value):
                                      separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
+def explicit_review_scope(source_sha256, intervals, duration, *, samples_per_interval, policy):
+    """Canonical physical request identity, independent of folder names/order."""
+    if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha256)):
+        raise ValueError('A complete source SHA-256 is required')
+    duration = _number(duration, 'source duration')
+    if duration <= 0:
+        raise ValueError('Source has no usable duration')
+    if type(samples_per_interval) is not int or not 3 <= samples_per_interval <= 15:
+        raise ValueError('Choose 3 to 15 evidence frames per interval')
+    if not isinstance(intervals, list) or not 1 <= len(intervals) <= 16:
+        raise ValueError('Choose 1 to 16 explicit source intervals')
+    windows=[]
+    for interval in intervals:
+        if not isinstance(interval, (list,tuple)) or len(interval)!=2:
+            raise ValueError('Each interval must be [start, end]')
+        start,end=(_number(v,'interval boundary') for v in interval)
+        if not 0 <= start < end <= duration:
+            raise ValueError('Evidence interval is outside the actual video')
+        window={'source_start':start,'source_end':end}
+        if window in windows:
+            raise ValueError('Duplicate evidence intervals are ambiguous')
+        windows.append(window)
+    scope={'version':1,'source_sha256':source_sha256,
+           'intervals':sorted(windows,key=lambda w:(w['source_start'],w['source_end'])),
+           'geometry':dict(GEOMETRY),'samples_per_interval':samples_per_interval,'policy':policy}
+    scope['fingerprint']=_fingerprint(scope)
+    return scope
+
+
 def _run(command, timeout=60):
     result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
                             errors='replace', timeout=timeout, check=False)
@@ -105,6 +134,8 @@ def sample_source_frames(source_path, source_sha256, output_dir, intervals, *,
         windows.append({'index': index, 'source_start': start, 'source_end': end})
     folder = Path(output_dir).resolve()
     folder.mkdir(parents=True, exist_ok=True)
+    from .source_frame_timing import probe_native_timing, frame_exposure
+    timing=probe_native_timing(source,source_sha256,ffprobe=ffprobe)
     evidence = []
     for window in windows:
         start, end = window['source_start'], window['source_end']
@@ -124,18 +155,24 @@ def sample_source_frames(source_path, source_sha256, output_dir, intervals, *,
             if not image_path.is_file() or not match:
                 raise ValueError('No decoded frame timestamp was returned')
             timestamp = float(match[1]) - origin
+            pts=re.search(r'\bpts:\s*(-?\d+)\s+pts_time:',result.stderr)
+            time_base=re.search(r'config in time_base:\s*(\d+/\d+)',result.stderr)
+            if pts and time_base:timestamp=float(int(pts[1])*Fraction(time_base[1]))-origin
             if not math.isfinite(timestamp) or not start - 1e-6 <= timestamp < end:
                 raise ValueError('Decoded frame falls outside the requested evidence interval')
             with Image.open(image_path) as frame:
                 if frame.size != (1080, 1920):
                     raise ValueError('Frame does not match the production canvas')
-            evidence.append({'frame_id': frame_id, 'path': str(image_path),
+            row={'frame_id': frame_id, 'path': str(image_path),
                 'sha256': sha256_file(image_path), 'source_timestamp': timestamp,
-                'requested_timestamp': requested, 'interval_index': window['index']})
+                'requested_timestamp': requested, 'interval_index': window['index']}
+            exposure=frame_exposure(row,source_sha256,timing)
+            if exposure:row['native_frame_exposure']=exposure
+            evidence.append(row)
     _source(source, source_sha256)
     return {'version': 1, 'source_path': str(source), 'source_sha256': source_sha256,
             'source_duration': duration, 'geometry': dict(GEOMETRY),
-            'intervals': windows, 'frames': evidence}
+            'intervals': windows, 'frames': evidence,'native_frame_timing':timing}
 
 
 def _check_evidence(evidence):
@@ -263,4 +300,6 @@ def approve_masks(proposal, review):
             'mask_review': {'reviewer': reviewer.strip(), 'source_sha256': evidence['source_sha256'],
                             'proposal_sha256': proposal['proposal_sha256'], 'geometry': dict(GEOMETRY),
                             'intervals': copy.deepcopy(review['intervals']),
+                            **({'native_frame_timing':copy.deepcopy(evidence['native_frame_timing'])}
+                               if evidence.get('native_frame_timing') else {}),
                             'evidence_frames': copy.deepcopy(evidence['frames'])}}

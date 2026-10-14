@@ -88,7 +88,8 @@ test('user-facing failures are Korean and source recovery explains the next acti
   assert.match(message('Source manifest contains no selected local videos.'),/자동 추가 수집/);
   assert.match(message('Failed to fetch'),/연결/);
   assert.doesNotMatch(message('unknown exception in worker'),/[A-Za-z]/);
-  assert.equal(title({title:'DdyQWlyKAv9',shortcode:'DdyQWlyKAv9'}),'새 쇼츠 제작');
+  assert.equal(title({title:'DdyQWlyKAv9',shortcode:'DdyQWlyKAv9'}),'제목 확인 필요');
+  assert.equal(title({title:'새 쇼츠 제작'}),'제목 확인 필요');
   assert.equal(title({title:'주방 수납 #추천 https://example.test/abc',shortcode:'abc'}),'주방 수납');
   const d=describe({status:'attention',error:'Source manifest contains no selected local videos.',automation:{stage:'prepare'},sources:[{id:'upload'}]});
   assert.match(d.message,/1개가 준비/);

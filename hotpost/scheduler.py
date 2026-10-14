@@ -33,7 +33,7 @@ if ($c.action -eq 'install') {
     $a = New-ScheduledTaskAction -Execute $c.python -Argument '-X utf8 -m hotpost.scheduled_run' -WorkingDirectory $c.root
     $t = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($c.hour).AddMinutes($c.minute))
     $p = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
-    $s = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    $s = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $c.name -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 } elseif ($c.action -eq 'uninstall') {
     Get-ScheduledTask -TaskName $c.name -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
@@ -176,7 +176,9 @@ def windows_task_xml(hour=DEFAULT_HOUR, minute=DEFAULT_MINUTE):
     child(options, 'StopIfGoingOnBatteries', 'false')
     child(options, 'StartWhenAvailable', 'true')
     child(options, 'Enabled', 'true')
-    child(options, 'ExecutionTimeLimit', 'PT12H')
+    # Per-request/operation silence checks protect resources. The scheduler
+    # cannot distinguish advancing collection from silence using total age.
+    child(options, 'ExecutionTimeLimit', 'PT0S')
     action = child(child(root, 'Actions', Context='Author'), 'Exec')
     child(action, 'Command', str(ROOT / '.venv' / 'Scripts' / 'python.exe'))
     child(action, 'Arguments', '-X utf8 -m hotpost run --acquire')

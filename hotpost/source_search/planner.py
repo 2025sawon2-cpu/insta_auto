@@ -18,7 +18,10 @@ def grounded_actions(plan, evidence):
     """Build fallback action translations only when literal evidence names it."""
     specifications = [
         (r'냉장|refrigerat\w*|冷藏', ('refrigerator storage', '냉장 보관법', '冷藏保存方法'), 'technique'),
-        (r'숟가락|스푼|떠서|scoop\w*|spoon|舀', ('scooping with a spoon', '한 스푼 떠서 사용하기', '用勺子舀取'), 'demonstrated_action'),
+        (r'(?:숟가락|스푼|국자)(?:으로|로|을|에)?[^.!?\n]{0,24}(?:떠(?:서|내|담|요)|뜨(?:는|기|고|면|다))'
+         r'|\bscoop(?:ing|ed|s)?\b[^.!?\n]{0,32}\b(?:with\s+(?:a\s+)?)?spoon\b'
+         r'|\bspoon\b[^.!?\n]{0,24}\bscoop(?:ing|ed|s)?\b|(?:勺|匙)[^。！？\n]{0,16}舀|舀[^。！？\n]{0,16}(?:勺|匙)',
+         ('scooping with a spoon', '한 스푼 떠서 사용하기', '用勺子舀取'), 'demonstrated_action'),
         (r'소분|portion\w*|分装', ('portioning', '소분 장면', '分装'), 'demonstrated_action'),
         (r'보관|저장|storage|保存', ('storage', '보관법', '保存方法'), 'technique'),
     ]
@@ -27,8 +30,15 @@ def grounded_actions(plan, evidence):
     for pattern, suffixes, intent in specifications:
         if cold and suffixes[0] == 'storage':
             continue
-        hit = next(((source, match.group(0)) for source, body in evidence.items()
-                    if (match := re.search(pattern, str(body), re.I))), None)
+        def positive_hits():
+            for source, body in evidence.items():
+                for sentence in re.split(r'[.!?。！？\n]', str(body)):
+                    if suffixes[0] == 'scooping with a spoon' and re.search(
+                            r"\b(?:not|never|without|avoid)\b|하지\s*마|먹지\s*마|뜨지|떠내지|떠담지|안\s*떠|不(?:要|用|能)|禁止", sentence, re.I):
+                        continue
+                    if match := re.search(pattern, sentence, re.I):
+                        yield source, match.group(0)
+        hit = next(positive_hits(), None)
         if not hit:
             continue
         for product in plan.get('products', []):
@@ -150,6 +160,10 @@ def round_queries(plan, strategy):
         actions = [d for d in details if d.get('intent') in {'product','unbranded','subject','action'}]
     if not actions:
         actions = details
+    # Model/SKU queries are grounded independently of catalog/translated
+    # action phrases. Do not discard them once action enrichment succeeds.
+    models = [d for d in details if d.get('intent') == 'model']
+    actions = models + actions
     phase = strategy['phase']
     suffixes = {'clean_action': {'en':'raw footage no captions', 'ko':'원본 영상 자막 없는', 'zh':'实拍 无字幕'},
                 'scene_discovery': {'en':'close up footage', 'ko':'클로즈업 영상', 'zh':'特写视频'}}
@@ -157,7 +171,7 @@ def round_queries(plan, strategy):
     for row in actions:
         item = dict(row)
         suffix = suffixes.get(phase, {}).get(item.get('language'))
-        if suffix:
+        if suffix and item.get('intent') != 'model':
             item['query'] = item['query'] + ' ' + suffix
             item['search_condition'] = phase
         identity = query_fingerprint(item['query'])

@@ -17,7 +17,7 @@
     return data;
   }
   function render(data) {
-    message.textContent = data.error || data.message;
+    message.textContent = (data.error || data.message) + (data.browser_connection === 'connected' ? ' · 수집 Chrome 연결됨' : ' · 수집 Chrome 연결 안 됨');
     message.classList.toggle('error', Boolean(data.error));
     finish.hidden = !data.active;
     finish.textContent = '세션 저장 완료';

@@ -9,6 +9,28 @@ from hotpost.config import Settings
 from hotpost.source_functional import review_function, sample_review_frames
 
 
+def test_hash_named_mask_frames_keep_actual_decoded_timestamps(tmp_path,monkeypatch):
+    from hotpost import source_functional as module
+    reference=tmp_path/'reference.jpg';reference.write_bytes(b'reference')
+    frames=[]
+    for i,t in enumerate([12.0,3.0,8.0]):
+        p=tmp_path/f'arbitrary-hash-{i}.png';p.write_bytes(str(t).encode())
+        frames.append({'path':str(p),'source_timestamp':t})
+    monkeypatch.setattr(module,'frame_inline_data',lambda p:{'mimeType':'image/jpeg','data':base64.b64encode(p.read_bytes()).decode()})
+    seen=[]
+    def generate(settings,instruction,data,*,media):
+        seen.extend(media)
+        return {'same_core_function':True,'context_usable':True,'context_usage_limits':[],
+                'observed_actions':['처음 액체를 붓고 뒤에 표면을 닦음'],'differences':[],'reason':'실제 순서 확인'}
+    monkeypatch.setattr('hotpost.script_rewriter._generate',generate)
+    result=review_function(Settings(),SimpleNamespace(file_sha256='hash'),[reference],frames)
+    stamps=[v['text'] for v in seen if 'text' in v and 'decoded source timestamp' in v['text']]
+    assert stamps==['CANDIDATE: decoded source timestamp 3.0000s',
+                   'CANDIDATE: decoded source timestamp 8.0000s',
+                   'CANDIDATE: decoded source timestamp 12.0000s']
+    assert result['evidence_frames'][1:]==[frames[i]['path'] for i in [1,2,0]]
+
+
 def test_old_rejection_rechecked_and_success_clears_stale_ineligibility():
     from hotpost.source_functional import needs_function_review, apply_function_review, REVIEW_POLICY
     source={'sha256':'hash','editing_eligible':False,'functional_review':{
@@ -107,3 +129,44 @@ def test_review_sends_bounded_endpoint_evidence_and_labels_uncertain_order(tmp_p
     assert result['evidence_frames'][-1] == str(candidate[-1])
     assert len(result['evidence_frames']) == 7
     assert result['same_core_function'] is False and result['source_sha256'] == 'hash'
+
+def test_whole_reference_overview_contains_late_scene_and_tracks_file_identity(tmp_path):
+    import shutil,subprocess
+    from PIL import Image
+    from hotpost.source_functional import reference_review_info
+    from hotpost.source_quality import sha256_file
+    binary=shutil.which('ffmpeg')
+    if not binary:pytest.skip('ffmpeg unavailable')
+    video=tmp_path/'reference.mp4'
+    def create(color):
+        subprocess.run([binary,'-v','error','-y','-f','lavfi','-i',
+            f"color=red:size=90x160:rate=10:duration=1.2,drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill:enable='gte(t,0.6)'",
+            '-an','-c:v','libx264','-pix_fmt','yuv420p',str(video)],check=True,capture_output=True)
+    create('blue')
+    info=reference_review_info({'reference_video':str(video),'original_text':'두 가지 기능을 보여요.'},tmp_path)
+    assert info['reference_sha256']==sha256_file(video)
+    with Image.open(info['overview_path']) as im:
+        first=im.convert('RGB').getpixel((135,240));last=im.convert('RGB').getpixel((945,1200))
+        assert first[0]>first[2]+100 and last[2]>last[0]+100
+    old=info['overview_path'];create('green')
+    updated=reference_review_info({'reference_video':str(video)},tmp_path)
+    assert updated['overview_path']!=old
+
+def test_secondary_feature_review_receives_full_overview_and_reference_information(tmp_path,monkeypatch):
+    from PIL import Image
+    from hotpost import source_functional,script_rewriter
+    overview=tmp_path/'whole.jpg';Image.new('RGB',(1080,1440),'blue').save(overview)
+    candidate=tmp_path/'cloth.jpg';Image.new('RGB',(540,960),'green').save(candidate)
+    captured={}
+    def generate(settings,instruction,data,*,media):
+        captured.update(data=data,media=media)
+        return {'same_core_function':True,'matched_reference_features':['cloth hanging on convertible frame'],
+                'observed_actions':['cloth placed on the exposed frame'],
+                'context_usage_limits':['Not proof of drying speed or other modes']}
+    monkeypatch.setattr(script_rewriter,'_generate',generate)
+    info={'overview_path':str(overview),'original_product_text':'흔들의자, 테이블, 건조대의 세 가지 용도.'}
+    result=source_functional.review_function(Settings(),SimpleNamespace(file_sha256='hash'),[],[candidate],info)
+    assert 'FULL-VIDEO OVERVIEW' in captured['media'][0]['text']
+    assert captured['data']['provided_reference_info']['original_product_text']==info['original_product_text']
+    assert result['matched_reference_features']==['cloth hanging on convertible frame']
+    assert str(overview) in result['evidence_frames'] and result['context_usage_limits']

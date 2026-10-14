@@ -10,6 +10,7 @@ from .editing_adapter import _atomic_json
 from .source_policy import owned_policy
 from .studio_store import Conflict
 from .studio_workflow import snapshot
+from .writing.reference_evidence import COMMENT_KEYWORD
 
 
 def validate_brief(data):
@@ -24,6 +25,7 @@ def validate_brief(data):
         if not isinstance(value, str) or len(value) > maximum:
             raise ValueError(f'{key} 입력 길이를 확인하세요. 최대 {maximum}자입니다.')
         brief[key] = value.strip()
+    brief['comment_keyword'] = COMMENT_KEYWORD
     if mode == 'manual' and not brief['text']:
         raise ValueError('영상에서 읽을 대본을 입력하세요.')
     if mode == 'automatic' and not brief['product']:
@@ -150,7 +152,7 @@ class SelfShotMixin:
                 brief = state['self_shot']
                 payload = {'reference_script':state['original_text'], 'generation_mode':'self_shot',
                     'product':brief['product'], 'research':state.get('research', {}),
-                    'comment_keyword':brief['comment_keyword'] or '나도',
+                    'comment_keyword':COMMENT_KEYWORD,
                     'writing_contract':contract_snapshot('self_shot')}
                 remote = adapter.jobs.create('script', payload, state['id']+':'+state['run_id'])
             job['checkpoint']['writing_job_id'] = remote['id']

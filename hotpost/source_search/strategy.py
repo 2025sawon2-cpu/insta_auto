@@ -5,10 +5,12 @@ import hashlib
 import re
 import unicodedata
 from pathlib import Path
+from ..source_attempts import candidate_execution, search_execution, unresolved_search_scope, SEARCH_ACCESS_WAITS
 
 SKIPPED = {'not_attempted', 'cooldown', 'verification_required', 'login_required',
            'no_supported_queries', 'query_exhausted', 'image_exhausted', 'budget_exhausted',
            'strategy_skipped', 'readiness_blocked', 'platform_disabled'}
+ACCESS_WAITS = SEARCH_ACCESS_WAITS
 
 # Conservative, inspectable equivalence classes. Unknown wording retains its
 # literal identity; modifiers, language and corpus remain distinct.
@@ -59,24 +61,83 @@ def normalize_query(query):
 
 
 def attempted(row):
-    return row.get('provider') != 'browser-worker' and bool(row.get('query')) and (bool(row.get('requests')) or
-        row.get('status') not in SKIPPED | {'started', ''})
+    return search_execution(row)['attempted']
+
+
+def consumed_scope(row):
+    """An access/service wait does not establish a failed content search."""
+    return search_execution(row)['consumed']
+
+
+def candidate_ledgers(candidates):
+    """Inspection consumes a URL independently of whether network bytes were sent."""
+    attempted_urls, inspected_urls, waits = [], [], []
+    deferred = {'platform_disabled','platform_cooldown','platform_budget_exhausted',
+                'not_probed','not_attempted','download_budget_deferred','valid_candidate_limit_reached'}
+    for row in candidates:
+        url = row.get('original_url') or row.get('url')
+        execution = candidate_execution(row)
+        if execution['waiting']:
+            waits.append({'provider':row.get('platform','browser-worker'), 'url':url,
+                'status':execution['access_status'], 'observed':execution['observed'],
+                'basis':execution['basis']})
+            continue
+        if row.get('downloaded_file') or execution['attempted']:
+            attempted_urls.append(url)
+        if row.get('downloaded_file') or set(row.get('rejection_reasons') or []) - deferred - {'download_failed'}:
+            inspected_urls.append(url)
+    return {'attempted_urls':list(dict.fromkeys(u for u in attempted_urls if u)),
+            'inspected_urls':list(dict.fromkeys(u for u in inspected_urls if u)), 'access_waits':waits}
 
 
 def search_key(row):
     mode = 'image' if row.get('language') == 'image' else 'text'
     value = row.get('image_sha256') if mode == 'image' else None
-    return (row.get('provider', ''), mode, value or normalize_query(row.get('query', '')))
+    return (row.get('provider', ''), mode, value or normalize_query(row.get('query', '')), search_scope(row))
 
 
-def fresh_queries(queries, provider, history):
-    used = {search_key(r) for r in history if attempted(r)}
-    semantic_used = {query_fingerprint(r.get('query', '')) for r in history
-                     if attempted(r) and r.get('provider') == provider and r.get('language') != 'image'}
+def search_scope(row):
+    """Only observed pagination changes a search scope; IDs/time/prose do not.
+
+    Missing pagination and the initial page are the same scope. Cursors remain
+    case sensitive because they are provider tokens, rather than query prose.
+    Callers must actually navigate the requested page/cursor, never synthesize
+    one merely to make a previously completed search appear unused.
+    """
+    scope = row.get('search_scope') or {}
+    if not isinstance(scope, dict):
+        scope = {}
+    values = {**scope, **{k: row[k] for k in ('page', 'page_number', 'cursor',
+              'continuation_token', 'offset') if k in row}}
+    page = values.get('page', values.get('page_number'))
+    if page is not None:
+        try:
+            page = str(int(page))
+        except (ValueError, TypeError):
+            page = str(page).strip()
+    cursor = values.get('cursor', values.get('continuation_token'))
+    offset = values.get('offset')
+    if offset is not None:
+        try:
+            offset = str(int(offset))
+        except (ValueError, TypeError):
+            offset = str(offset).strip()
+    return (page if page not in (None, '', '1') else '',
+            str(cursor) if cursor not in (None, '') else '',
+            offset if offset not in (None, '', '0') else '')
+
+
+def fresh_queries(queries, provider, history, *, scope=None):
+    from .readiness import parser_revision
+    requested_scope = search_scope({'search_scope': scope or {}})
+    blocked = lambda r: consumed_scope(r) or unresolved_search_scope(r, parser_revision(provider))
+    used = {search_key(r) for r in history if blocked(r)}
+    semantic_used = {(query_fingerprint(r.get('query', '')), search_scope(r)) for r in history
+                     if blocked(r) and r.get('provider') == provider and r.get('language') != 'image'}
     seen, result = set(), []
     for query in queries:
-        key = (provider, 'text', normalize_query(query))
-        semantic = query_fingerprint(query)
+        key = (provider, 'text', normalize_query(query), requested_scope)
+        semantic = (query_fingerprint(query), requested_scope)
         if key[2] and key not in used and semantic not in semantic_used and semantic not in seen:
             result.append(query); seen.add(semantic)
     return result
@@ -117,13 +178,15 @@ def similar_signature(a, b):
 
 
 def fresh_frames(frames, provider, history):
-    used = {search_key(r) for r in history if attempted(r)}
-    signatures = [r.get('image_signature') for r in history if attempted(r) and r.get('provider') == provider]
+    from .readiness import parser_revision
+    blocked = lambda r: consumed_scope(r) or unresolved_search_scope(r, parser_revision(provider))
+    used = {search_key(r) for r in history if blocked(r)}
+    signatures = [r.get('image_signature') for r in history if blocked(r) and r.get('provider') == provider]
     seen, result = set(), []
     for frame in frames:
-        key = (provider, 'image', image_sha256(frame))
+        key = (provider, 'image', image_sha256(frame), search_scope({}))
         # Old manifests have stable frame names but no content hash.
-        legacy = (provider, 'image', normalize_query(frame.name))
+        legacy = (provider, 'image', normalize_query(frame.name), search_scope({}))
         signature = image_signature(frame)
         if key not in used and legacy not in used and key not in seen and not any(similar_signature(signature, old) for old in signatures):
             result.append(frame); seen.add(key); signatures.append(signature)
@@ -131,19 +194,47 @@ def fresh_frames(frames, provider, history):
 
 
 def merge_history(*histories):
-    """Keep a compact ledger without a rolling window that forgets old searches."""
+    """Preserve observed access attempts separately from consumed content scopes.
+
+    An actual CAPTCHA/429 request is acquisition evidence even though it cannot
+    establish a failed content search. Later waits must not overwrite the last
+    confirmed content result; scope comparison uses consumed_scope, not mere
+    ledger membership. Unattempted saved gates remain in immutable manifests.
+    """
+    import json
     records = {}
     for history in histories:
         for row in history:
-            if attempted(row):
-                key = search_key(row)
+            content = consumed_scope(row)
+            pending = search_execution(row)['pending']
+            actual_wait = row.get('status') in ACCESS_WAITS and bool(row.get('requests'))
+            if content or actual_wait or pending:
+                key = (('content', search_key(row)) if content else
+                    ('pending' if pending else 'access', search_key(row), row.get('status'),
+                        json.dumps(row.get('requests',[]), sort_keys=True, ensure_ascii=False)))
                 records[key] = {k: row[k] for k in ('provider', 'query', 'language', 'status',
                     'image_sha256', 'image_signature', 'requests', 'candidates', 'error', 'strategy', 'parser_revision',
-                    'http_status', 'reason') if k in row}
+                    'http_status', 'reason', 'search_scope', 'page', 'page_number', 'cursor',
+                    'continuation_token', 'offset', 'stage', 'execution', 'result_method',
+                    'error_detail', 'visible_search_controls') if k in row}
     return list(records.values())
 
 
 def restore_history(record):
+    if record.get('inspection_ledger_version') != 1:
+        # Older acquisition receipts omitted inspected-but-undownloaded URLs.
+        # Restore that evidence before another shortlist execution, preserving
+        # the original network history and every immutable manifest.
+        import json
+        inspected = list(record.get('inspected_urls', []))
+        for entry in record.get('rounds', []):
+            try:
+                saved = json.loads(Path(entry['manifest_path']).read_text(encoding='utf-8'))
+                inspected.extend(candidate_ledgers(saved.get('candidates', []))['inspected_urls'])
+            except (OSError, ValueError, KeyError):
+                continue
+        record['inspected_urls'] = list(dict.fromkeys(inspected))
+        record['inspection_ledger_version'] = 1
     if record.get('strategy_version') == 2:
         return record.get('queries', [])
     histories = [record.get('queries', [])]
@@ -169,7 +260,7 @@ def stop_diagnostics(searches, goal, outcomes=None):
     parts = []
     if blocked:
         parts.append('인증·로그인·요청 제한: ' + ', '.join(blocked))
-    unresolved = sorted({r.get('provider','') for r in searches if r.get('status') in {'page_unresolved','readiness_blocked'}
+    unresolved = sorted({r.get('provider','') for r in searches if search_execution(r)['pending'] or r.get('status') in {'page_unresolved','readiness_blocked'}
                          or (r.get('status') == 'strategy_skipped' and '판독' in r.get('reason',''))})
     if unresolved:
         parts.append('검색 화면 판독 실패로 경로 중지: ' + ', '.join(unresolved))

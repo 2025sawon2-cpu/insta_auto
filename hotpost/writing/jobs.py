@@ -28,18 +28,29 @@ class Jobs:
             with db:yield db
         finally:db.close()
 
-    def get(self,jid):
+    def get(self,jid, *, include_payload=True):
         if not isinstance(jid,str) or not jid.isalnum():raise ValueError('잘못된 집필 작업 ID')
-        with self.db() as db:row=db.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+        columns = '*' if include_payload else 'id,kind,state,result,error,progress,message,created,cancel'
+        with self.db() as db:row=db.execute('SELECT '+columns+' FROM jobs WHERE id=?',(jid,)).fetchone()
         if row is None:raise KeyError('저장된 집필 작업을 찾지 못했습니다.')
         value=dict(row)
-        for key in ('payload','result'):value[key]=json.loads(value[key]) if value[key] else None
+        for key in ('payload','result'):
+            if key in value:value[key]=json.loads(value[key]) if value[key] else None
         return value
 
     def update(self,jid,**values):
         if 'result' in values:values['result']=json.dumps(values['result'],ensure_ascii=False)
         with self.db() as db:
             db.execute('UPDATE jobs SET '+','.join(k+'=?' for k in values)+' WHERE id=?',(*values.values(),jid))
+
+    def observe_progress(self,jid,watch):
+        """Propagate actual CLI content progress through the parent wait boundary."""
+        for path in (self.root/jid).glob('codex-*/progress.json'):
+            try:
+                value=json.loads(path.read_text('utf-8'))
+                if value.get('kind')=='model_items' and value.get('call_id')==path.parent.name:
+                    watch.observe(('model_items',path.parent.name),int(value['sequence']))
+            except (OSError,ValueError,KeyError,TypeError):pass
 
     def create(self,kind,payload,identity=''):
         raw=json.dumps(payload,ensure_ascii=False,sort_keys=True)
@@ -91,7 +102,9 @@ class Jobs:
         folder=self.root/job['id'];folder.mkdir(exist_ok=True)
         started=time.monotonic()
         def check():
-            if self.get(job['id'])['cancel']:raise RuntimeError('집필 취소 요청')
+            with self.db() as db:
+                cancelled=db.execute('SELECT cancel FROM jobs WHERE id=?',(job['id'],)).fetchone()[0]
+            if cancelled:raise RuntimeError('집필 취소 요청')
         def progress(p,message):self.update(job['id'],progress=p,message=message)
         try:
             payload=job['payload'];check()
@@ -127,5 +140,9 @@ class Jobs:
             _atomic_json(folder/'result.json',result)
             self.update(job['id'],state='completed',result=result,progress=1,message='완료')
         except Exception as exc:
-            cancelled=bool(self.get(job['id'])['cancel'])
-            self.update(job['id'],state='cancelled' if cancelled else 'failed',error=str(exc)[:1500],message='집필 취소' if cancelled else '집필 실패')
+            cancelled=bool(self.get(job['id'],include_payload=False)['cancel'])
+            from ..model_service import ModelServiceUnavailable
+            failure = ({'error_reason':'model_capacity','retry_at':exc.retry_at,'attempted':exc.attempted}
+                       if isinstance(exc,ModelServiceUnavailable) else {'error_reason':type(exc).__name__})
+            self.update(job['id'],state='cancelled' if cancelled else 'failed',error=str(exc)[:1500],
+                        result=failure,message='집필 취소' if cancelled else '집필 실패')

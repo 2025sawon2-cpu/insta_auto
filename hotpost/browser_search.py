@@ -1,6 +1,6 @@
 """Playwright 기반 무료 역이미지/플랫폼 검색 공급자.
 
-전용 Chrome 영구 프로필을 사용하며 CAPTCHA, 로그인, DOM 변경은 우회하지 않는다.
+현재 연결된 수집용 Chrome을 사용하며 CAPTCHA, 로그인, DOM 변경은 우회하지 않는다.
 공급자 하나가 실패해도 다른 검색은 계속 수행하고 진단 스크린샷을 남긴다.
 """
 from __future__ import annotations
@@ -10,14 +10,15 @@ import time
 import html
 import json
 from pathlib import Path
-from urllib.parse import parse_qs, quote, quote_plus, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from .config import Settings
 from .request_pacing import request_pause
-from .browser_profile import BROWSER_LOCK, export_cookies, restore_platform_cookies, save_platform_cookies, source_context_options
-from .search_access import access_record, manual_required, challenge_on_page, challenge_in_text, login_wall_on_page, empty_results_on_page
+from .browser_profile import BROWSER_LOCK, export_cookies, save_platform_cookies
+from .search_access import access_record, manual_required, challenge_on_page, challenge_in_text, login_wall_on_page, empty_results_on_page, search_restriction_on_page
 from .source_urls import video_url
 from .source_queries import platform_queries, clean_terms, language
+from .source_browser_runtime import attach_browser, browser_lease, existing_page, pace
 
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
@@ -46,20 +47,30 @@ def _anchors(page, provider: str, query: str, match_kind: str) -> list[dict]:
     out = []
     try:
         # 동적 검색 페이지의 수천 개 노드를 Python에서 하나씩 조회하면 분 단위로 멈출 수 있다.
-        anchors = page.locator("a[href]").evaluate_all(
+        # Bilibili's footer has an unrelated BV video before result hydration.
+        # It must not count as a result or end the bounded result wait early.
+        selector = ('.bili-video-card a[href], .video-item a[href]'
+                    if 'bilibili' in provider and match_kind == 'platform-search' else 'a[href]')
+        anchors = page.locator(selector).evaluate_all(
             """els => els.slice(0, 1500).map(a => ({href: a.href,
               text: a.innerText || a.getAttribute('aria-label') || '',
               title: a.getAttribute('title') || a.querySelector('[title]')?.getAttribute('title') || '',
+              card_title: a.closest('.bili-video-card,.video-item')?.querySelector('.bili-video-card__info--tit')?.textContent || '',
+              card_visible: !!a.closest('.bili-video-card,.video-item')?.getClientRects().length,
               duration: a.closest('.bili-video-card,.video-item')?.querySelector('.bili-video-card__stats__duration,.duration')?.textContent || ''}))"""
         )
     except Exception:  # noqa: BLE001
         return out
     for anchor in anchors:
         try:
+            scoped_bilibili = 'bilibili' in provider and match_kind == 'platform-search'
+            if scoped_bilibili and anchor.get('card_visible') is False:
+                continue
             url = _unwrap(urljoin(page.url, anchor.get("href") or ""))
             if not _is_candidate(url):
                 continue
-            title = str(anchor.get("title") or anchor.get("text") or "").strip()
+            title = str((anchor.get('card_title') if scoped_bilibili else '')
+                        or anchor.get("title") or anchor.get("text") or "").strip()
             item = {"url": url, "provider": provider, "title": re.sub(r"\s+", " ", title)[:240],
                     "query": query, "match_kind": match_kind}
             if 'bilibili' in urlparse(url).netloc:
@@ -108,6 +119,10 @@ def _html_candidates(raw: str, provider: str, query: str) -> list[dict]:
 
 def _embedded_candidates(page, provider: str, query: str) -> list[dict]:
     """SPA가 링크를 anchor로 만들지 않아도 hydration 데이터의 영상 ID를 복구한다."""
+    if provider == 'bilibili':
+        # Whole-page HTML includes navigation/footer BV IDs unrelated to this
+        # query. The hydrated visible search cards already provide exact links.
+        return []
     try:
         return _html_candidates(page.content(), provider, query)
     except Exception:  # noqa: BLE001
@@ -139,16 +154,23 @@ class BrowserSearcher:
         self.deadline = None
 
     def _pace(self, provider, reserve=20):
-        seconds = max(1, self.settings.source_browser_search_interval)
-        if self.deadline is not None and time.monotonic()+seconds+reserve >= self.deadline:
-            raise SearchBudgetReached('이번 검색 예산 완료')
-        if seconds:
-            self.progress(f'{provider} · 다음 검색 전 {seconds:g}초 대기')
-            time.sleep(seconds)
+        try:
+            pace(self.settings, provider, self.progress,
+                 on_wait=lambda until: setattr(self, 'waiting_until', until))
+        except TimeoutError as exc:
+            raise SearchBudgetReached(str(exc)) from exc
+
+    def _page(self, context, provider):
+        return existing_page(context, self.settings, provider)
+
+    def _retry_pause(self, provider):
+        self.progress(f'{provider} · 일시적 로딩 실패 · 20초 후 1회 재시도')
+        time.sleep(20)
 
     def _audit_request(self, audit, operation):
+        from .source_browser_runtime import operation_interval
         audit.setdefault('requests', []).append({'operation': operation, 'at': time.time(),
-            'minimum_interval_seconds': max(1, self.settings.source_browser_search_interval)})
+            'minimum_interval_seconds': operation_interval(self.settings, audit.get('provider'))})
         # Flush before navigation/upload: a worker termination must not turn a
         # real request into an unattempted "started" row on the next round.
         self.progress(f"{audit.get('provider')} · 요청 기록: {operation}")
@@ -156,7 +178,23 @@ class BrowserSearcher:
     def _cooldown_path(self, provider):
         return self.settings.data_dir / 'search_cooldowns' / f'{provider}.json'
 
-    def _cooling_down(self, provider):
+    def _recheck_saved_captcha(self, provider, context=None, page=None):
+        from .search_access import observe_saved_captcha
+        try:
+            if page is not None:
+                return observe_saved_captcha(self.settings,provider,page)
+            if context is not None:
+                return observe_saved_captcha(self.settings,provider,self._page(context,provider))
+            if not (self.settings.source_browser_profile_dir/'hotpost-live-session-v1').exists():
+                return {'status':'unavailable','error_type':'ExistingLiveSessionMissing'}
+            from playwright.sync_api import sync_playwright
+            with browser_lease(self.settings), sync_playwright() as pw:
+                context = attach_browser(pw,self.settings)
+                return observe_saved_captcha(self.settings,provider,self._page(context,provider))
+        except Exception as exc:
+            return {'status':'unavailable','error_type':type(exc).__name__}
+
+    def _cooling_down(self, provider, *, context=None, page=None):
         from .source_collection_access import disabled_platforms
         disabled = disabled_platforms(self.settings)
         if provider in disabled:
@@ -165,17 +203,30 @@ class BrowserSearcher:
                                   'reason':disabled[provider]})
             self.progress(f'{provider} · 사용자 설정으로 수집 제외')
             return True
+        record=access_record(self.settings.data_dir,provider)
+        captcha_check = None
+        if record.get('reason')=='captcha' and manual_required(record):
+            captcha_check=self._recheck_saved_captcha(provider,context,page)
+            if captcha_check['status']=='unavailable':
+                self.searches.append({'provider':provider,'query':'','language':'','status':'not_attempted',
+                    'candidates':0,'reason':'captcha_recheck_unavailable','captcha_check':captcha_check})
+                self.progress(f'{provider} · 현재 수집용 화면을 확인할 수 없어 요청 보류')
+                return True
+            record=access_record(self.settings.data_dir,provider)
+            if captcha_check['status']=='clear':
+                BROWSER_COOLDOWNS.pop(provider,None)
+                self.notes.append(f'{provider} · 현재 기존 탭에 CAPTCHA 없음 확인 · 과거 차단 기록 해제')
         if readiness_blocked(self.settings.data_dir,provider):
             self.searches.append({'provider':provider,'query':'','language':'','status':'readiness_blocked',
                                   'parser_revision':parser_revision(provider),'candidates':0})
             self.notes.append(f'{provider} · 검색 화면 판독 실패 · 판독기 수정 또는 명시적 세션 재확인 전 재접근 중지')
             self.progress(f'{provider} · 검색 화면 판독 실패로 경로 중지')
             return True
-        record=access_record(self.settings.data_dir,provider)
         if manual_required(record):
             reason='login_required' if record.get('reason')=='login_required' else 'verification_required'
-            self.searches.append({'provider':provider,'query':'','language':'','status':reason,'candidates':0})
-            self.notes.append(f'{provider} · 저장된 인증 문제 · 확인 전 자동 재접근하지 않음')
+            self.searches.append({'provider':provider,'query':'','language':'','status':reason,'candidates':0,
+                                  **({'captcha_check':captcha_check} if captcha_check else {})})
+            self.notes.append(f'{provider} · '+('현재 화면에 CAPTCHA 있음 · 해당 플랫폼 요청 중지' if captcha_check else '로그인 확인 필요'))
             self.progress(f'{provider} · 인증 확인 필요 · 다른 검색으로 진행')
             return True
         until = BROWSER_COOLDOWNS.get(provider, 0)
@@ -184,7 +235,7 @@ class BrowserSearcher:
             saved = json.loads(target.read_text())
             # Apply the ten-minute ceiling to old persisted exponential pauses too.
             blocked_at = float(saved.get('blocked_at', target.stat().st_mtime))
-            until = min(float(saved['until']), blocked_at + 600)
+            until = float(saved['until']) if saved.get('server_retry_after') else min(float(saved['until']), blocked_at + 600)
             BROWSER_COOLDOWNS[provider] = until
         except (OSError, ValueError, KeyError, TypeError):
             pass
@@ -196,7 +247,7 @@ class BrowserSearcher:
         self.progress(f'{provider} · 인증/요청 제한으로 이번 검색 건너뜀')
         return True
 
-    def _block(self, provider, audit, reason):
+    def _block(self, provider, audit, reason, response=None):
         from .editing_adapter import _atomic_json
         target = self._cooldown_path(provider)
         previous = {}
@@ -208,10 +259,24 @@ class BrowserSearcher:
         strikes = (max(1, int(previous.get('strikes', 1))) + 1
                    if previous and now - float(previous.get('blocked_at', previous.get('until', 0))) < 86400 else 1)
         seconds = min(600, max(60, self.settings.source_browser_block_cooldown))
+        server_retry_after = False
+        if response is not None and reason == 'rate_limited':
+            from email.utils import parsedate_to_datetime
+            value = getattr(response, 'headers', {}).get('retry-after', '')
+            try:
+                seconds = max(0, float(value))
+                server_retry_after = True
+            except ValueError:
+                try:
+                    seconds = max(0, parsedate_to_datetime(value).timestamp() - now)
+                    server_retry_after = True
+                except (TypeError, ValueError, OverflowError):
+                    pass
         until = now + seconds
         BROWSER_COOLDOWNS[provider] = until
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_json(target, {'until': until, 'reason': reason, 'blocked_at': now, 'strikes': strikes,
+                             'server_retry_after': server_retry_after,
                              'requires_verification':reason in {'captcha','login_required'}})
         audit['status'] = reason
         self.notes.append(f'{provider} {reason} · '+('사용자 인증 확인 전 재검색 중지' if reason in {'captcha','login_required'} else f'{seconds}초 동안 재검색 중지'))
@@ -223,7 +288,7 @@ class BrowserSearcher:
 
     def _check_block(self, page, provider, audit, response=None):
         if response is not None and response.status == 429:
-            self._block(provider, audit, 'rate_limited')
+            self._block(provider, audit, 'rate_limited', response)
             return True
         if not self._captcha(page):
             if login_wall_on_page(page,provider):
@@ -232,11 +297,13 @@ class BrowserSearcher:
             return False
         audit['challenge_detected_at'] = time.time()
         audit['challenge_page'] = page.url.split('?',1)[0]
+        if provider == 'tiktok':
+            self._block(provider, audit, 'captcha')
+            return True
         audit['challenge_wait_setting_seconds'] = self.settings.source_browser_captcha_wait
         self.progress(f'{provider} · CAPTCHA 인증 대기 · 열린 Chrome에서 직접 확인해 주세요')
         if not self.settings.source_browser_headless:
             deadline = time.monotonic() + self.settings.source_browser_captcha_wait
-            if self.deadline is not None:deadline=min(deadline,self.deadline)
             while time.monotonic() < deadline:
                 page.wait_for_timeout(1000)
                 if not self._captcha(page):
@@ -256,29 +323,24 @@ class BrowserSearcher:
         except ImportError:
             return {"candidates": [], "terms": [], "notes": ["Playwright가 설치되지 않아 브라우저 검색을 건너뜀"]}
         selected = frames
-        with BROWSER_LOCK, sync_playwright() as pw:
+        with BROWSER_LOCK, browser_lease(self.settings), sync_playwright() as pw:
             try:
-                context = pw.chromium.launch_persistent_context(
-                    str(self.settings.source_browser_profile_dir), **source_context_options(self.settings.source_browser_headless),
-                )
+                context = attach_browser(pw, self.settings)
             except Exception as exc:  # noqa: BLE001
-                return {"candidates": [], "terms": [], "notes": [f"Chrome 시작 실패: {exc}"]}
+                return {"candidates": [], "terms": [], "notes": [f"Chrome 연결 실패: {exc}"],
+                        "searches": [{'provider': 'browser-worker', 'status': 'connection_failed', 'candidates': 0}]}
             context.set_default_timeout(15000)
             try:
-                restore_platform_cookies(context, self.settings.data_dir, ['google','tiktok', 'douyin', 'xiaohongshu', 'youtube'])
-                from .login_exchange import apply_sessions
-                apply_sessions(context, self.settings.data_dir, self.settings.source_browser_profile_dir,
-                               ['google', 'tiktok', 'douyin', 'xiaohongshu', 'youtube'])
-                routes = self.routes if self.routes is not None else ['tiktok','douyin','xiaohongshu','bilibili','google-lens','yandex-images']
+                routes = self.routes if self.routes is not None else ['youtube','tiktok','douyin','xiaohongshu','bilibili','google-lens','yandex-images']
                 for provider in routes:
                     self.visual_candidates.extend(self.candidates)
                     self.candidates = []
-                    if provider == 'google-lens' and selected:
-                        self._google(context, selected, limit)
-                    elif provider == 'yandex-images' and selected:
-                        self._yandex(context, selected, limit)
-                    elif provider in {'tiktok','douyin','xiaohongshu','bilibili'}:
-                        self._platforms(context, queries, limit, providers={provider})
+                    try:
+                        self._run_route(context, provider, selected, queries, limit)
+                    except LookupError as exc:
+                        self.searches.append({'provider':provider, 'query':'', 'status':'not_attempted',
+                                              'candidates':0, 'reason':str(exc)})
+                        self.notes.append(f'{provider} · 기존 탭을 특정할 수 없어 건너뜀 · 새 탭을 만들지 않음')
                 # 역이미지 근거를 보존한다. 최종 플랫폼 분배는 source_finder에서 수행한다.
                 seen = set()
                 combined = []
@@ -299,7 +361,7 @@ class BrowserSearcher:
                         save_platform_cookies(cookies, self.settings.data_dir, platform)
                 except Exception as exc:  # noqa: BLE001
                     self.notes.append(f"브라우저 쿠키 저장 실패: {type(exc).__name__}")
-                context.close()
+                self.progress('검색 완료 · 수집용 Chrome과 검색 화면을 유지합니다')
         # A cooperative budget stop can occur between visual and text searches.
         # Keep both groups, just as the incremental checkpoint does.
         combined={item['url'].rstrip('/'):item for item in [*self.visual_candidates,*self.candidates]}
@@ -307,13 +369,28 @@ class BrowserSearcher:
         return {"candidates": self.candidates, "terms": clean_terms(self.terms)[:20], "notes": self.notes,
                 "searches": self.searches}
 
+    def _run_route(self, context, provider, selected, queries, limit):
+        queries = getattr(self, 'provider_queries', {}).get(provider, queries)
+        if provider == 'google-lens' and selected:
+            self._google(context, selected, limit)
+        elif provider == 'yandex-images' and selected:
+            self._yandex(context, selected, limit)
+        elif provider in {'tiktok','douyin','xiaohongshu','bilibili'}:
+            self._platforms(context, queries, limit, providers={provider})
+        elif provider == 'youtube':
+            self._youtube(context, queries, limit)
+        elif provider not in {'google-lens', 'yandex-images'}:
+            self.searches.append({'provider':provider, 'query':'', 'status':'not_attempted',
+                                  'candidates':0, 'reason':'existing_browser_search_not_implemented'})
+            self.notes.append(f'{provider} · 기존 브라우저 검색 연결 미구현 · 별도 HTTP 검색으로 대체하지 않음')
+
     def _google(self, context, frames: list[Path], limit: int) -> None:
-        if self._cooling_down('google-lens'):
+        if self._cooling_down('google-lens',context=context):
             return
         frames = self._fresh_images(frames, 'google-lens')
         if not frames:
             return
-        page = context.new_page()
+        page = self._page(context, 'google-lens')
         try:
             for i, frame in enumerate(frames, 1):
                 self._pace('Google Lens',reserve=100)
@@ -348,15 +425,15 @@ class BrowserSearcher:
             try: page.screenshot(path=str(self.debug_dir / "google_error.png"), full_page=True)
             except Exception: pass  # noqa: E701
         finally:
-            page.close()
+            pass  # Keep results/challenge visible for the user.
 
     def _yandex(self, context, frames: list[Path], limit: int) -> None:
-        if self._cooling_down('yandex-images'):
+        if self._cooling_down('yandex-images',context=context):
             return
         frames = self._fresh_images(frames, 'yandex-images')
         if not frames:
             return
-        page = context.new_page()
+        page = self._page(context, 'yandex-images')
         try:
             for frame in frames:
                 self._pace('Yandex',reserve=70)
@@ -391,7 +468,7 @@ class BrowserSearcher:
             try: page.screenshot(path=str(self.debug_dir / "yandex_error.png"), full_page=True)
             except Exception: pass  # noqa: E701
         finally:
-            page.close()
+            pass  # Keep results/challenge visible for the user.
 
     def _fresh_images(self, frames, provider):
         fresh = fresh_frames(frames, provider, [*self.previous_searches, *self.searches])
@@ -412,17 +489,129 @@ class BrowserSearcher:
             if 2 <= len(line) <= 100:
                 self.terms.append(line)
 
+    def _submit_search(self, page, provider, query, audit):
+        """Use the site's visible search box; never silently replace it with a URL."""
+        execution = audit.setdefault('execution', {'query_submitted':False, 'query_url_matched':False})
+        homes = {'tiktok': 'https://www.tiktok.com/', 'douyin': 'https://www.douyin.com/',
+                 'xiaohongshu': 'https://www.xiaohongshu.com/explore',
+                 'bilibili': 'https://search.bilibili.com/'}
+        host = urlparse(page.url).hostname or ''
+        # Both the homepage and watch-page headers open a native results tab.
+        # Waiting for their original URL falsely reports an unresolved result.
+        # Reuse this tab's search home and its visible box instead.
+        bili_header = provider == 'bilibili' and host == 'www.bilibili.com'
+        if bili_header and self._check_block(page, provider, audit):
+            return False
+        if bili_header or not (host == provider + '.com' or host.endswith('.' + provider + '.com')):
+            self._pace(provider, reserve=45)
+            self._audit_request(audit, 'search_home')
+            response = page.goto(homes[provider], wait_until='domcontentloaded',
+                                 timeout=self.settings.source_browser_navigation_timeout * 1000)
+            if self._check_block(page, provider, audit, response):
+                return False
+        if self._check_block(page, provider, audit):
+            return False
+        selectors = {
+            'tiktok': 'input[data-e2e="search-user-input"], input[name="q"], input[placeholder*="Search"], input[placeholder*="검색"]',
+            'douyin': 'input[data-e2e="searchbar-input"], input[placeholder*="搜索"]',
+            'xiaohongshu': 'input#search-input, input[placeholder*="搜索"]',
+            'bilibili': 'input.search-input, input.nav-search-input, input[placeholder*="搜索"]',
+        }
+        fields = page.locator(', '.join(s.strip() + ':visible' for s in selectors[provider].split(',')))
+        field = fields.first
+        audit['stage'] = 'locate_search_input'
+        if provider == 'tiktok' and not field.is_visible():
+            # TikTok's desktop sidebar collapses the search input until its
+            # visible Search control is clicked. Waiting for the hidden input
+            # alone times out even in an authenticated session.
+            control = page.get_by_text(re.compile(r'^(Search|검색|搜索)$')).filter(visible=True)
+            count = control.count()
+            if count == 0:
+                previous_query = parse_qs(urlparse(page.url).query).get('q', [''])[0]
+                if previous_query:
+                    # The sidebar button shows the last query on results pages.
+                    control = page.get_by_text(previous_query, exact=True).filter(visible=True)
+                    count = control.count()
+            if count != 1:
+                # TikTok can retain an older sidebar label after SPA navigation.
+                # Identify the visible search-icon control instead of guessing
+                # its stale text or issuing a second navigation.
+                control = page.locator('.TUXButton-content:has([class*="DivSearchIconContainer"]):visible')
+                count = control.count()
+            audit['visible_search_controls'] = count
+            if count == 1:
+                audit['stage'] = 'open_search_panel'
+                control.click(timeout=self.settings.source_browser_navigation_timeout * 1000)
+                if self._check_block(page, provider, audit):
+                    return False
+                audit['stage'] = 'locate_search_input'
+            else:
+                audit.update(status='page_unresolved',stage='search_control_ambiguous',
+                             reason='no_unique_visible_search_control')
+                record_unresolved(self.settings.data_dir,provider,query)
+                self.progress(f'{provider} · 검색 버튼을 하나로 확인하지 못함 · 입력 전 판독 대기')
+                return False
+        field.wait_for(state='visible', timeout=self.settings.source_browser_navigation_timeout * 1000)
+        audit['visible_search_inputs'] = fields.count()
+        if audit['visible_search_inputs'] != 1:
+            audit.update(status='page_unresolved',stage='search_input_ambiguous',reason='no_unique_visible_search_input')
+            record_unresolved(self.settings.data_dir,provider,query)
+            self.progress(f'{provider} · 검색 입력란을 하나로 확인하지 못함 · 제출 중지')
+            return False
+        # Filling can trigger suggestions, so pace before touching the input.
+        self._pace(provider, reserve=self.settings.source_browser_result_timeout + 5)
+        self._audit_request(audit, 'search_input')
+        self.progress(f'{provider} · 검색창 입력: {query}')
+        audit['stage'] = 'submit_search'
+        if provider in ('tiktok', 'bilibili'):
+            # Controlled inputs can restore or concatenate the previous query
+            # after fill(). Both behaviours were observed in the live collector.
+            # Real key events replace it and update the site's input state.
+            field.press('ControlOrMeta+A')
+            field.press_sequentially(query, delay=90)
+            page.wait_for_timeout(750)
+        else:
+            field.fill(query)
+        actual_value = field.input_value()
+        execution['input_value'] = actual_value
+        if ' '.join(actual_value.split()) != query:
+            audit.update(status='page_unresolved',stage='search_input_mismatch',reason='planned_query_differs_from_input')
+            record_unresolved(self.settings.data_dir,provider,query)
+            self.progress(f'{provider} · 계획 검색어와 실제 입력값 불일치 · 제출 중지')
+            return False
+        execution['submit_intent'] = True
+        field.press('Enter')
+        execution['query_submitted'] = True
+        execution['submitted_at'] = time.time()
+        self.progress(f'{provider} · 검색 제출 확인: {query}')
+        def matching_url(url):
+            parsed = urlparse(str(url))
+            host = parsed.hostname or ''
+            if not (host == provider+'.com' or host.endswith('.'+provider+'.com')):
+                return False
+            if provider == 'douyin':
+                return unquote(parsed.path).rstrip('/') == '/search/' + query
+            paths = {'tiktok':{'/search','/search/video'},
+                     'xiaohongshu':{'/search_result'},'bilibili':{'/all','/search'}}
+            if parsed.path.rstrip('/') not in paths[provider]:
+                return False
+            key = 'q' if provider == 'tiktok' else 'keyword'
+            return parse_qs(parsed.query).get(key, [''])[0] == query
+        page.wait_for_url(matching_url, wait_until='domcontentloaded',
+                          timeout=self.settings.source_browser_navigation_timeout * 1000)
+        execution.update(query_url_matched=True,result_url=page.url)
+        audit['stage'] = 'search_results'
+        return True
+
+    def _youtube(self, context, queries: list[str], limit: int) -> None:
+        from .youtube_search import search_existing_youtube
+        search_existing_youtube(self, context, queries, limit)
+
     def _platforms(self, context, queries: list[str], limit: int, providers=None) -> None:
-        platforms = [
-            ("tiktok", "https://www.tiktok.com/search/video?q={}"),
-            ("douyin", "https://www.douyin.com/search/{}"),
-            ("xiaohongshu", "https://www.xiaohongshu.com/search_result?keyword={}"),
-            ("bilibili", "https://search.bilibili.com/all?keyword={}"),
-        ]
-        for provider, template in platforms:
+        for provider in ('tiktok', 'douyin', 'xiaohongshu', 'bilibili'):
             if providers is not None and provider not in providers:
                 continue
-            if self._cooling_down(provider):
+            if self._cooling_down(provider,context=context):
                 continue
             query_limit = max(3, self.settings.source_queries_per_platform) if provider == 'tiktok' else self.settings.source_queries_per_platform
             available = platform_queries(queries, provider, len(queries))
@@ -443,12 +632,18 @@ class BrowserSearcher:
             # HTTP request to /login did not execute site JavaScript and could
             # itself cause a new challenge; cookie presence is not auth proof.
             auth = 'unverified'
-            page = context.new_page()
-            page.route("**/*", lambda route: route.abort() if route.request.resource_type in {"media", "font"}
-                       else route.continue_())
+            page = self._page(context, provider)
             provider_urls: set[str] = set()
             response_candidates = []
             current_query = ['']
+            limited_response = [None]
+            self._rate_response = limited_response
+            def observe_status(response):
+                host = urlparse(response.url).hostname or ''
+                if response.status == 429 and (host == provider + '.com' or host.endswith('.' + provider + '.com')):
+                    limited_response[0] = response
+            if hasattr(page, 'on'):
+                page.on('response', observe_status)
             if provider == 'tiktok' and hasattr(page, 'on'):
                 from .source_search.tiktok_results import search_response_candidates
                 def receive_search(response):
@@ -467,6 +662,7 @@ class BrowserSearcher:
                 for query in selected:
                     current_query[0] = query
                     response_candidates.clear()
+                    limited_response[0] = None
                     searched_languages.add(language(query))
                     self.progress(f'{provider} · {language(query)} · {query}')
                     audit = {'provider': provider, 'query': query, 'language': language(query),
@@ -474,29 +670,49 @@ class BrowserSearcher:
                              'auth': auth, 'status': 'started', 'candidates': 0}
                     self.searches.append(audit)
                     loaded = False
-                    encoded = quote(query, safe="") if provider == "douyin" else quote_plus(query)
-                    search_url = template.format(encoded)
                     for attempt in range(2):
-                        self._pace(provider,reserve=45)
-                        self._audit_request(audit, 'search_navigation')
                         try:
-                            response = page.goto(search_url, wait_until="commit", timeout=12000)
-                            audit['http_status'] = response.status if response else None
+                            if not self._submit_search(page, provider, query, audit):
+                                break
                             loaded = True
-                            if response and response.status == 429:
-                                self._block(provider, audit, 'rate_limited')
                             break
+                        except SearchBudgetReached:
+                            raise
                         except Exception as exc:  # SPA 로딩 지연은 1회 재시도한다.
-                            audit.update(status='error', error=type(exc).__name__)
+                            if page.is_closed() or not page.context.browser.is_connected():
+                                audit.update(status='connection_lost', error=type(exc).__name__)
+                                self.progress(f'{provider} · Chrome 연결 끊김 · 완료 결과 보존')
+                                return
+                            if limited_response[0] is not None:
+                                self._block(provider, audit, 'rate_limited', limited_response[0])
+                                break
+                            if self._check_block(page, provider, audit):
+                                break
+                            audit.update(status='error', error=type(exc).__name__, error_detail=str(exc)[:1200])
                             self.notes.append(f"{provider} 페이지 로딩 지연: {type(exc).__name__}")
+                            if audit.get('execution',{}).get('submit_intent'):
+                                audit.update(status='page_unresolved',reason='submitted_query_response_unconfirmed')
+                                record_unresolved(self.settings.data_dir,provider,query)
+                                self.progress(f'{provider} · 제출 후 응답 판독 대기 · 같은 검색 재전송 보류')
+                                break
+                            if audit.get('stage') in {'locate_search_input','open_search_panel','search_control_ambiguous','search_input_ambiguous','submit_search'}:
+                                audit.update(status='page_unresolved',reason='search_input_unavailable_before_submit')
+                                record_unresolved(self.settings.data_dir,provider,query)
+                                self.progress(f'{provider} · 검색 입력 전 판독 대기 · 같은 화면 재시도 보류')
+                                break
+                            if attempt == 0:
+                                self._retry_pause(provider)
                     if BROWSER_COOLDOWNS.get(provider, 0) > time.time():
                         break
                     if not loaded:
-                        continue  # Never attribute stale results from the previous page to this query.
+                        break  # Stop after the bounded retry; never scrape stale results.
                     if (audit.get('http_status') or 200) >= 400:
                         audit['status'] = 'http_error'
                         continue
                     page.wait_for_timeout(2000)
+                    if limited_response[0] is not None:
+                        self._block(provider, audit, 'rate_limited', limited_response[0])
+                        break
                     if self._check_block(page, provider, audit):
                         break
                     page.mouse.wheel(0, 900)
@@ -506,6 +722,18 @@ class BrowserSearcher:
                     if self._check_block(page, provider, audit):
                         break
                     found = self._wait_platform_results(page, provider, query, audit, response_candidates)
+                    if found == [] and audit.get('status') != 'query_restricted' and not empty_results_on_page(page) and attempt == 0:
+                        if challenge_in_text(page.locator('body').inner_text()):
+                            self._block(provider, audit, 'captcha')
+                            break
+                        self._retry_pause(provider)
+                        response_candidates.clear()
+                        if not self._submit_search(page, provider, query, audit):
+                            break
+                        found = self._wait_platform_results(page, provider, query, audit, response_candidates)
+                    if limited_response[0] is not None:
+                        self._block(provider, audit, 'rate_limited', limited_response[0])
+                        break
                     if found is None:
                         break
                     added = 0
@@ -514,7 +742,8 @@ class BrowserSearcher:
                             provider_urls.add(item["url"])
                             self.candidates.append(item)
                             added += 1
-                    audit.update(status='results' if found else ('no_results' if empty_results_on_page(page) else 'page_unresolved'),
+                    audit.update(status='query_restricted' if audit.get('status') == 'query_restricted' else
+                                 'results' if found else ('no_results' if empty_results_on_page(page) else 'page_unresolved'),
                                  candidates=added)
                     if not found:
                         # HTTP 200 alone cannot distinguish empty results from
@@ -543,17 +772,30 @@ class BrowserSearcher:
                 raise
             except Exception as exc:  # noqa: BLE001
                 if 'audit' in locals() and audit.get('provider') == provider and audit['status'] == 'started':
-                    audit.update(status='error', error=type(exc).__name__)
+                    disconnected = page.is_closed() or not page.context.browser.is_connected()
+                    audit.update(status='connection_lost' if disconnected else 'error', error=type(exc).__name__)
                 self.notes.append(f"{provider} 검색 실패: {type(exc).__name__}: {str(exc)[:140]}")
             finally:
-                page.close()
+                if hasattr(page, 'remove_listener'):
+                    page.remove_listener('response', observe_status)
+                if provider == 'tiktok' and hasattr(page, 'remove_listener'):
+                    page.remove_listener('response', receive_search)
 
     def _wait_platform_results(self, page, provider, query, audit, response_candidates):
         """Bound hydration wait without another navigation or ignoring an auth wall."""
         started = time.monotonic()
-        for attempt in range(16):
+        result_timeout = max(1, self.settings.source_browser_result_timeout)
+        for attempt in range(result_timeout + 1):
+            rate_response = getattr(self, '_rate_response', [None])[0]
+            if rate_response is not None:
+                self._block(provider, audit, 'rate_limited', rate_response)
+                return None
             if self._check_block(page, provider, audit):
                 return None
+            if provider == 'tiktok' and search_restriction_on_page(page):
+                audit.update(status='query_restricted', result_method='visible_search_restriction',
+                             result_wait_seconds=round(time.monotonic() - started, 2))
+                return []
             if provider == 'tiktok':
                 # Activity notifications also contain /video/ links. Never use
                 # the whole document or hydration payload as TikTok search hits.
@@ -565,9 +807,10 @@ class BrowserSearcher:
                 if self._check_block(page, provider, audit):
                     return None
                 audit['result_wait_seconds'] = round(time.monotonic() - started, 2)
-                audit['result_method'] = 'search_response' if provider == 'tiktok' else 'page_links'
+                audit['result_method'] = ('search_response' if provider == 'tiktok' else
+                                          'search_card_links' if provider == 'bilibili' else 'page_links')
                 return found
-            if attempt == 15 or (self.deadline is not None and time.monotonic()+1 >= self.deadline):
+            if time.monotonic() - started >= result_timeout or attempt == result_timeout:
                 break
             page.wait_for_timeout(1000)
         audit['result_wait_seconds'] = round(time.monotonic() - started, 2)
@@ -577,9 +820,10 @@ class BrowserSearcher:
 
 
 def browser_search(settings: Settings, frames: list[Path], queries: list[str], limit: int, debug_dir: Path,
-                   previous_searches: list[dict] | None = None, progress=None, routes=None) -> dict:
+                   previous_searches: list[dict] | None = None, progress=None, routes=None, provider_queries=None) -> dict:
     if not settings.source_browser_search or limit <= 0:
         return {'candidates': [], 'terms': [], 'notes': [], 'searches': []}
     from .source_browser_worker import isolated_search
     with BROWSER_LOCK:
-        return isolated_search(settings, frames, queries, limit, debug_dir, previous_searches, progress, routes=routes)
+        return isolated_search(settings, frames, queries, limit, debug_dir, previous_searches, progress,
+                               routes=routes, provider_queries=provider_queries)

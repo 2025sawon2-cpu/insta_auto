@@ -44,7 +44,9 @@ def test_relevance_gate_and_reuse_gate_do_not_fill_to_twenty():
     assert clean.selection_reason == "relevant_reusable_unique"
     assert "low_product_or_scene_similarity" in unrelated.rejection_reasons
     assert captions.blur_required
-    assert "not_crop_friendly" in landscape.rejection_reasons
+    assert 'not_crop_friendly' not in landscape.rejection_reasons
+    from hotpost.source_presentation import format_warnings
+    assert 'not_crop_friendly' in format_warnings({'width':1920,'height':640})
 
 
 def test_unknown_overlay_is_kept_for_manual_review():
@@ -75,3 +77,17 @@ def test_queries_require_two_sources_and_strip_generic_visual_words():
     assert any(item["query"] == "cup holder" and item["confidence"] == "high"
                and "speech" in item["sources"] for item in details)
     assert not any(item["query"].lower() in {"text in image", "person", "car"} for item in details)
+
+
+def test_current_manual_exclusion_blocks_stale_automatic_eligibility():
+    from hotpost.source_quality import editing_ready
+    source={'source_quality':'clean-source','editing_eligible':True,
+        'manual_usage_review':{'editing_eligible':False,'reason':'Actual later frames contain unrelated inserted footage.'}}
+    assert editing_ready(source) is False
+
+
+def test_manual_positive_flag_does_not_bypass_pending_normal_review():
+    from hotpost.source_quality import editing_ready
+    source={'source_quality':'clean-source','editing_eligible':True,'relevance_review_required':True,
+        'manual_usage_review':{'editing_eligible':True}}
+    assert editing_ready(source) is False

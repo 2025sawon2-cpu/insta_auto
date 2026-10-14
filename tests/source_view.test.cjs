@@ -5,6 +5,24 @@ const memory=new Map(),context={window:{StudioBoard:require('../web/studio-board
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../web/studio/source-view.js'),'utf8'),context);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const view=context.window.StudioSourceView.create({esc,link:()=>'',item:(t,c,id)=>t[c].find(v=>v.id===id),storageKey:t=>'feedback-'+t.id});
+test('raw geometry warnings are advisory and actual portrait rejection remains visible',()=>{
+  const task={id:'geometry',jobs:[],sources:[],source_audit:{inspection:[{title:'wide',format_warnings:['not_crop_friendly','low_portrait_resolution'],
+    portrait_geometry:{effective_width:320,effective_height:568},presentation_review:{usable:false,reason:'손이 잘림 <script>'}}]}};
+  const html=view.sourceSearchPanel(task);
+  assert.match(html,/넓은 가로 구도/);assert.match(html,/자동 탈락 조건 아님/);
+  assert.match(html,/세로 크롭 유효 해상도 320×568/);assert.match(html,/세로 화면 검토 · 사용 어려움/);
+  assert.match(html,/손이 잘림 &lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
+});
+test('coverage completion uses seconds and leaves unmet TikTok preference informational',()=>{
+  const html=view.sourceSearchStatus({source_goal:{count:2,ready:true,platforms:{'유튜브':2},
+    usable_seconds:40,required_seconds:37.5,core_seconds:20,core_required_seconds:4,
+    duration_basis:'reference',output_seconds:30,platform_targets:{},
+    platform_preferences:{tiktok:{usable:0,target:5,required:false}}}});
+  assert.match(html,/소스 준비 완료 · 사용 가능 40\/37.5초 · 2개/);
+  assert.match(html,/틱톡 0\/5개 · 완료 필수조건 아님/);
+  assert.match(html,/핵심 장면 20\/4초/);
+  assert.doesNotMatch(html,/필수 확보 기준|10개|목표 미달/);
+});
 function fixture(){return {id:'test',status:'completed',jobs:[],sources:[{id:'old',url:'/old.mp4'},{id:'new',url:'/new.mp4'}],edits:[],
   scripts:[],voices:[],pipeline:[{id:'v1',status:'completed',artifacts:{sources:[{id:'old'}]}}],run_id:'v1',latest_completed_run_id:'v1',feedback:{}};}
 

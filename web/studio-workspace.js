@@ -1,9 +1,9 @@
 /* Shared workspace view models. No production state is changed by navigation. */
 (() => {
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const route=value=>value==='original'?'script':value==='export'?'results':value;
+  const route=value=>['original','voice'].includes(value)?'script':value==='export'?'results':value;
   function tabState(steps,tab){
-    const matching=steps.filter(s=>route(s.tab)===tab);
+    const matching=steps.filter(s=>route(s.tab)===route(tab));
     return matching.some(s=>s.current)?'current':matching.length&&matching.every(s=>s.state==='done')?'done':'pending';
   }
   function range(start,end,duration){
@@ -54,6 +54,7 @@
         if(['voice_profile_id','speed','pronunciations'].some(key=>JSON.stringify(inputs[key]??null)!==JSON.stringify(previous[key]??null)))changes.push('목소리 설정 변경');
         if(JSON.stringify(inputs.source_ids??[])!==JSON.stringify(previous.source_ids??[]))changes.push('사용 영상 변경');
         if(inputs.changes?.length)changes.push('장면·자막 변경');
+        if(inputs.remotion_only&&inputs.overlay_document)changes.push('자막·꾸미기 변경');
       }
       const date=Number(r.created)>0?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(Number(r.created)*1000)):'';
       return `제작 버전 v${r.number} · ${names[status]||'상태 확인 필요'}${r.id===t.latest_completed_run_id?' · 최신 완료':''}${parent?' · '+(changes.join(', ')||'다시 제작'):''}${date?' · '+date:''}`;

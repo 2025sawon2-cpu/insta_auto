@@ -12,6 +12,7 @@ from .web_graphql import _node_to_post, WebGraphQLCollector
 from ..instagram_browser import InstagramBrowser
 from ..request_pacing import request_pause
 from ..models import Post
+from ..collection_window import collection_time, in_collection_window
 from ..observations import MetricObservation
 
 
@@ -114,6 +115,7 @@ class BrowserCollector:
         return [row for row in rows if pattern.fullmatch(row['href'])]
 
     def fetch(self, username, limit, existing=None):
+        started = collection_time(self)
         self.collection_notes = []
         self.nodes = {}
         self.browser.navigate(f'{username}/')
@@ -124,10 +126,13 @@ class BrowserCollector:
         links = {}
         boundary = max((p.taken_at for p in (existing or {}).values()), default=0)
         newest_codes = {p.shortcode for p in (existing or {}).values() if p.taken_at == boundary}
-        cap = max(limit, self.settings.collect_recovery_limit) if existing else limit
+        cap = max(limit, self.settings.collect_recovery_limit)
         for section in ('', 'reels/'):
             wanted_reels = {code for code in links
-                            if (self.nodes.get(code) or {}).get('media_type') == 2}
+                            if (self.nodes.get(code) or {}).get('media_type') == 2
+                            and in_collection_window((self.nodes.get(code) or {}).get('taken_at', 0), started)}
+            if section and not wanted_reels and all(self.nodes.get(code, {}).get('taken_at') for code in links):
+                continue
             if section:
                 self.browser.navigate(f'{username}/{section}')
             stable = 0
@@ -183,6 +188,8 @@ class BrowserCollector:
                                  likes=None, comments=None, caption=link['caption'], thumbnail_url=link['thumbnail']))
             if post.username.lower() != username.lower() or post.taken_at <= 0:
                 raise CollectError('게시물 소유자 또는 게시 날짜 검증에 실패했습니다.')
+            if not in_collection_window(post.taken_at, started):
+                continue
             if post.is_video and post.views is None:
                 # 확장 프로그램의 배수 등을 정수 조회수로 해석하지 않는다.
                 post.views = exact_count(raw_views)
@@ -193,10 +200,8 @@ class BrowserCollector:
                     exact, post.views, post.likes, post.comments, 'instagram_browser',
                     reason=reason, age_hours=max(0, (now-post.taken_at)/3600)))
             posts.append(post)
-        if not posts:
-            raise CollectError('대상 계정의 검증된 게시물이 없습니다.')
-        if len(links) >= cap and newest_codes and not newest_codes.issubset(links):
-            self.collection_notes.append('복구 수집 상한에 도달했습니다. 이전 수집 경계까지 도달하지 못했을 수 있습니다.')
+        if len(posts) >= cap:
+            self.collection_notes.append('최근 24시간 게시물 탐색 상한에 도달했습니다. 일부 게시물이 누락될 수 있습니다.')
         missing = sum(not o.success for o in observations)
         if missing:
             self.collection_notes.append(f'영상 {len(observations)}개 중 정확한 조회수 미확인 {missing}개 (축약값 포함)')

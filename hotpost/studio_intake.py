@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from .daily_hot import daily_state
+from .daily_hot import daily_state, date_key
 from .studio_automation import selection_key
 
 
@@ -53,7 +53,9 @@ def intake_status(studio):
         if not row:
             return {'available':False}
         run = dict(row)
-        new_codes = {r[0] for r in db.execute('SELECT shortcode FROM posts WHERE first_seen>=?', (run['started_at'],))}
+        collected_at = run.get('finished_at') or run['started_at']
+        new_codes = {r[0] for r in db.execute('SELECT shortcode FROM posts WHERE first_seen>=? AND first_seen<=?',
+                                            (run['started_at'], run.get('finished_at') or time.time()))}
     # A new/incomplete collection must not be described using the previous report.
     try:
         report = json.loads(settings.report_path.read_text(encoding='utf-8'))
@@ -87,13 +89,16 @@ def intake_status(studio):
     candidates = []
     if ready:
         for p in sorted(report.get('posts', []), key=lambda p:p.get('rank_score', 0), reverse=True):
-            if not daily_state(p, time.time())['hot_today'] or p.get('kind') not in ('reel','video'):
+            # This is the last collection's receipt, not today's live ranking.
+            # Midnight must not erase yesterday's collected candidates/counts.
+            if not daily_state(p, collected_at)['hot_today'] or p.get('kind') not in ('reel','video'):
                 continue
             task = tasks.get(p['shortcode'])
             candidates.append({'shortcode':p['shortcode'], 'username':p['username'],
                                'title':(p.get('caption') or p['shortcode']).split('\n')[0][:120],
                                'task_id':task['id'] if task else None})
     return {'available':True, 'run_id':run['id'], 'started_at':run['started_at'],
+            'finished_at':run.get('finished_at'), 'collection_date_kst':date_key(collected_at),
             'updated_at':report.get('generated_at') if ready else None,
             'ready':ready, 'selection_ready':bool(frozen and ready), 'enabled':settings.studio_auto_top_enabled,
             'new_posts':len(new_codes), 'new_hot_videos':len(candidates),

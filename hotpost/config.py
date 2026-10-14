@@ -35,7 +35,12 @@ class Settings:
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     auto_capcut_timeout: int = 7200
     production_enabled: bool = False
+    photo_production_enabled: bool = False  # 사진·캐러셀 영상 제작은 사용자 재승인 전까지 제외
     studio_auto_top_enabled: bool = False
+    studio_auto_top_limit: int = 0  # 0 keeps the historical all-today selection
+    studio_auto_start_date_kst: str = ''  # optional activation date; no backfill
+    studio_daily_quality_enabled: bool = False  # opt-in, preserve existing/manual workflows
+    studio_daily_quality_max_repairs: int = 3  # legacy config/history only; no quality stopping limit
     script_model: str = "gemini-3.6-flash"
     voicebench_root: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py'))
     voicebench_url: str = "http://127.0.0.1:8765"
@@ -58,8 +63,8 @@ class Settings:
     # 수집
     ig_user: str = ""                 # 로그인에 사용할 인스타 아이디 (세션 파일 이름)
     collection_source: str = "browser"  # 로그인과 동일한 영속 브라우저 사용
-    collect_posts_per_account: int = 5  # 매 수집 때 Instagram에서 새로 확인할 최신 게시물 수
-    collect_recovery_limit: int = 60   # 수집 공백을 따라갈 때 계정당 최대 게시물 수
+    collect_posts_per_account: int = 5  # 탐색 최소 개수 (저장은 수집 시작 전 24시간으로 제한)
+    collect_recovery_limit: int = 60   # 고정 게시물 포함 계정당 탐색 상한; 첫 수집도 과거 표본을 채우지 않음
     baseline_views_lookup_limit: int = 10  # 기준선의 누락 조회수 보강 요청 수
     recent_views_lookup_limit: int = 5  # 아직 핫이 아닌 최근 릴스도 순환 관측
     posts_per_account: int = 30       # DB에서 평소 성과 기준선 계산에 사용할 과거 게시물 수
@@ -88,17 +93,20 @@ class Settings:
     source_max_downloads: int = 20
     source_max_probe_downloads: int = 30  # 먼저 받아 검사한 뒤 상위 source_max_downloads만 ZIP에 포함
     source_max_attempts: int = 60      # 다운로드 실패 시 다음 후보로 보충하는 요청 상한
-    source_probe_time_budget: int = 900  # 다운로드/검증 단계 시간 예산(초)
-    source_platform_probe_budget: int = 300  # 한 플랫폼의 반복 실패가 전체 예산을 독점하지 않음
-    source_candidate_download_budget: int = 60  # 후보 하나의 재시도 포함 수신 상한; 남은 후보와 예산 공유
+    source_probe_time_budget: int = 900  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
+    source_platform_probe_budget: int = 300  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
+    source_candidate_download_budget: int = 60  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
     source_queries_per_platform: int = 6
     source_candidates_per_platform: int = 12
     source_refine_max_candidates: int = 12  # 검증된 후보 제목으로 한 차례 추가 탐색
-    source_min_usable: int = 10        # 플랫폼 합산 최소 수량; 자동 제작은 영속 큐에서 보충
+    source_min_usable: int = 10        # 참고용 파일 수량 목표; 새 정책은 장면·사용 가능 길이로 완료 판단
+    source_coverage_ratio: float = 1.25  # 음성/원본 길이 대비 편집 여유 분량
+    source_default_duration: float = 30.0  # 음성·원본 길이 확인 전 임시 기준
+    source_core_min_seconds: float = 4.0  # 검토된 핵심 장면의 최소 사용 가능 길이
     source_no_progress_rounds: int = 3  # 제작 가능 소스·필수 플랫폼·핵심 장면이 개선되지 않으면 중지
-    source_collection_max_rounds: int = 12  # 명시적으로 재개한 한 수집 구간의 상한
-    source_collection_time_budget: int = 3600  # 구간 총시간(초); 실행 중 회차 결과는 보존
-    source_tiktok_min_usable: int = 5  # 새 수집은 TikTok 최소 5개; 전체 최소 10개와 함께 적용
+    source_collection_max_rounds: int = 12  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
+    source_collection_time_budget: int = 3600  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
+    source_tiktok_min_usable: int = 5  # TikTok 선호 목표; 다른 플랫폼의 충분한 소스로 완료 가능
     source_query_model_enabled: bool = True
     source_transcribe_reference: bool = True
     source_ytdlp_js_runtime: str = ""  # e.g. node:C:/Program Files/nodejs/node.exe
@@ -110,11 +118,17 @@ class Settings:
     source_pexels_api_key: str = ""
     source_browser_search: bool = True
     source_browser_headless: bool = False
+    source_browser_allow_same_window_tabs: bool = False  # explicit tab creation only
+    source_browser_existing_window_only: bool = False  # never launch/restart/import cookies
     source_browser_frames: int = 2  # 대표 장면만 역이미지 검색해 반복 업로드를 줄임
     source_browser_captcha_wait: int = 60
-    source_browser_search_interval: float = 30.0  # 인증 확인·검색·재시도 전 최소 휴식 시간
+    source_browser_search_interval: float = 10.0  # 같은 플랫폼 검색 시작 사이 최소 간격
+    source_browser_navigation_timeout: int = 30  # 페이지 이동 제한(초), 검색 간격과 별개
+    source_browser_result_timeout: int = 30  # 검색 결과 표시 제한(초)
     source_browser_block_cooldown: int = 600  # 429 휴식은 최대 10분; CAPTCHA/로그인은 인증 확인 전 재접근 금지
-    source_browser_timeout: int = 360  # 전체 브라우저 검색 제한; 추가 검색은 최대 180초
+    source_browser_timeout: int = 360  # 구 설정 호환용; 실행 제한·시간 배분에 사용하지 않음
+    source_download_idle_timeout: int = 120  # 마지막 유효 데이터 이후 무응답; 총 실행시간 아님
+    source_worker_idle_timeout: int = 180  # 작업자 체크포인트의 유효 단계 진전 이후 무응답
     source_use_openclip: bool = True
     source_openclip_model: str = "ViT-B-32-quickgelu"
     source_openclip_pretrained: str = "openai"

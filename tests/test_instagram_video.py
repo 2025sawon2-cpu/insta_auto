@@ -49,6 +49,7 @@ def test_browser_download_needs_no_legacy_session_or_media_id(tmp_path, monkeypa
     monkeypatch.setattr(iv, 'browser_video_url', lambda s, code: calls.append(code) or 'https://s.cdninstagram.com/video.mp4')
     response = SimpleNamespace(status_code=200, iter_content=lambda _: [b'video'], close=lambda: None)
     monkeypatch.setattr(sf.requests, 'get', lambda *a, **kw: response)
+    monkeypatch.setattr(sf, '_verify_reference', lambda *a: {'status':'verified'})
     target = tmp_path / 'video.mp4'
     assert sf._download_reference(settings, SimpleNamespace(shortcode='target'), target) == target
     assert target.read_bytes() == b'video'
@@ -61,6 +62,7 @@ def test_transcript_video_reused_without_browser(tmp_path, monkeypatch):
     cached.parent.mkdir(parents=True)
     cached.write_bytes(b'cached-video')
     monkeypatch.setattr(sf, 'probe_video', lambda _: {'duration': 12, 'width': 720})
+    monkeypatch.setattr(sf, '_verify_reference', lambda *a: {'status':'verified'})
     monkeypatch.setattr(iv, 'browser_video_url', lambda *_: pytest.fail('cache must be used'))
     target = tmp_path / 'reference.mp4'
     sf._download_reference(settings, SimpleNamespace(shortcode='target'), target)
@@ -88,6 +90,7 @@ def test_reset_never_reuses_an_old_reference(tmp_path, monkeypatch):
     monkeypatch.setattr(iv, 'browser_video_url', lambda s, code:calls.append(code) or 'https://s.cdninstagram.com/new.mp4')
     response=SimpleNamespace(status_code=200,iter_content=lambda _: [b'new-reference'],close=lambda:None)
     monkeypatch.setattr(sf.requests,'get',lambda *a,**k:response)
+    monkeypatch.setattr(sf, '_verify_reference', lambda *a: {'status':'verified'})
     target=tmp_path/'new-reference.mp4'
     sf._download_reference(settings, SimpleNamespace(shortcode='target'), target)
     assert calls==['target'] and target.read_bytes()==b'new-reference'

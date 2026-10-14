@@ -19,25 +19,36 @@ def inventory(tmp_path, tiktok=5):
     for i in range(10):
         path = tmp_path/f'{i}.mp4'; path.write_bytes(f'unique footage {i}'.encode())
         sha = hashlib.sha256(path.read_bytes()).hexdigest()
-        sources.append({'id':str(i), 'path':str(path), 'sha256':sha, 'source_quality':'clean-source',
+        sources.append({'id':str(i), 'path':str(path), 'sha256':sha, 'source_quality':'clean-source', 'video_meta':{'duration':4},
             'origin_url':f'https://{"tiktok.com/@author/video" if i<tiktok else "youtube.com/watch?v="}/{i}',
             'functional_review':{'reviewed':True, 'same_core_function':i==0, 'observed_actions':['unfolding'],
                                  'evidence_frames':['observed.jpg'], 'source_sha256':sha}})
     return sources
 
 
-def test_new_policy_requires_tiktok_even_when_other_platforms_already_have_ten(tmp_path):
-    state = {'sources':inventory(tmp_path, 0), 'source_policy':current_policy(Settings(source_tiktok_min_usable=0))}
+def test_new_policy_tiktok_is_preference_and_other_platforms_can_finish(tmp_path):
+    state = {'sources':inventory(tmp_path, 0), 'source_policy':current_policy()}
     goal = source_goal(state)
-    assert goal['count']==10 and goal['core_ready'] and not goal['ready']
-    assert goal['platform_targets']['tiktok']=={'target':5,'usable':0,'status':'shortfall'}
+    assert goal['count']==10 and goal['core_ready'] and goal['ready']
+    assert goal['platform_targets']=={}
+    assert goal['platform_preferences']['tiktok']=={'target':5,'usable':0,'required':False}
     state['sources'] = inventory(tmp_path, 5)
     assert source_goal(state)['ready']
     state['sources'][4]['origin_url']='https://fake-tiktok.com/video/4'
+    assert source_goal(state)['ready']
+    assert source_goal(state)['platform_preferences']['tiktok']['usable']==4
+
+
+def test_saved_v2_run_keeps_historical_platform_minimum(tmp_path):
+    policy={'version':2,'minimum_total':10,'platform_minimums':{'tiktok':5}}
+    state={'sources':inventory(tmp_path,0),'run_id':'saved','runs':[{'id':'saved','status':'completed','source_policy':policy}]}
+    original=copy.deepcopy(state)
     assert not source_goal(state)['ready']
+    adopt_policy(state)
+    assert state['runs']==original['runs'] and not source_goal(state)['ready']
 
 
-@pytest.mark.parametrize('active_job,tiktok,done', [(False,5,True),(True,5,False),(False,0,False)])
+@pytest.mark.parametrize('active_job,tiktok,done', [(False,5,True),(True,5,False),(False,0,True)])
 def test_recovered_inventory_status_does_not_hide_active_search_or_shortfall(tmp_path,active_job,tiktok,done):
     import sqlite3
     from hotpost.studio_sources import sync_ready_source_status
@@ -64,7 +75,7 @@ def test_quota_counts_only_distinct_actual_editing_ready_files(tmp_path, invalid
         source.update(source_quality='edited-with-text', watermark_masks=[{'reviewed':False}])
     else: source['editing_eligible']=False
     goal=source_goal(state)
-    assert goal['count']==9 and goal['platform_targets']['tiktok']['usable']==4 and not goal['ready']
+    assert goal['count']==9 and goal['platform_preferences']['tiktok']['usable']==4 and not goal['ready']
 
 
 def test_completed_legacy_policy_remains_readable_and_new_run_uses_new_policy(tmp_path):
@@ -77,7 +88,7 @@ def test_completed_legacy_policy_remains_readable_and_new_run_uses_new_policy(tm
     state.pop('run_id')
     run=init_run(state)
     assert run['source_policy']==current_policy()
-    assert not source_goal(state)['ready']
+    assert source_goal(state)['ready']
     assert state['runs'][0]==original['runs'][0]
 
 
@@ -141,6 +152,17 @@ def test_selected_download_waiting_for_studio_review_is_not_a_quality_failure():
     assert current['network_received'] == current['download_attempts'] == 0
 
 
+def test_local_search_budget_exhaustion_is_not_a_broken_download_platform():
+    from hotpost.source_outcomes import platform_outcomes
+    from hotpost.source_search.models import Candidate
+    candidate=Candidate('https://tiktok.com/@a/video/4','tiktok',
+        error='TikTok 현재 브라우저 영상 수신 실패: 이번 검색 예산 완료',
+        download_attempted=True,rejection_reasons=['download_failed'])
+    result=platform_outcomes([candidate],[],{})['tiktok']
+    assert result['reasons'].get('budget_exhausted')==1
+    assert not result['reasons'].get('download_failed')
+
+
 @pytest.mark.parametrize('platform', ['tiktok','douyin','xiaohongshu','instagram','youtube'])
 def test_indexed_attempt_keeps_search_engine_channel_without_faking_site_navigation(platform):
     result=platform_outcomes([], [{'provider':'bing','query':f'tent site:{platform}.com/','status':'no_results'}])
@@ -160,7 +182,8 @@ def test_failed_reference_preparation_writes_manifest_without_invented_platform_
     with pytest.raises(RuntimeError): sf.find_sources(settings,'ref')
     manifest=json.loads(next(settings.source_dir.glob('ref-*/manifest.json')).read_text(encoding='utf-8'))
     assert manifest['status']=='failed' and manifest['failure']['reason']=='captcha'
-    assert manifest['source_policy']['platform_minimums']=={'tiktok':5}
+    assert manifest['source_policy']['platform_minimums']=={}
+    assert manifest['source_policy']['platform_preferences']=={'tiktok':0}
     assert manifest['platform_outcomes']['tiktok']['reasons']=={'not_attempted':1}
     assert manifest['platform_outcomes']['tiktok']['search_attempts']==0
 

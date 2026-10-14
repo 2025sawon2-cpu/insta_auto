@@ -1,5 +1,5 @@
 {
-  "ig_user": "mr.salrim",
+  "ig_user": "ggul_dol2",
   "posts_per_account": 30,
   "recent_days": 30,
   "hot_multiplier": 1.8,
@@ -10,8 +10,15 @@
   "sleep_after_error_min": 20.0,
   "sleep_after_error_max": 45.0,
   "voicebench_url": "http://127.0.0.1:8765",
-  "production_enabled": true,
+  "production_enabled": false,
   "studio_auto_top_enabled": true,
+  "studio_auto_top_limit": 3,
   "studio_url": "http://127.0.0.1:18767",
-  "source_ytdlp_js_runtime": ""
+  "source_ytdlp_js_runtime": "",
+  "photo_production_enabled": false,
+  "studio_auto_start_date_kst": "2026-10-12",
+  "studio_daily_quality_enabled": true,
+  "studio_daily_quality_max_repairs": 3,
+  "source_browser_allow_same_window_tabs": true,
+  "source_browser_existing_window_only": true
 }

@@ -7,7 +7,11 @@ from pathlib import Path
 def parser_revision(provider):
     # Version changes authorize one check of the repaired parser, not an auth
     # bypass. Existing authentication gates remain independent and authoritative.
-    return 'tiktok-search-response-v1' if provider == 'tiktok' else 'platform-links-v1'
+    if provider == 'tiktok':
+        return 'tiktok-search-v4-unique-input-and-confirmed-submit'
+    if provider == 'bilibili':
+        return 'bilibili-search-v2-same-tab-home-and-confirmed-submit'
+    return 'platform-links-v1'
 
 
 def readiness_record(data_dir, provider):

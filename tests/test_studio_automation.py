@@ -57,13 +57,59 @@ def test_metric_warning_does_not_remove_a_discovered_hot_video():
     assert top_two({**r,'is_sample':True},Settings(),now)==[]
 
 
+def test_top_limit_does_not_backfill_completed_or_stopped_ranks(setup):
+    settings, studio = setup
+    rows = enqueue_top(settings, report(time.time()), 'limited-existing')
+    studio.action(rows[0]['task_id'], 'pause-auto', {})
+    before = {t['id']: studio.store.get(t['id']) for t in studio.store.list()}
+    limited = enqueue_top(replace(settings, studio_auto_top_limit=2), report(time.time()), 'limited-existing')
+    assert [r['rank'] for r in limited] == [1, 2]
+    assert all(not r['created'] for r in limited)
+    assert {t['id']: studio.store.get(t['id']) for t in studio.store.list()} == before
+
+
+def test_top_limit_excludes_fourth_and_keeps_frozen_ranking(setup):
+    settings, studio = setup
+    now = time.time()
+    r = report(now)
+    r['posts'].append({**r['posts'][0], 'shortcode': 'fourth', 'rank_score': 0})
+    storage = Storage(settings.db_path)
+    storage.upsert_posts([Post('fourth', 'account', int(now)-3600, 'reel')])
+    storage.close()
+    limited = replace(settings, studio_auto_top_limit=3)
+    rows = enqueue_top(limited, r, 'limited-new')
+    assert [x['shortcode'] for x in rows] == ['first', 'second', 'third']
+    r['posts'][-1]['rank_score'] = 100
+    repeated = enqueue_top(limited, r, 'limited-new')
+    assert [x['task_id'] for x in repeated] == [x['task_id'] for x in rows]
+    assert len(studio.store.list()) == 3
+
+
+def test_daily_activation_attaches_quality_before_prepare_and_leaves_manual_tasks(setup):
+    from hotpost.daily_quality import POLICY
+    from hotpost.daily_hot import date_key
+    settings,studio=setup
+    manual=studio.create('first')
+    settings=replace(settings,studio_daily_quality_enabled=True,
+                     studio_auto_start_date_kst=date_key(time.time()),studio_daily_quality_max_repairs=3)
+    rows=enqueue_top(settings,report(time.time()),'activated-run')
+    assert 'daily_quality' not in studio.store.get(manual['id'])
+    for row in rows[1:]:
+        state=studio.store.get(row['task_id'])
+        assert {k:state['daily_quality'][k] for k in ('policy','max_repairs','repair_round','status','reviews')} == {
+            'policy':POLICY,'max_repairs':3,'repair_round':0,'status':'pending','reviews':[]}
+        ledger=state['daily_quality'].get('progress_policy',{})
+        assert not ledger.get('attempts') and not ledger.get('reviews')
+        assert [j['kind'] for j in studio.store.jobs(state['id'])]==['prepare']
+
+
 def test_subject_uses_observed_context_instead_of_comment_bait():
     assert identify_subject({}, '피규어 장난감을 투명창 안에 싹 진열하고 문만 닫아요. 대나무 원목이에요.', '피규어')=='원목 진열장'
     assert identify_subject({}, '책을 진열장에 넣어요.', '책')=='진열장'
     assert identify_subject({}, '피규어를 조립해요. 원목 책상에서 작업해요.', '피규어')!='원목 진열장'
     assert identify_subject({'caption':'생선 남겨주세요!\n오늘 저녁 생선구이 이렇게 해보세요'}, '', '생선 남겨주세요')=='생선구이'
     assert identify_subject({'caption':'타일 남겨주세요!\n타일 보수 비법을 소개합니다'}, '', '타일 남겨주세요')=='타일 보수'
-    assert identify_subject({'caption':'댓글 남겨주세요\n관측한 새로운 도구의 실제 설명입니다'}, '', '댓글 남겨주세요')=='관측한 새로운 도구의 실제 설명입니다'
+    assert identify_subject({'caption':'댓글 남겨주세요\n관측한 새로운 도구의 실제 설명입니다'}, '', '댓글 남겨주세요')=='원작 중심 대상 미확인'
 
 
 def finish(studio, result):

@@ -28,12 +28,11 @@
     return Math.round(n).toLocaleString('ko-KR');
   };
   const ago = (h) => (h < 1 ? '방금' : h < 24 ? Math.round(h) + '시간 전' : h < 24 * 14 ? Math.round(h / 24) + '일 전' : Math.round(h / 24 / 7) + '주 전');
-  const dateStr = (ts) => new Date(ts * 1000).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const dateStr = (ts) => new Date(ts * 1000).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',timeZone:'Asia/Seoul' });
   const ratioCls = (r) => (r == null ? 'flat' : r >= 2.5 ? 'up' : r >= 1.5 ? 'mid' : r >= 0.8 ? 'flat' : 'down');
   const ratioTxt = (r) => (r == null ? '' : '×' + (r >= 10 ? Math.round(r) : r.toFixed(1)));
   const tierTxt = (t) => ({ 0: '', 1: '🔥', 2: '🔥🔥', 3: '🔥🔥🔥' })[t];
   const kindTxt = (k) => ({ reel: '릴스', video: '동영상', image: '사진', carousel: '캐러셀' })[k] || k;
-  const confTxt = { high: '높음', medium: '보통', low: '낮음' };
   const flagTxt = { comments_spike: '💬 댓글 급증', views_spike: '👀 조회수 급증', likes_spike: '❤️ 좋아요 급증', fresh: '🆕 48시간 내', rising: '📈 상승 중',
     ad_candidate: '광고 후보', sponsored_candidate: '협찬 후보', group_buy_candidate: '공동구매 후보', event_candidate: '이벤트 후보' };
   const esc = (s) => String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -87,7 +86,7 @@
   function currentSettings(){
     const c=R.criteria.values;
     const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16"/>',sort:'<path d="M7 4v16m-4-4 4 4 4-4M14 5h7m-7 5h5m-5 5h3"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>'})[name]}</svg>`;
-    const period=state.detection==='today'?['오늘','']:state.period===24?['24','시간']:[state.period/24,'일'];
+    const period=state.detection==='today'?['오늘',window.HotpostDetection.dateKey(Date.now()/1000).slice(5).replace('-','/')]:state.period===24?['24','시간']:[state.period/24,'일'];
     const sort={rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최근 발견순'}[state.sort];
     const full=window.HotpostDisplay.describe(state).split(' · ');
     const expanded=$('#current-settings details')?.open;
@@ -157,10 +156,28 @@
     } catch (error) { e.target.textContent = error.message; e.target.disabled = false; }
   }, true);
   function productionMarkup(code) {
+    const status = productionState(code);
+    return `<span class="production-badge is-${status.state}" title="${esc(status.reason)}">${status.label}</span>`;
+  }
+  function productionState(code) {
     const work = studioByCode.get(code);
-    if (work) return `<a class="production-link" href="studio.html?work=${encodeURIComponent(work.id)}" onclick="event.stopPropagation()">${work.automation?.rank ? '자동 제작 '+work.automation.rank+'위' : work.automation ? '선택 영상 제작' : '제작실 작업'} · 진행/영상 리뷰 →</a><br><small class="${work.error?'production-error':''}">${esc(work.error||work.message)}</small>`;
+    if (work) {
+      const view = window.StudioBoard.describe(work), active = window.PostResult.model(work).active;
+      if (view.complete && active?.video_url) return {state:'completed',label:'완성',action:'완성 영상 보기',reason:'완성 영상을 재생하고 다운로드할 수 있어요.'};
+      if (view.complete || view.attention || view.review || ['paused','unknown'].includes(view.state)) return {state:'attention',label:'확인필요',action:'상세 보기',reason:view.complete?'완성 영상 파일을 확인해 주세요.':view.message};
+      return {state:'working',label:'제작중',action:'제작 보기',reason:view.message};
+    }
     const job = productionByCode.get(code);
-    if (!job) return '<span class="hint">제작 선택으로 추가 · 오늘 최초 감지 핫 영상 상위 2개는 자동 제작</span>';
+    if (job) {
+      if (job.status === 'done' && job.variants?.some(v=>v.download_url)) return {state:'completed',label:'완성',action:'완성 영상 보기',reason:'이전 제작 결과를 다운로드할 수 있어요.'};
+      if (['error','missing','done'].includes(job.status)) return {state:'attention',label:'확인필요',action:'상세 보기',reason:job.error||'제작 결과를 확인해 주세요.'};
+      return {state:'working',label:'제작중',action:'제작 보기',reason:job.message||'자동 제작을 진행하고 있어요.'};
+    }
+    return {state:'attention',label:'확인필요',action:'상세 보기',reason:'아직 제작 작업이 등록되지 않았어요.'};
+  }
+  function legacyProductionMarkup(code) {
+    const job = productionByCode.get(code);
+    if (!job) return '';
     const source = job.source || {}, transcript = job.transcript || {};
     const link = (url, label) => url ? `<a class="production-link" href="${esc(url)}" onclick="event.stopPropagation()">${label}</a>` : `<span>${label}</span>`;
     const states = {queued:'대기',voice:'음성 생성 중',building:'프로젝트 생성 중',draft_ready:'프로젝트 완료',exporting:'내보내기 중',done:'완료',error:'실패 · 재시도 필요',missing:'결과 파일 없음'};
@@ -184,7 +201,13 @@
     try {
       const data = responses[1].status==='fulfilled'?responses[1].value:null;
       for (const item of data?.productions||[]) productionByCode.set(item.shortcode, item);
-      $$('.production-status').forEach(el => { el.innerHTML = productionMarkup(el.dataset.code); });
+      $$('#cards .card').forEach(card => {
+        const code=card.dataset.code, status=productionState(code), badge=$('.production-status',card);
+        if(!badge)return;
+        card.dataset.productionState=status.state;
+        const markup=productionMarkup(code);if(badge.innerHTML!==markup)badge.innerHTML=markup;
+        $('.card-open-production',card).textContent=status.action+' →';
+      });
     } catch (_) { /* Keep verified last state while the server reconnects. */ }
   }
   document.addEventListener('click', async e => {
@@ -205,7 +228,8 @@
   }
   function card(p, i) {
     const thumb = p.thumb ? `<img loading="lazy" src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`;
-    return `<article class="card" data-code="${esc(p.shortcode)}">
+    const status = productionState(p.shortcode);
+    return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}"` : ''}>
       <div class="thumb">${thumb}
         ${isVideo(p) ? `<label class="studio-choice" style="position:absolute;bottom:10px;right:10px;z-index:4;background:#fffef2;color:#285b46;border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer"><input type="checkbox" data-studio-code="${esc(p.shortcode)}" ${studioSelected.has(p.shortcode)?'checked':''}> 제작 선택</label>` : ''}
         <div class="tl">${p.tier ? `<span class="pill t${p.tier}">${tierTxt(p.tier)} ×${p.multiplier.toFixed(1)}</span>` : `<span class="pill">×${p.multiplier.toFixed(1)}</span>`}</div>
@@ -217,10 +241,8 @@
         <div class="metrics benchmark-metrics">
           ${isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
         </div>
-        ${p.tier >= 1 ? `<div class="hint">${window.HotpostDetection.isToday(p) ? '오늘 발견 · 제작 우선' : window.HotpostDetection.consumed(p) ? '이전 발견 · 소모 처리 (자동 선정 제외)' : '발견 시각 확인 필요'}</div>` : ''}
-        <div class="cap">${esc(p.caption.replace(/#\S+/g, '').trim()) || '<span class="hint">(캡션 없음)</span>'}</div>
         ${isVideo(p) ? `<div class="production-status" data-code="${esc(p.shortcode)}">${productionMarkup(p.shortcode)}</div>` : ''}
-        <div class="foot"><button class="card-open-production">${isVideo(p) ? '제작 진행 보기 →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 ↗</a></div>
+        <div class="foot"><button class="card-open-production">${isVideo(p) ? status.action+' →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 보기 ↗</a></div>
       </div>
     </article>`;
   }
@@ -241,7 +263,6 @@
 
   // ---------- 상세 모달 ----------
   const modal = $('#modal');
-  const {startSourceJob,startTranscriptJob}=window.ReferenceJobs.create({modal,esc});
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
   modal.addEventListener('click', (e) => { if (e.target.dataset.close !== undefined) closeDetail(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
@@ -257,21 +278,22 @@
       const task=data.tasks.find(t=>t.shortcode===code);
       if(task)window.PostResult.mount(root,task);
       else {
-        root.innerHTML='<section class="production-flow"><h3>자동 제작</h3><p>소스 확보 → 대본 → TTS → CapCut 프로젝트 → 최종 MP4</p><button id="begin-auto">자동 제작 시작</button></section>';
+        window.PostResult.mountEmpty(root);
+        const legacy=legacyProductionMarkup(code);
+        if(legacy)root.insertAdjacentHTML('beforeend',`<section class="legacy-production-results"><h4>이전 제작 결과</h4>${legacy}</section>`);
+        root.insertAdjacentHTML('beforeend','<button id="begin-auto" class="linkbtn">자동 제작 시작</button>');
         $('#begin-auto',root).onclick=async e=>{e.target.disabled=true;try{await window.ProductionFlow.api('',{shortcodes:[code],automatic:true});refreshProduction(code);}catch(err){e.target.disabled=false;root.append(document.createTextNode(err.message));}};
       }
-    }catch(e){if(root._postId)window.PostResult.connectionError(root);else root.textContent='제작 상태를 불러오지 못했습니다. 잠시 후 다시 확인합니다.';}
+    }catch(e){if(root._postId)window.PostResult.connectionError(root);else window.PostResult.mountEmpty(root,'제작 상태를 불러오지 못했어요. 잠시 후 자동으로 다시 확인합니다.');}
     if(flowCode===code)flowTimer=setTimeout(()=>refreshProduction(code),3000);
   }
   function bar(label, val, base, ratio) {
-    if (val == null) return '';
-    const max = Math.max(val, base || 0, 1);
-    return `<div class="row"><span>${label}</span><div class="track"><div class="fill" style="width:${(val / max) * 100}%"></div>${base ? `<div class="base" style="left:${(base / max) * 100}%"></div>` : ''}</div><div class="num">${fmt(val)} <small>/ 평소 ${fmt(base)}</small><br><span class="r ${ratioCls(ratio)}">${ratioTxt(ratio)}</span></div></div>`;
+    return `<div class="detail-metric"><span>${label}</span><strong>${fmt(val)}</strong><small>평소 ${fmt(base)}</small><b class="r ${ratioCls(ratio)}">${ratio == null ? '비교 정보 없음' : ratioTxt(ratio)+' 평소 대비'}</b></div>`;
   }
   function openDetail(p) {
     if (!p) return;
     clearTimeout(flowTimer); flowCode=p.shortcode;
-    const a = acctMap[p.username] || {}, v = p.velocity;
+    const a = acctMap[p.username] || {};
     $('#modal-body').innerHTML = `<div class="detail production-detail"><div class="detail-body">
       <div class="benchmark-header">
       <div class="thumb">${p.thumb ? `<img src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`}</div>
@@ -283,48 +305,28 @@
         <a href="${esc(p.url)}" target="_blank" rel="noopener">Instagram에서 원본 보기 ↗</a>
       </div></div>
         ${isVideo(p) ? '<div id="production-flow"></div>' : ''}
-        <details class="video-info"><summary>${isVideo(p) ? '영상' : '게시물'} 정보 더보기</summary><div class="video-info-body">
+        <section class="video-info" aria-labelledby="video-info-title"><h4 id="video-info-title" class="video-info-title">${isVideo(p) ? '영상' : '게시물'} 정보</h4><div class="video-info-body">
         <p class="hint">게시일 ${dateStr(p.taken_at)} · ${ago(p.age_hours)}${a.full_name ? ' · '+esc(a.full_name) : ''}</p>
         <div class="fullcap">${esc(p.caption) || '(캡션 없음)'}</div>
         ${p.hashtags.length ? `<div class="tags">${p.hashtags.map((h) => `<span data-tag="${esc(h)}">#${esc(h)}</span>`).join('')}</div>` : ''}
         <div class="cmp">
-          ${isVideo(p) ? bar('조회수', p.views, p.baseline.views, p.ratios.views) : ''}
+          ${bar('조회수', p.views, p.baseline.views, p.ratios.views)}
           ${bar('좋아요', p.likes, p.baseline.likes, p.ratios.likes)}
           ${bar('댓글', p.comments, p.baseline.comments, p.ratios.comments)}
         </div>
         <div class="kv">
-          <div>처음 발견한 시각 (한국 시간)<b>${p.hot_detected_at == null ? (p.tier ? '기록 없음' : '미발견') : new Date(p.hot_detected_at*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})}</b></div>
+          <div>처음 발견한 시각 (한국 시간)<b>${p.hot_detected_at == null ? (p.tier ? '기록 없음' : '미발견') : dateStr(p.hot_detected_at)}</b></div>
           <div>팔로워<b>${fmt(a.followers)}</b></div>
           <div>비교 게시물<b>${p.baseline.peers}개</b></div>
-          <div>반응 성숙도<b>${Math.round((R.criteria.values.maturity ? p.maturity : 1) * 100)}%</b></div>
-          <div>신뢰도<b>${confTxt[p.confidence]}</b></div>
-          <div>판정 상태<b>${esc(p.assessment?.label || '재분석 필요')}</b></div>
-          <div>보정 전 배수<b>${p.assessment ? '×' + p.assessment.unadjusted_multiplier.toFixed(2) : '—'}</b></div>
-          ${p.assessment?.reasons?.length ? `<div>시스템 판정 참고<b>${esc(p.assessment.reasons.join(' · '))}</b></div>` : ''}
-          ${v ? `<div>증가 속도 (${v.hours}h)<b>${v.views_per_hour != null ? fmt(v.views_per_hour) + ' 뷰/h · ' : ''}${v.comments_per_hour} 댓글/h</b></div>` : ''}
-          ${p.growth ? `<div>최근 조회 상태<b>${esc(p.growth.state)}</b></div><div>최근 조회 속도<b>${p.growth.views_per_hour == null ? '성공 관측 부족' : fmt(p.growth.views_per_hour) + ' 뷰/h'}</b></div>
-            <div>가속도<b>${p.growth.acceleration == null ? '비교 구간 부족' : fmt(p.growth.acceleration) + ' 뷰/h²'}</b></div>
-            <div>조회 성공 관측<b>${p.growth.successful_observations}개</b></div>
-            <div>성장 비교<b>${p.growth.comparison.mode === 'age_matched' ? '같은 게시 연령 ' + p.growth.comparison.peers + '개' : '평소 중앙값 대체 · 신뢰도 낮음'}</b></div>` : ''}
-          ${p.tracking ? `<div>14일 추적<b>D+${p.tracking.day} · 성공 ${p.tracking.successful_observations}회${p.tracking.finalized_at ? ' · 종료' : ''}</b></div>` : ''}
         </div>
         ${p.flags.filter((f) => flagTxt[f]).length ? `<div class="flags">${p.flags.filter((f) => flagTxt[f]).map((f) => `<span class="flag">${flagTxt[f]}</span>`).join('')}</div>` : ''}
-        ${isVideo(p) ? '<h4>개별 소스·대본 도구</h4>' : ''}
-        <div class="detail-actions">
-          ${isVideo(p) ? `<button class="linkbtn source-download" id="source-download" data-code="${esc(p.shortcode)}">소스 영상 찾기·다운로드</button><button class="linkbtn secondary" id="transcript-extract">대본 추출</button>` : ''}
-        </div>
-        ${isVideo(p) ? '<div class="source-status" id="source-status" hidden></div><div class="source-status transcript-status" id="transcript-status" hidden></div>' : ''}
-      </div></details></div></div>`;
-    // Reference metadata belongs below the production result, inside its disclosure.
+      </div></section></div></div>`;
+    // Reference metadata stays visible below the production result.
     const benchmark=$('.benchmark-header',modal), info=$('.video-info-body',modal);
     if(isVideo(p)&&benchmark&&info)info.prepend(benchmark);
     $$('.tags span', modal).forEach((s) => s.addEventListener('click', () => { closeDetail(); state.q = '#' + s.dataset.tag; $('#q').value = state.q; showSearch(true); renderAll(); }));
-    const sourceBtn = $('#source-download', modal);
-    if (sourceBtn) sourceBtn.addEventListener('click', () => startSourceJob(p.shortcode, sourceBtn));
-    const transcriptBtn = $('#transcript-extract', modal);
-    if (transcriptBtn) transcriptBtn.addEventListener('click', () => startTranscriptJob(p.shortcode, transcriptBtn));
     modal.hidden = false; document.body.style.overflow = 'hidden';
-    if(isVideo(p))refreshProduction(p.shortcode);
+    if(isVideo(p)){window.PostResult.mountEmpty($('#production-flow',modal),'제작 상태를 확인하고 있어요.');refreshProduction(p.shortcode);}
   }
 
   const reportRefresh=window.HotpostReportRefresh.create({

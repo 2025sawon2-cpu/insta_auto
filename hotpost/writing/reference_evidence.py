@@ -2,6 +2,7 @@
 import hashlib
 import re
 
+COMMENT_KEYWORD = '나도'
 
 def comment_keyword(text):
     # Quote/bracket/emoji wrappers are common in typed Instagram captions.
@@ -17,12 +18,15 @@ def comment_keyword(text):
         r'(?:^|\n)' + wrap + keyword + r'\s+' + leave,
     ]
     for pattern in patterns:
-        match = re.search(pattern, str(text))
-        if match and match.group(1) not in {
+        for match in re.finditer(pattern, str(text)):
+            if re.fullmatch(r'(?:아무)?댓글(?:에|로|을|이나|하나|한번)?', match.group(1)):
+                continue
+            if match.group(1) not in {
             '아무거나', '아무', '댓글', '두글자', '세글자', '후기', '의견',
             '감상', '한마디', '자유롭게', '말씀', '질문', '정보',
-        }:
-            return match.group(1)
+            '이나', '에', '로', '을', '한번', '아무댓글', '아무댓글이나', '댓글이나',
+            }:
+                return match.group(1)
     return ''
 
 
@@ -36,16 +40,14 @@ def context(payload):
 
 
 def choose_keyword(reference, caption=''):
-    # Typed source text is not subject to ASR pronunciation mistakes.
-    for kind, text in [('post_caption', caption), ('reference_text', reference)]:
-        value = comment_keyword(text)
-        if value:
-            return value, kind
-    return '', 'default'
+    # Source keyword extraction stays available for evidence; new narration
+    # follows the user's fixed CTA rather than borrowing the reference CTA.
+    return COMMENT_KEYWORD, 'user_fixed'
 
 
-def comment_issues(text, keyword):
+def comment_issues(text, keyword=None):
     """Shared writing/recovery checks; no feature metadata required."""
+    keyword=COMMENT_KEYWORD
     issues=[]
     if keyword not in text or not re.search(r'댓글|남겨',text):
         issues.append('주제와 연결되는 댓글 유도가 없습니다.')
@@ -56,6 +58,11 @@ def comment_issues(text, keyword):
         issues.append('댓글 요청이 반복됩니다. 선택한 키워드로 한 번만 요청하세요.')
     if re.search(r'(?:정보|링크|할인|선물).{0,15}(?:보내|드릴|드려)',text):
         issues.append('확인되지 않은 댓글 보상을 약속했습니다.')
+    tail=r'댓글에\s*[\'"‘’“”]?'+re.escape(keyword)+r'[\'"‘’“”]?\s*남겨주세요[.!。]?\s*$'
+    if not re.search(tail,text):
+        issues.append('대본은 “댓글에 ‘나도’ 남겨주세요.” 한 문장으로 바로 끝내세요.')
+    if re.search(r'(?:궁금(?:하면|하신\s*분|하시면)|마지막으로|끝으로)[^.!?。\n]{0,60}댓글에',text):
+        issues.append('댓글 조건이나 종료 예고를 빼고 본문 뒤에 짧은 댓글 요청만 붙이세요.')
     return issues
 
 

@@ -37,13 +37,9 @@ def primary_video_url(page_url: str, markup: str) -> str:
     return media
 
 
-def download(page_url: str, target: Path, max_bytes: int, deadline: float | None):
-    deadline = deadline if deadline is not None else time.monotonic() + 90
+def download(page_url: str, target: Path, max_bytes: int, deadline: float | None = None):
     def timeout():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError('판매처 영상 다운로드 시간 예산 소진')
-        return min(30, remaining)
+        return (30, 60)  # Connection/read silence, independent of preceding work.
 
     request_pause()
     with requests.get(page_url, timeout=timeout(), stream=True, allow_redirects=False) as response:
