@@ -249,7 +249,6 @@
     const status = productionState(p.shortcode);
     return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}" data-agent-live="${agentState(p.shortcode).live}"` : ''}>
       <div class="thumb">${thumb}
-        ${isVideo(p) ? `<label class="studio-choice" style="position:absolute;bottom:10px;right:10px;z-index:4;background:#fffef2;color:#285b46;border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer"><input type="checkbox" data-studio-code="${esc(p.shortcode)}" ${studioSelected.has(p.shortcode)?'checked':''}> 제작 선택</label>` : ''}
         <div class="tl">${p.tier ? `<span class="pill t${p.tier}">${tierTxt(p.tier)} ×${p.multiplier.toFixed(1)}</span>` : `<span class="pill">×${p.multiplier.toFixed(1)}</span>`}</div>
         <div class="tr"><span class="pill kind">${kindTxt(p.kind)}${p.video_duration ? ' · ' + Math.round(p.video_duration) + 's' : ''}</span></div>
         <div class="rank">#${i + 1}</div>
@@ -284,8 +283,29 @@
   $('#cards').addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openDetail(POSTS.find((p) => p.shortcode === c.dataset.code)); });
   modal.addEventListener('click', (e) => { if (e.target.dataset.close !== undefined) closeDetail(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
+  modal.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const items = Array.from(modal.querySelectorAll('button:not(:disabled),a[href],input,textarea,video[controls]')).filter(el=>el.getClientRects().length);
+    const first = items[0], last = items[items.length-1];
+    if (e.shiftKey && document.activeElement===first) { e.preventDefault(); last?.focus(); }
+    else if (!e.shiftKey && document.activeElement===last) { e.preventDefault(); first?.focus(); }
+  });
   let flowTimer, flowCode;
-  function closeDetail() { clearTimeout(flowTimer); flowCode=null; modal.querySelectorAll('video,audio').forEach(v=>v.pause()); modal.hidden = true; document.body.style.overflow = ''; }
+  let preparationView = null, detailTrigger = null;
+  function openDetail(p) {
+    if (!p) return;
+    preparationView?.close();
+    clearTimeout(flowTimer); flowCode = null;
+    modal.querySelectorAll('video,audio').forEach(v=>v.pause());
+    detailTrigger = document.activeElement;
+    const body = $('#modal-body');
+    preparationView = window.PostPreparation.mount(body, p);
+    modal.hidden = false; document.body.style.overflow = 'hidden';
+    const dialog = $('.modal-card', modal);
+    dialog.setAttribute('aria-label', '게시물 준비'); dialog.scrollTop = 0;
+    $('[data-close].modal-close',modal).focus?.();
+  }
+  function closeDetail() { preparationView?.close(); preparationView=null; detailTrigger?.focus?.(); clearTimeout(flowTimer); flowCode=null; modal.querySelectorAll('video,audio').forEach(v=>v.pause()); modal.hidden = true; document.body.style.overflow = ''; }
   async function refreshProduction(code) {
     clearTimeout(flowTimer);
     if(flowCode!==code||modal.hidden)return;
@@ -311,7 +331,7 @@
   function bar(label, val, base, ratio) {
     return `<div class="detail-metric"><span>${label}</span><strong>${fmt(val)}</strong><small>평소 ${fmt(base)}</small><b class="r ${ratioCls(ratio)}">${ratio == null ? '비교 정보 없음' : ratioTxt(ratio)+' 평소 대비'}</b></div>`;
   }
-  function openDetail(p) {
+  function openLegacyDetail(p) {
     if (!p) return;
     clearTimeout(flowTimer); flowCode=p.shortcode;
     const a = acctMap[p.username] || {};

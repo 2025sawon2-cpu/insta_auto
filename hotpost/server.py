@@ -33,6 +33,8 @@ from .monetization import Monetization
 from .monetization_http import MonetizationHTTP
 from .retention import cleanup_dry_run, cleanup_execute, disk_usage
 from .production import ProductionManager
+from .post_preparation import PostPreparation
+from .post_preparation_http import PostPreparationHTTP
 
 
 KST = timezone(timedelta(hours=9))
@@ -52,6 +54,7 @@ def schedule_health(schedule: dict, last_attempt_at: int | None, now: int | None
 
 
 def make_handler(settings: Settings):
+    post_preparation = PostPreparation(settings)
     try:
         job_queue = JobQueue(settings, autostart=False)
     except RuntimeError as exc:
@@ -84,7 +87,7 @@ def make_handler(settings: Settings):
         raise
     criteria_lock = threading.Lock()
 
-    class Handler(MonetizationHTTP, StudioHTTP, SimpleHTTPRequestHandler):
+    class Handler(PostPreparationHTTP, MonetizationHTTP, StudioHTTP, SimpleHTTPRequestHandler):
         def log_message(self, *_args) -> None:
             return
 
@@ -94,9 +97,15 @@ def make_handler(settings: Settings):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
-            self.end_headers(); self.wfile.write(body)
+            self.end_headers()
+            if self.command != 'HEAD': self.wfile.write(body)
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            if self.post_preparation_request(post_preparation, head=True): return
+            super().do_HEAD()
 
         def do_PUT(self) -> None:  # noqa: N802
+            if self.post_preparation_request(post_preparation, write=True): return
             if urlparse(self.path).path == '/api/display-settings':
                 try:
                     length = int(self.headers.get('Content-Length', '0'))
@@ -138,6 +147,7 @@ def make_handler(settings: Settings):
             return
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.post_preparation_request(post_preparation, thumbnail=True): return
             if self.monetization_request(monetization, mutation=True): return
             if self.studio_post(studio): return
             path = urlparse(self.path).path
@@ -271,6 +281,7 @@ def make_handler(settings: Settings):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
         def do_GET(self) -> None:  # noqa: N802
+            if self.post_preparation_request(post_preparation): return
             if self.monetization_request(monetization): return
             if urlparse(self.path).path == '/api/report':
                 try:

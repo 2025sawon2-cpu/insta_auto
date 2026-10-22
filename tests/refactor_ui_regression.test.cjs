@@ -33,19 +33,21 @@ async function dashboard(){
     pipeline:[{id:'previous',created:1,status:'completed',video_url:'/previous.mp4',steps:[{key:'export',download_url:'/download?run=previous'}]},
       {id:'current',created:2,status:'completed',video_url:'/current.mp4',steps:[{key:'export',download_url:'/download?run=current'}]}]};
   const values={detection:'today',period:24,kind:'all',tier:1,sort:'rank',assessment:'all',account:''};
-  const context={document,URL,URLSearchParams,Map,Set,Date,console,Event:domWindow.Event,
+  const context={document,URL,URLSearchParams,Map,Set,Date,console,AbortController,AbortSignal,Event:domWindow.Event,
     HOTPOST_REPORT:currentReport,innerWidth:1280,
     location:{search:'?post=post-0',reload(){reloads++;}},
     matchMedia:()=>({matches:false}),
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
     setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){},
     addEventListener(name,callback){if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(callback);},
+    removeEventListener(){},
     async fetch(url,options={}){
       assert.equal(options.method||'GET','GET','the regression harness must never send a mutation');
       requests.push(url);
       if(url==='/api/report'&&reportFailure)throw new Error('offline');
       const routes={
-        '/api/display-settings':{values},'/api/report':currentReport,'/api/studio':{tasks:[task]},
+        '/api/display-settings':{values},'/api/report':currentReport,'/api/studio?view=list':{tasks:[task]},
+        '/api/post-preparations/post-0':{revision:0,accounts:['mr.salrim','__ariddaum__'],draft:{selected_accounts:[],thumbnail_options:{recommended:'기본',hook:'후킹',curiosity:'궁금증',benefit:'이득'},selected_thumbnail:'recommended',caption:'우리 대본',pinned_comment:'댓글',product_link:''},media:{final:'/current.mp4',reference:'/reference.mp4'}},
         '/api/legacy-productions':{productions:[]},'/api/accounts':{accounts:[{username:'creator'}]},
         '/api/collection-status':{collection:{state:'success',newest_post_update:Date.now()/1000},schedule:{}}
       };
@@ -65,15 +67,14 @@ async function dashboard(){
     async focus(){await Promise.all((listeners.get('focus')||[]).map(callback=>callback()));await settle();}};
 }
 
-test('the assembled dashboard refreshes counts without replacing open result media or stage selection',{skip:!parseHTML},async()=>{
+test('dashboard report refresh preserves open video and unsaved publication draft',{skip:!parseHTML},async()=>{
   const app=await dashboard(),d=app.document;
   assert.equal(String(d.querySelector('#result-count').textContent),'1');
   assert.equal(d.querySelector('#modal').hidden,false);
   const video=d.querySelector('video[src="/current.mp4"]');
   assert.ok(video);video.currentTime=11;
-  d.querySelector('[data-stage="script"]').click();
-  d.querySelector('[data-collapse="previous"]').click();
-  assert.equal(d.querySelector('#pr-body-previous').hidden,true);
+  const caption=d.querySelector('[name="prep-caption"]');caption.value='작성 중인 게시물';
+  caption.dispatchEvent(new app.document.defaultView.Event('input',{bubbles:true}));
   app.replaceReport(report(2,3));
   await app.focus();
   assert.equal(String(d.querySelector('#result-count').textContent),'3');
@@ -81,19 +82,19 @@ test('the assembled dashboard refreshes counts without replacing open result med
   assert.equal(d.querySelector('#modal').hidden,false);
   assert.equal(d.querySelector('video[src="/current.mp4"]'),video);
   assert.equal(video.currentTime,11);
-  assert.equal(d.querySelector('[data-stage="script"]').getAttribute('aria-expanded'),'true');
-  assert.equal(d.querySelector('#pr-body-previous').hidden,true);
+  assert.equal(d.querySelector('[name="prep-caption"]'),caption);
+  assert.equal(caption.value,'작성 중인 게시물');
   assert.equal(app.reloads,0);
   assert.ok(app.requests.includes('/api/report'));
 });
 
 test('failed report refresh keeps verified cards, current video, and per-run download links',{skip:!parseHTML},async()=>{
   const app=await dashboard(),d=app.document,video=d.querySelector('video[src="/current.mp4"]');
-  const downloads=()=>Array.from(d.querySelectorAll('.pr-actions a[download]'),a=>a.getAttribute('href'));
-  assert.deepEqual(downloads(),['/download?run=current','/download?run=previous']);
+  const downloads=()=>Array.from(d.querySelectorAll('.prep-download'),a=>a.getAttribute('href'));
+  assert.deepEqual(downloads(),['/current.mp4?download=1']);
   app.failReport();await app.focus();
   assert.equal(String(d.querySelector('#result-count').textContent),'1');
   assert.equal(d.querySelector('video[src="/current.mp4"]'),video);
-  assert.deepEqual(downloads(),['/download?run=current','/download?run=previous']);
+  assert.deepEqual(downloads(),['/current.mp4?download=1']);
   assert.equal(app.reloads,0);
 });

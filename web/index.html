@@ -15,7 +15,6 @@
       <p class="sub" id="meta">데이터를 불러오는 중…</p>
     </div>
     <div class="top-right main-navigation">
-      <a class="btn" href="studio.html">▣ 제작실</a>
       <div class="notification-anchor collection-notifications" id="collection-notifications">
         <button type="button" class="icon-button notification-bell" id="collection-notification-toggle" title="수집 알림" aria-label="수집 알림" aria-haspopup="dialog" aria-expanded="false" aria-controls="collection-notification-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M9 21h6"/></svg><span class="notification-badge" id="collection-notification-count" hidden>1</span></button>
         <section class="notification-panel collection-notification-panel" id="collection-notification-panel" role="dialog" aria-labelledby="collection-notification-title" hidden>
@@ -33,7 +32,6 @@
 </header>
 
 <main class="wrap" id="app">
-  <div id="studio-selection" style="position:sticky;top:8px;z-index:20;background:#245f50;color:#fff;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:14px;margin-bottom:12px" hidden><b id="studio-selected-count">0개 선택</b><span style="flex:1">선택한 소재를 준비하고 대본부터 검토합니다</span><button class="btn" id="studio-add-selected">제작실에 추가 →</button></div>
   <div id="banner" class="banner" hidden></div>
 
   <section class="stats" id="stats" aria-label="한국 시간 기준 오늘 처음 감지한 터진 게시물 통계"></section>
@@ -84,7 +82,9 @@
 <script src="discovery/model.js?v=modules-20261006"></script>
 <script src="discovery/report-refresh.js?v=modules-20261006"></script>
 <script src="agent-status.js?v=20261019-2"></script>
-<script src="app.js?v=agent-activity-20261019-2"></script>
+<link rel="stylesheet" href="post-preparation.css?v=20261023-thumbnail-1">
+<script src="post-preparation.js?v=20261023-rules-3"></script>
+<script src="app.js?v=post-preparation-20261022-2"></script>
 <link rel="stylesheet" href="studio-status.css?v=status-20261005">
 <link rel="stylesheet" href="studio-activity.css?v=activity-20261005">
 <link rel="stylesheet" href="studio-detail.css?v=detail-refresh-20261008-final-2">

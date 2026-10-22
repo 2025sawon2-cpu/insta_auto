@@ -1,9 +1,14 @@
 # insta_auto 코드 탐색 지도
 
+> 2026-10-22 사용자 방침: 기존 **제작실 코드는 outdated / 참고용 보존** 상태다. 아래 제작실 UI·API·Studio 실행기·자동 제작 관련 경로와 과거 구현·검증 기록은 역사적 참고 자료이며, 신규 작업의 기본 실행·개선·복구 대상으로 사용하지 않는다. 코드와 자료는 삭제하지 않는다. 재사용·활성화·수정에는 별도 명시 지시가 필요하다. 터진게시물 서비스와 독립 VoiceBench 전체를 outdated로 지정한 것은 아니다. 최신 우선순위는 AGENTS.md 최상단을 따른다.
+
 먼저 바꿀 기능의 진입점과 해당 테스트만 읽는다. 운영 데이터는 data/에 있으며 모듈 재배치와 별개로 보존한다.
 
 | 기능 | 진입점 / 구현 | 검증 |
 |---|---|---|
+| 독립 게시용 광고·도입 감탄사 규칙 | post_media_rules.py → post_thumbnail.py/post_preparation.py; 광고 없는 본문 명시 반영/이후 body_final과 spoken_text/rules 유지 | test_post_media_rules.py/test_post_thumbnail.py; 실제 TTS271 적용·소스32 보존은 data/shelf-publication-rules-20261023/ |
+| 사용자 클릭으로 현재 썸네일/영상 첫 프레임 교체·진행 피드백 | post_thumbnail.py → post_preparation.py/post_preparation_http.py; web/post-preparation.js/css; thumbnail_jobs + active.json | test_post_thumbnail.py/test_post_preparation.py/post_preparation.test.cjs; 본문 프레임/음성 해시 검증 후 원자 공개 |
+| 게시물 준비: 다중 계정·썸네일 4문구·본문·고정댓글·제품 링크 초안(업로드 없음) | web/app.js → web/post-preparation.js/css; post_preparation.py/post_preparation_http.py; post_preparation_content.py/json(확장 본문·해시태그5개·댓글2줄); 독립 post-preparation.sqlite3, 기존 완료 자료 읽기 전용 | test_post_preparation.py/test_post_preparation_content.py/post_preparation.test.cjs/refactor_ui_regression.test.cjs; [범위·검증](POST_PREPARATION_UI_20261022.md) |
 | 영상 전체 순차 입장·무진전 영속 보류·검증된 동일 job 재개/후속 복원·검색어 MD | production_control.py → studio_store.claim/video_agents/video_agent_actions/commands; production_records.py → source_topic_queries/source_finder/studio_sources/lifecycle | test_production_control.py/test_production_records.py; [구현·한계](PRODUCTION_COMPLETION_CONTROL_20261022.md) |
 | 상품 확인 댓글·DM 계정과 게시·리틀리 계정 분리 / 릴스 전용 댓글 dialog·permalink 확인 | monetization_store.py의 discovery_account/account·효과별 시도 키 → monetization.py/monetization_http.py; monetization_browser.py의 reference_comment_surface/own_comment_ids; web/monetization.* | test_monetization_account_roles.py/test_monetization_account_navigation.py/test_monetization_reel_comments.py; 실제 송신과 격리 fixture 검증은 구분 |
 | 핵심 제품 우선 수집 v6·유한 탐색 부족 근거·분리된 보조 검색·본문 핵심 다양성 우선 | source_core_priority.py → source_policy.py/source_coverage.py/studio_sources.py/source_batches.py/source_functional.py; scene_analysis.py/studio_runtime/editing.py; 외부 studio_core_priority.py/studio_visual_cuts.py/studio_story_selection.py | test_core_product_priority.py(양쪽 저장소); [구현·검증](CORE_PRODUCT_PRIORITY_IMPLEMENTATION_20261019.md) |
