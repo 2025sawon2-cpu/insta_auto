@@ -100,7 +100,11 @@ def run_bounded(command, payload, checkpoint, timeout, progress=None):
     return result
 
 
-def isolated_search(settings, frames, queries, limit, debug_dir, previous_searches=None, progress=None, routes=None, provider_queries=None):
+def isolated_search(settings, frames, queries, limit, debug_dir, previous_searches=None, progress=None, routes=None, provider_queries=None, search_minimums=None,search_only=False,search_identity=None):
+    from .ego_source_backend import configured, search as ego_search
+    if configured(settings):
+        return ego_search(settings, queries, limit, debug_dir, previous_searches, progress,
+                          routes, provider_queries, search_minimums, search_only, search_identity)
     if settings.source_browser_search and limit > 0:
         from .source_browser_runtime import endpoint
         try:
@@ -123,7 +127,8 @@ def isolated_search(settings, frames, queries, limit, debug_dir, previous_search
     payload = {'settings': public_settings, 'frames': [str(p.resolve()) for p in frames],
                'queries': queries, 'limit': limit, 'debug_dir': str(debug_dir.resolve()),
                'checkpoint': str(checkpoint.resolve()), 'previous_searches': previous_searches or [], 'routes':routes,
-               'provider_queries':provider_queries or {}}
+               'provider_queries':provider_queries or {},'search_minimums':search_minimums or {},'search_only':bool(search_only),
+               'search_identity':search_identity}
     timeout = settings.source_worker_idle_timeout
     python = Path(sys.executable)
     if os.name == 'nt' and python.with_name('python.exe').is_file():
@@ -145,6 +150,9 @@ def main():
     searcher.previous_searches = payload['previous_searches']
     searcher.routes = payload.get('routes')
     searcher.provider_queries = payload.get('provider_queries', {})
+    searcher.search_minimums=payload.get('search_minimums',{})
+    searcher.search_only=payload.get('search_only',False)
+    searcher.search_identity=payload.get('search_identity')
     target = Path(payload['checkpoint'])
     def checkpoint(message):
         _atomic_json(target, {'waiting_until':getattr(searcher, 'waiting_until', 0), 'message': message, 'candidates': [*searcher.visual_candidates, *searcher.candidates],

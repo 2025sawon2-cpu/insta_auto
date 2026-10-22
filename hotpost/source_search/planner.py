@@ -33,6 +33,12 @@ def grounded_actions(plan, evidence):
         def positive_hits():
             for source, body in evidence.items():
                 for sentence in re.split(r'[.!?。！？\n]', str(body)):
+                    if suffixes[0]=='storage':
+                        bookmark=bool(re.search(r'저장\s*(?:해\s*두|해\s*놓|하[세시]|해\s*주)|'
+                            r'\bsave\b[^.!?]{0,20}\b(?:post|video|later)\b|保存(?:这条|此|视频|帖子)',sentence,re.I))
+                        physical=bool(re.search(r'(?:용기|냉장고|냉동고|병|서랍|상자)[^.!?]{0,20}(?:넣|담|보관|저장)|'
+                            r'(?:넣|담|소분)[^.!?]{0,20}저장|put[^.!?]{0,20}(?:container|fridge)|放入|装入',sentence,re.I))
+                        if bookmark and not physical:continue
                     if suffixes[0] == 'scooping with a spoon' and re.search(
                             r"\b(?:not|never|without|avoid)\b|하지\s*마|먹지\s*마|뜨지|떠내지|떠담지|안\s*떠|不(?:要|用|能)|禁止", sentence, re.I):
                         continue
@@ -113,6 +119,23 @@ def choose_strategy(plan, context=None, history=None):
     elif phase == 'alternate_access':
         routes = ['youtube', 'bing', 'bilibili', 'tiktok', 'douyin', 'xiaohongshu',
                   'duckduckgo', *IMAGE_ROUTES]
+    if plan.get('query_selection_policy')=='natural-topic-search-v1':
+        # Content outcomes of an older pool do not consume newly reviewed
+        # topic queries. Require today's real access preflight and fresh scope;
+        # parser/auth blocks and every consumed query remain authoritative.
+        from ..source_queries import platform_queries
+        approved=[r['query'] for r in round_queries(plan,{'phase':phase})]
+        for provider in tuple(skipped):
+            parser_wait=any(r.get('provider')==provider
+                and r.get('status') in {'page_unresolved','readiness_blocked'}
+                and r.get('parser_revision')==parser_revision(provider) for r in audits)
+            if (provider not in TEXT_ROUTES or provider not in context.get('ready_routes',[])
+                    or provider in context.get('blocked_routes',[]) or parser_wait):
+                continue
+            pool=platform_queries(approved,provider,len(approved))
+            if fresh_queries(pool,provider,history or []):
+                skipped.pop(provider)
+                explanation.append('현재 접근 점검 통과 경로의 새 독립 검토 주제 검색 범위 탐색')
     routes = [r for r in routes if r not in skipped]
     kinds = {plan.get('subject_kind')}
     if any(p.get('en') in {'minced garlic preparation','honey garlic soy chicken',
@@ -123,6 +146,17 @@ def choose_strategy(plan, context=None, history=None):
     strategy = {'version':2, 'phase':phase, 'label':LABELS[phase], 'reasons':explanation,
                 'previous_failure_counts':reasons, 'routes':routes, 'skipped_routes':skipped,
                 'vendor_search':vendor, 'completed_rounds':context.get('completed_rounds',0)}
+    if plan.get('search_minimums'):
+        strategy['search_minimums']=dict(plan['search_minimums'])
+        strategy['reasons'].append('영어5·중국어5 고유 검색의 실제 제출·일치 결과를 우선 확보')
+        if plan.get('visual_query_evidence'):
+            # In this path phases vary routes, not the independently approved nouns.
+            strategy['reasons'] = ['독립 검토한 제품 명사와 레퍼런스 장면 역할을 기준으로 미사용 검색 범위 탐색',
+                                   strategy['reasons'][-1]]
+            strategy['query_variation'] = 'approved_product_nouns_only'
+            if plan.get('query_selection_policy')=='natural-topic-search-v1':
+                strategy['query_variation']='approved_topic_intents_only'
+                strategy['reasons'][0]='독립 검토한 짧은 주제·제품·용도·상황 검색의 실제 미사용 범위 탐색'
     if history:
         from ..source_queries import platform_queries
         blocked = context.get('blocked_routes', [])
@@ -152,7 +186,46 @@ def choose_strategy(plan, context=None, history=None):
 
 
 def round_queries(plan, strategy):
+    if plan.get('text_query_evidence') and not plan.get('tiktok_operator_request'):
+        from ..source_text_query_receipts import plan_text_queries, pool_report
+        from ..source_query_identity import query_identity
+        rows = plan_text_queries(plan)
+        report = pool_report(rows, plan['search_minimums'], plan['search_identity'])
+        plan['effective_query_pool'] = report
+        plan['minimum_query_plan'] = dict(report['languages'])
+        plan['minimum_query_plan_ready'] = report['ready']
+        result, seen = [], set()
+        for row in rows:
+            key = query_identity(row['query'], plan['search_identity'])
+            if key and key not in seen:
+                result.append(dict(row))
+                seen.add(key)
+        priority = {'en':0, 'zh':1, 'ko':2}
+        return sorted(result, key=lambda row:priority.get(row['language'],3))
     details = plan.get('query_details', [])
+    if plan.get('visual_query_evidence') and not plan.get('tiktok_operator_request'):
+        from ..source_visual_queries import plan_queries
+        # Every textual provider keeps the observed product identity. Search
+        # conditions below may vary, but cannot fall back to a broad caption head.
+        visual=plan_queries(plan)
+        if plan.get('search_minimums'):
+            from ..source_visual_queries import query_pool_report
+            from ..source_query_identity import query_identity
+            # Minimum searches use independently approved actual noun phrases.
+            # Action ranking and raw/close-up suffixes cannot shrink or pad this
+            # pool, nor restore an independently rejected material translation.
+            report=query_pool_report(visual,plan['search_minimums'],plan.get('search_identity'))
+            plan['effective_query_pool']=report
+            plan['minimum_query_plan']=dict(report['languages'])
+            plan['minimum_query_plan_ready']=report['ready']
+            result=[];seen=set()
+            for row in visual:
+                identity=query_identity(row['query'],plan.get('search_identity'))
+                if identity not in seen:result.append(dict(row));seen.add(identity)
+            priority={'en':0,'zh':1,'ko':2}
+            from ..reference_scene_roles import diverse_query_order
+            return diverse_query_order(sorted(result,key=lambda r:priority.get(r.get('language'),3)))
+        else:details=visual
     actions = [d for d in details if d.get('role') == 'subject_action'
                and d.get('evidence_quote') and d.get('intent') != 'close_up_footage']
     if not actions:
@@ -177,6 +250,9 @@ def round_queries(plan, strategy):
         identity = query_fingerprint(item['query'])
         if identity not in seen and item['query'].strip():
             result.append(item); seen.add(identity)
+    if plan.get('search_minimums'):
+        priority={'en':0,'zh':1,'ko':2}
+        result.sort(key=lambda r:priority.get(r.get('language'),3))
     return result
 
 

@@ -73,6 +73,23 @@ def test_action_matching_keyword_precedes_generic_visual_clip_without_approving_
     assert relevant.discovery_reasons and not relevant.selected_for_zip and relevant.match_quality=='unverified'
 
 
+def test_visual_product_plan_does_not_call_fridge_decoration_cold_storage():
+    candidate=Candidate('https://youtube.com/watch?v=magnet','youtube',title='DIY fridge photo magnets')
+    plan={'visual_query_evidence':{'policy':'sampled-product-search-v4-core-identity'},
+          'search_minimums':{'en':5,'zh':5},'query_details':[
+              {'role':'subject_action','query':'refrigerator photo magnet','evidence_quote':'냉장고에 붙여두니까'}]}
+    assert rank_candidates([candidate],plan)==[candidate]
+    assert not any('핵심 행동' in r for r in candidate.discovery_reasons)
+    assert candidate.discovery_score==0 and not candidate.selected_for_zip
+
+
+def test_explicit_operator_action_plan_keeps_its_own_priority():
+    plan=garlic_plan();plan.update(visual_query_evidence={'policy':'legacy'},tiktok_operator_request=True)
+    candidate=Candidate('https://youtube.com/watch?v=garlic','youtube',title='Minced garlic refrigerator storage')
+    rank_candidates([candidate],plan)
+    assert any('핵심 행동 일치' in r for r in candidate.discovery_reasons)
+
+
 def test_broader_ingredient_title_precedes_unrelated_leftovers_without_approval():
     unrelated=Candidate('https://youtube.com/watch?v=unrelated','youtube',title='ASMR triggers')
     broader=Candidate('https://youtube.com/watch?v=broader','youtube',title='How to store fresh garlic')

@@ -21,7 +21,7 @@
   }
   function changeStatus(t){
     const f=t.feedback||{},local=JSON.parse(localStorage.getItem(storageKey(t))||'{}');
-    const groups=[['script_text','대본'],['voice_profile_id','목소리'],['speed','속도'],['pronunciations','발음'],['regenerate_voice','새 음성'],['source_ids','사용 영상'],['changes','장면·자막']].filter(([k])=>k in f);
+    const groups=[['script_text','대본'],['voice_profile_id','목소리'],['speed','속도'],['pronunciations','발음'],['regenerate_voice','새 음성'],['source_ids','사용 영상'],['changes','장면·자막'],['thumbnail_document','썸네일']].filter(([k])=>k in f);
     const oldEdit=localStorage.getItem(storageKey(t)+'-edit');
     const staleEdit=oldEdit&&oldEdit!==t.edit_id&&Object.keys(local).some(k=>/^(shot|caption|start|end|emphasis):/.test(k));
     const conflict=f.changes?.length&&['script_text','speed','pronunciations','voice_profile_id','regenerate_voice','source_ids'].some(k=>k in f);

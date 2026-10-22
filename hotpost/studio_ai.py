@@ -61,7 +61,7 @@ def restrict_context_shots(plan, sources):
                 and review.get('source_sha256') == source.get('sha256')):
             path = str(Path(source['path']).resolve())
             restrictions[path] = review['context_usage_limits']
-            if review.get('same_core_function') is False and review.get('context_usable') is True:
+            if (review.get('same_core_function') is False or source.get('product_source_kind') in {'related_product','context'}) and review.get('context_usable') is True:
                 context[path] = review['context_usage_limits']
     ids = set()
     for shot in plan['shots']:

@@ -10,7 +10,7 @@ from .studio_store import Conflict
 class StudioHTTP:
     def studio_post(self, studio):
         parsed = urlparse(self.path)
-        if not parsed.path.startswith("/api/studio"):
+        if parsed.path != '/api/studio' and not parsed.path.startswith('/api/studio/'):
             return False
         try:
             origin = self.headers.get("Origin")
@@ -34,13 +34,13 @@ class StudioHTTP:
                 if not isinstance(codes, list) or not 1 <= len(codes) <= 100:
                     raise ValueError("제작할 소재를 선택하세요. 한 번에 최대 100개씩 추가할 수 있습니다.")
                 if data.get('only_new'):
-                    results = [studio.create(str(code), with_created=True) for code in dict.fromkeys(codes)]
-                    tasks = [studio.action(t['id'],'start-auto',{}) if created and data.get('automatic') else t
-                             for t,created in results]
+                    auto = {'protocol':2,'active':True,'selection_mode':'automatic'} if data.get('automatic') else None
+                    results = [studio.create(str(code), automation=auto, with_created=True) for code in dict.fromkeys(codes)]
+                    tasks = [t for t,created in results]
                 else:
-                    tasks = [studio.create(str(code)) for code in dict.fromkeys(codes)]
-                    if data.get('automatic'):
-                        tasks = [studio.action(t['id'],'start-auto',{}) for t in tasks]
+                    auto = {'protocol':2,'active':True,'selection_mode':'automatic'} if data.get('automatic') else None
+                    results = [studio.create(str(code), automation=auto, with_created=True) for code in dict.fromkeys(codes)]
+                    tasks = [studio.action(t['id'],'start-auto',{}) if auto and not created else t for t,created in results]
                 self._json({"tasks":tasks}, 202)
             elif len(parts) == 4:
                 self._json(studio.action(parts[2], parts[3], data), 202)
@@ -56,7 +56,7 @@ class StudioHTTP:
 
     def studio_get(self, studio):
         parsed = urlparse(self.path)
-        if not parsed.path.startswith("/api/studio"):
+        if parsed.path != '/api/studio' and not parsed.path.startswith('/api/studio/'):
             return False
         try:
             parts = parsed.path.strip("/").split("/")
@@ -78,7 +78,8 @@ class StudioHTTP:
                 self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(content)))
                 self.send_header('Cache-Control','private, max-age=300');self.end_headers();self.wfile.write(content)
             elif len(parts) == 2:
-                self._json({"tasks": [studio.public(s) for s in studio.store.list()]})
+                projection=studio.brief if parse_qs(parsed.query).get('view')==['list'] else studio.public
+                self._json({"tasks": [projection(s) for s in studio.store.list()]})
             elif len(parts) == 3:
                 self._json(studio.public(studio.store.get(parts[2])))
             elif len(parts) == 4 and parts[3] == "media":

@@ -4,7 +4,8 @@ from hotpost.daily_quality_scope import resolve_visual_scope
 from hotpost.daily_quality import validate_report
 
 def fixture(tmp_path):
-    frame=tmp_path/'actual.jpg';frame.write_bytes(b'actual supplied image')
+    from PIL import Image
+    frame=tmp_path/'actual.jpg';Image.new('RGB',(32,24),(80,120,160)).save(frame)
     suspect={'kind':'scene_gap','beat_id':'b2','reason':'Overview seems not to show wiping','search_query':'wipe'}
     local={'kind':'scene_gap','beat_id':'b1','reason':'Actual wrong fitting state','search_query':'fit'}
     groups=[{'frames':[{'beat_id':'b1','timestamp':1,'path':str(frame)}],

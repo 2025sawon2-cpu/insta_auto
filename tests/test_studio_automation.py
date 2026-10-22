@@ -161,8 +161,11 @@ def test_ready_video_continues_before_next_source_search(setup):
 def test_pause_stops_advancement_and_failure_keeps_stage_for_retry(setup):
     _,studio=setup
     t=studio.create('first',automation={'active':True,'stage':'prepare','rank':1})
+    in_flight=studio.store.claim(task_id=t['id'])
+    assert in_flight
     studio.action(t['id'],'pause-auto',{})
-    finish(studio,{'sources':[{'path':str(studio.folder(t['id'])/'source.mp4')}],'original_text':'발화'})
+    value={'sources':[{'path':str(studio.folder(t['id'])/'source.mp4')}],'original_text':'발화'}
+    studio.store.finish(in_flight,value,lambda s,db,r:studio._accept(s,in_flight,r,db))
     assert studio.store.claim() is None
     studio.action(t['id'],'resume-auto',{})
     job=studio.store.claim(); studio.store.fail(job,'서비스에 연결하지 못했습니다')

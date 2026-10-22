@@ -67,6 +67,47 @@ def test_thumbnail_conflicts_with_other_edits_or_old_base(prepared,monkeypatch):
     with pytest.raises(Conflict):studio.action(task,'save-thumbnail',dict(edit_id=state['edit_id'],document=document()))
 
 
+def test_discard_edit_feedback_clears_thumbnail_together_and_keeps_voice(prepared,monkeypatch):
+    monkeypatch.setattr('hotpost.remotion_editor.available',lambda:True)
+    studio,task=prepared;complete(studio,task)
+    state=studio.store.get(task)
+    studio.action(task,'save-thumbnail',{'edit_id':state['edit_id'],'document':document()})
+    studio.action(task,'save-feedback',{'speed':1.05})
+    with pytest.raises(Conflict):studio.action(task,'reproduce',{})
+    result=studio.action(task,'discard-edit-feedback',{})
+    assert result['feedback']=={'speed':1.05}
+    assert studio.store.get(task)['edit_id']==state['edit_id']
+
+
+@pytest.mark.parametrize('changed',['voice','script','sources','already_preserved'])
+def test_voice_change_preserves_manual_cover_but_new_content_does_not(prepared,changed):
+    from hotpost.studio_thumbnail import queue_preserved_thumbnail
+    studio,task=prepared;complete(studio,task)
+    def check(state,db):
+        old=state['edits'][-1]
+        Path(old['plan_path']).write_text(json.dumps({'thumbnail_document':document()}),'utf8')
+        old_run=state['runs'][-1]
+        old_run['artifacts']['edit_id']=old['id'];old_run['inputs']['source_ids']=['source']
+        current={**old,'id':'new-body','voice_id':'new-voice'}
+        run={'id':'voice-change','parent_id':old_run['id'],'inputs':{'source_ids':['source']}}
+        if changed=='script':
+            state['scripts'].append({'id':'different-script','text':'다른 제품 설명'})
+            current['script_id']='different-script'
+        if changed=='sources':run['inputs']['source_ids']=['different-source']
+        if changed=='already_preserved':current['preserved_thumbnail_from']=old['id']
+        queued=queue_preserved_thumbnail(studio,state,db,run,current)
+        assert queued is (changed=='voice')
+    studio.store.change(task,check)
+    jobs=[j for j in studio.store.jobs(task) if j['kind']=='revision']
+    if changed=='voice':
+        assert len(jobs)==1
+        job=studio.store.claim('media')
+        assert job['payload']['thumbnail_document']=={**document(),'frame':-1}
+        assert job['payload']['preserved_thumbnail_from']
+        assert job['payload']['voice_id']=='new-voice'
+    else:assert not jobs
+
+
 @pytest.mark.parametrize('b_frames', [0, 2])
 def test_real_render_changes_only_first_decoded_frame_and_copies_audio(tmp_path, b_frames):
     ffmpeg=shutil.which('ffmpeg')
@@ -92,10 +133,26 @@ def test_real_render_changes_only_first_decoded_frame_and_copies_audio(tmp_path,
     assert Path(result['export_path']).stat().st_size < base.stat().st_size*1.2
     assert Path(result['cover_path']).is_file() and result['export_verified']
     assert json.loads(Path(result['plan_path']).read_text(encoding='utf-8'))['thumbnail_document']==document()
+    revised=json.loads(Path(result['plan_path']).read_text(encoding='utf-8'))
+    assert revised['cover_spec']['lines']==['썸네일 테스트']
+    assert revised['cover_spec']['source']['rendered_cover_sha256']
+    assert 'single_frame_confirmation' not in revised['cover_spec']['source']
+    from hotpost.studio_thumbnail import verify_manual_thumbnail
+    state['edits']=[edit]
+    manual={**edit,**result,'id':job['id'],'parent_id':edit['id']}
+    verify_manual_thumbnail(state,manual,revised,Path(result['export_path']))
+    altered=json.loads(json.dumps(revised));altered['thumbnail_document']['elements'][0]['text']='다른 문구'
+    with pytest.raises(ValueError,match='문구·폰트'):
+        verify_manual_thumbnail(state,manual,altered,Path(result['export_path']))
     if b_frames == 2:
         # A second edit must unwrap the compact parent's hidden decoder frame.
         parent={**edit,**result,'id':'first-thumbnail','parent_id':edit['id']}
-        state['edits']=[edit,parent]
+        # Normal QA reclassifies the finished revision as a web render.
+        # Actual copy receipts must still identify its hidden decoder preroll.
+        parent['export_kind']='web_render'
+        original_preview={**edit,'preview_path':edit['export_path']}
+        original_preview.pop('export_path')
+        state['edits']=[original_preview,parent]
         second_doc=document();second_doc['elements'][0]['text']='두 번째 썸네일'
         second=render_thumbnail(studio,state,{'id':'thumbnail-second','payload':{'thumbnail_document':second_doc}},
                                 parent,{'duration':2,'beats':[]})

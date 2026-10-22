@@ -191,7 +191,7 @@ def test_soft_preference_never_reserves_slots_ahead_of_higher_ranked_sources():
 def test_manual_refresh_reviews_all_low_similarity_pending_candidates(tmp_path, monkeypatch):
     studio,tid,_,_,calls,_,_=automatic_review_fixture(tmp_path,monkeypatch,kind='refresh_sources')
     calls.clear()
-    job={'id':'manual-refresh','kind':'refresh_sources','payload':{}}
+    job={'id':'manual-refresh','task_id':tid,'kind':'refresh_sources','payload':{}}
     result=studio._refresh_sources(studio.store.get(tid),job)
     assert len(calls)==len(result['sources'])==14  # No former three-candidate rescue cap.
     assert all(not s['relevance_review_required'] for s in result['sources'])

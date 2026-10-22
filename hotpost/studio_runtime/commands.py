@@ -14,6 +14,57 @@ from .common import digest, selected
 
 
 class CommandsMixin:
+    def _command_recheck_quality(self, task_id, data):
+        """Re-evaluate an immutable edit without reviving a failed job/search."""
+        import hashlib
+        from ..daily_quality import enabled as quality_enabled, REVIEW_INSTRUCTION
+        contract = hashlib.sha256(REVIEW_INSTRUCTION.encode()).hexdigest()
+        reason = str(data.get('reason') or '').strip()
+        if not reason:raise ValueError('실제 재검토 사유가 필요합니다.')
+        def queue(state, db):
+            if not quality_enabled(state):raise ValueError('품질 검토 대상 작업이 아닙니다.')
+            edit = selected(state, 'edits', 'edit_id')
+            if not edit or edit['id'] != data.get('edit_id'):
+                raise Conflict('재검토할 편집본이 변경되었습니다.')
+            video = edit.get('export_path') or edit.get('preview_path')
+            render_sha, plan_sha = digest(video), digest(edit['plan_path'])
+            if (render_sha != data.get('render_sha256') or plan_sha != data.get('plan_sha256')):
+                raise Conflict('재검토 요청 이후 실제 영상·계획이 변경되었습니다.')
+            if db.execute("SELECT 1 FROM jobs WHERE task_id=? AND status IN ('queued','running')",
+                          (task_id,)).fetchone():
+                raise Conflict('진행 중인 작업이 끝난 뒤 재검토하세요.')
+            auto = state.setdefault('automation', {})
+            if auto.get('paused_by_user'):
+                token = data.get('resume_pause_token')
+                if token is None or token != auto.get('paused_at'):
+                    raise Conflict('사용자 중지 보존 · 해당 중지 이후 명시 재개가 필요합니다.')
+            key = 'quality-policy-recheck:' + edit['id'] + ':' + render_sha + ':' + contract
+            if db.execute('SELECT 1 FROM jobs WHERE key=?', (key,)).fetchone():
+                raise Conflict('동일 영상·검토 기준의 재검토 이력이 있어 같은 방법을 반복하지 않습니다.')
+            quality = state['daily_quality']
+            quality.setdefault('recheck_history', []).append({
+                'at': time.time(), 'reason': reason, 'edit_id': edit['id'],
+                'render_sha256': render_sha, 'plan_sha256': plan_sha,
+                'review_contract_sha256': contract,
+                'prior': {k: copy.deepcopy(quality.get(k)) for k in
+                          ('status','pending','error','failed_job_id','failed_job_kind')}})
+            for name in ('pending','error','failed_job_id','failed_job_kind'):
+                quality.pop(name, None)
+            quality['status'] = 'pending'
+            auto.update(active=True, paused_by_user=False, stage='quality_review')
+            auto.pop('pause_reason', None)
+            jid = self.store.enqueue(db, task_id, 'quality_review',
+                {'edit_id': edit['id'], 'explicit_policy_recheck': True,
+                 'render_sha256': render_sha, 'plan_sha256': plan_sha,
+                 'review_contract_sha256': contract, 'reason': reason}, key)
+            state.update(status='quality_review', error='', progress=0,
+                         message='기존 영상 보존 · 현재 기준으로 실제 프레임 재검토')
+            self.store.event(db, task_id, 'quality_policy_recheck_requested',
+                             {'job_id': jid, 'edit_id': edit['id'], 'reason': reason,
+                              'render_sha256': render_sha, 'review_contract_sha256': contract,
+                              'source_jobs_resumed': False})
+        return self.public(self.store.change(task_id, queue, data.get('revision')))
+
     def _script(self, state, text, origin, restored_from=None):
         text = str(text).strip()
         if not text or len(text) > 3000:
@@ -109,7 +160,46 @@ class CommandsMixin:
             raise ValueError('내장 대본 검사를 완료하지 못했습니다. 입력 내용은 그대로 유지됩니다.') from exc
 
     def action(self, task_id, action, data):
+        if action == 'resume-held-attempt':
+            from ..video_agent_actions import execute
+            from ..video_agents import get_agent
+            from ..video_agent_context import semantic_fingerprint
+            state=self.store.get(task_id)
+            owner=get_agent(self.store,task_id) or {}
+            incident=owner.get('no_progress_hold') or (owner.get('held_method_incidents') or {}).get(data.get('job_id')) or {}
+            if not incident or data.get('hold_id')!=incident.get('id'):
+                raise ValueError('현재 보류 ID와 원인 해결 근거가 필요합니다.')
+            if data.get('kind','retry') not in {'retry','retry_repaired','continue_repaired'}:
+                raise ValueError('검증된 입력 변경 또는 수리 후 재개만 가능합니다.')
+            tool={k:data[k] for k in ('job_id','repair_id','hold_id','evidence','hypothesis') if k in data}
+            tool.update(kind=data.get('kind','retry'),_agent_epoch=owner['epoch'],
+                        _expected_revision=data.get('revision',state['revision']))
+            result=execute(self,task_id,tool,'attempt-resume:'+str(data.get('decision_id') or incident['id']),
+                           semantic_fingerprint(state))
+            if result.get('status')!='queued':
+                raise ValueError(result.get('reason') or '원인 해결 근거가 부족해 보류를 유지합니다.')
+            return self.public(self.store.get(task_id))
+        # Revoke a pending agent decision BEFORE a user command can mutate its
+        # inputs. This separate transaction changes no task revision, so the
+        # command's own optimistic revision check still sees the user's version.
+        # Even a rejected command cancels stale background intent conservatively.
+        from ..video_agents import enroll
+        with self.store.transaction() as db:
+            enroll(db, self.store.get(task_id, db), 'user_command', renew=True)
+        try:
+            return self._action(task_id, action, data)
+        finally:
+            # Only the command itself grants resume authority. Synchronizing a
+            # dormant/paused owner must never activate production on its own.
+            with self.store.transaction() as db:
+                enroll(db, self.store.get(task_id, db), 'user_command')
+
+    def _action(self, task_id, action, data):
         own = self.store.get(task_id)
+        if action == 'attach-agent':
+            return self.public(own)  # Wrapper enrolls; production state/approvals stay authoritative.
+        if action == 'recheck-quality':
+            return self._command_recheck_quality(task_id, data)
         if (own.get('creation_mode') == 'photo_post' and not self.settings.photo_production_enabled
                 and action in {'start-auto', 'resume-auto', 'retry', 'reproduce', 'make-video',
                                'revise-edit', 'request-edit', 'export-edit', 'export-overlays', 'export-thumbnail', 'approve-voice'}):
@@ -165,13 +255,23 @@ class CommandsMixin:
                 if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
                 state['automation']['paused_by_user'] = True
                 if enabled(state):
-                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND (kind NOT IN ('proposal','refresh_sources','suggest_edit') OR (kind='refresh_sources' AND json_extract(payload,'$.daily_quality_repair')=1)) AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (task_id,))
+                    db.execute("UPDATE jobs SET status='paused' WHERE task_id=? AND status='queued' AND kind NOT IN ('proposal','suggest_edit') AND COALESCE(json_extract(payload,'$.launch'),0)<>1", (task_id,))
                 state.update(message='자동 진행 중지 · 진행 중인 단계의 결과를 보존합니다')
                 self.store.event(db, task_id, action, {})
                 return
             if action == 'resume-auto':
                 if not state.get('automation'): raise ValueError('자동 제작 대상이 아닙니다.')
-                if state.get('daily_quality',{}).get('pending') in {'exhausted','failed'}:
+                from ..production_control import hold as attempt_hold
+                if attempt_hold(db,task_id):
+                    # Explicit user resume revokes only the user pause. The
+                    # independent technical hold requires its guarded resolution.
+                    state['automation'].update(active=True,selection_mode='manual_resume')
+                    for field in ('paused_by_user','pause_reason','consumed_by_daily_policy'):
+                        state['automation'].pop(field,None)
+                    state['message']='사용자 중지 해제 · 기록된 원인의 검증된 해결 후 같은 영상 이어 제작 대기'
+                    self.store.event(db,task_id,action,{'technical_hold_retained':True})
+                    return
+                if state.get('daily_quality',{}).get('pending') in {'exhausted','failed','scene_wait'}:
                     from ..quality_progress import resume_assessment
                     if not resume_assessment(state):
                         state['message']='이전 품질 중단 유지 · 실제 새로운 수정 근거 대기'
@@ -182,7 +282,18 @@ class CommandsMixin:
                     state.setdefault('editorial_review_history', []).append(hold)
                     self.store.event(db, task_id, 'editorial_hold_released', hold)
                 state['error'] = ''
+                if not state.get('product_override') and state.get('product') in {None, '', '원작 중심 대상 미확인'} and state.get('source_search_manifest_path'):
+                    from ..studio_automation import identify_subject
+                    from ..reference_context import post_caption
+                    manifest_file = Path(state.get('source_search_manifest_path') or '')
+                    manifest_data = json.loads(manifest_file.read_text(encoding='utf-8')) if manifest_file.is_file() else {}
+                    manifest_data = {**manifest_data, 'caption': post_caption(self.settings, state) or manifest_data.get('caption', '')}
+                    resolved_product = identify_subject(manifest_data, state.get('original_text', ''), state.get('product') or state.get('title', ''))
+                    if resolved_product and resolved_product != '원작 중심 대상 미확인':
+                        state['product'] = resolved_product
                 state['automation']['active'] = True
+                from ..studio_supervision import StudioSupervisor
+                StudioSupervisor.release(db, task_id)
                 state['automation'].pop('consumed_by_daily_policy', None)
                 state['automation']['selection_mode'] = 'manual_resume'
                 state['automation'].pop('paused_by_user', None)
@@ -212,7 +323,15 @@ class CommandsMixin:
                     request = json.loads(failed['payload']).get('request', '')
                 from ..source_policy import adopt_policy
                 policy = adopt_policy(state, self.settings)
-                self.store.enqueue(db, task_id, 'refresh_sources', {'request':request, 'source_policy':policy}, uid('sources:'))
+                payload = {'request':request, 'source_policy':policy, 'run_id':state.get('run_id')}
+                if data.get('search_before_saved_reviews') is True:
+                    # Explicit new-search evaluation preserves saved files and
+                    # consumed scopes, while giving the new grounded plan priority.
+                    payload['search_before_saved_reviews'] = True
+                if state.get('automation', {}).get('paused_by_user'):
+                    pause_token = state['automation'].setdefault('paused_at', time.time())
+                    payload.update(manual_source_request=True, pause_token=pause_token)
+                self.store.enqueue(db, task_id, 'refresh_sources', payload, uid('sources:'))
                 state['source_search'] = {'status': 'queued', 'message': '다국어 추가 수집 대기', 'progress': 0}
             elif action == "save-script":
                 self._script(state, data.get("text", ""), "manual")
@@ -266,6 +385,8 @@ class CommandsMixin:
                 row = (db.execute("SELECT * FROM jobs WHERE task_id=? AND id=? AND status='failed'", (task_id,data['job_id'])).fetchone()
                        if data.get('job_id') else db.execute("SELECT * FROM jobs WHERE task_id=? AND status='failed' ORDER BY updated DESC LIMIT 1", (task_id,)).fetchone())
                 if not row: return
+                from ..studio_supervision import StudioSupervisor
+                StudioSupervisor.release(db, task_id, row['id'])
                 if row['kind'] == 'collect_sources':
                     self.release_source_hold(state)
                     checkpoint=json.loads(row['checkpoint'])
@@ -280,6 +401,10 @@ class CommandsMixin:
                     checkpoint['auto_retries'] = 0
                     db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),row['id']))
                 payload = json.loads(row["payload"])
+                if row['kind'] in {'quality_review', 'quality_reedit'}:
+                    if (payload.get('edit_id') != state.get('edit_id')
+                            or payload.get('voice_id') != state.get('approved_voice_id')):
+                        raise Conflict('이전 영상·음성의 품질 작업입니다. 현재 제작 버전에서 다시 요청하세요.')
                 if payload.get("script_id", state["script_id"]) != state["script_id"]:
                     raise Conflict("이전 대본의 작업입니다. 현재 대본을 승인해 주세요.")
                 if row["kind"] == "voice" and payload.get("voice_id") != state.get("pending_voice_id"):
@@ -301,6 +426,12 @@ class CommandsMixin:
                 db.execute("UPDATE jobs SET status='queued',error='' WHERE id=?", (row["id"],))
                 state.update(error="", message="중단 단계부터 재시도 중")
                 state["status"] = {"prepare":"preparing", "rewrite":"rewriting", "voice":"voice_generating", "edit":"editing", "revision":"editing", "register":"registering"}.get(row["kind"], state["status"])
+                if row['kind'] in {'quality_review', 'quality_reedit'}:
+                    state['status'] = 'quality_review' if row['kind']=='quality_review' else 'editing'
+                    state.setdefault('daily_quality', {}).update(pending=row['kind'],status='pending')
+                    automatic=state.get('automation', {})
+                    if automatic.get('protocol')==2 and not automatic.get('paused_by_user'):
+                        automatic['active']=True
             elif action in {"revise-edit", "request-edit"}:
                 edit = selected(state, "edits", "edit_id")
                 if not edit or data.get("edit_id") != edit["id"]: raise Conflict("현재 편집 버전을 확인하세요.")

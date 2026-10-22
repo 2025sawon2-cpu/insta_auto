@@ -59,8 +59,14 @@ def fixture(tmp_path,monkeypatch):
     monkeypatch.setattr('hotpost.source_finder.extract_frames',lambda *a,**k:[image])
     def overlay(settings,source,folder):
         calls.append(('overlay',source['sha256']))
+        # This positive mock represents an accepted source-bound overlay review,
+        # including the exact reviewed interval and its actual sample-file hash.
+        # Keep accepted_interval_frames real so missing/tampered receipts still fail.
         return {**source,'source_quality':'clean-source','mask_review':{'source_sha256':source['sha256'],
-            'evidence_frames':[{'path':str(image),'source_timestamp':1}]},'reviewed_intervals':[{'source_start':0,'source_end':4}]}
+            'intervals':[{'source_start':0,'source_end':4,'frame_ids':['accepted-frame']}],
+            'evidence_frames':[{'frame_id':'accepted-frame','path':str(image),'source_timestamp':1,
+                'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}]},
+            'reviewed_intervals':[{'source_start':0,'source_end':4}]}
     monkeypatch.setattr('hotpost.source_overlay_review.review_source_overlays',overlay)
     monkeypatch.setattr('hotpost.source_functional.reference_review_info',lambda *a:{})
     from hotpost.source_functional import REVIEW_POLICY

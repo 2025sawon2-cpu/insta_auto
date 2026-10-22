@@ -2,6 +2,7 @@
 from __future__ import annotations
 import base64,copy
 from pathlib import Path
+from .visual_media import review_frame_data
 
 VISUAL_KINDS={'scene_gap','repetition','watermark','caption_sync'}
 SCOPE_INSTRUCTION=(
@@ -40,7 +41,7 @@ def resolve_visual_scope(settings,instruction,evidence,groups,shared_media,gener
         media=list(shared_media)+[{'text':'TARGETED ACTUAL RENDERED BEAT '+bid+': '+details[bid]['text']}]
         for frame in sorted(actual,key=lambda f:f['timestamp']):
             media.append({'text':f"Actual video time {frame['timestamp']:.3f}s"})
-            media.append({'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(Path(frame['path']).read_bytes()).decode()}})
+            media.append({'inlineData':review_frame_data(frame['path'])})
         value=validate(generate(settings,instruction+' '+SCOPE_INSTRUCTION,focused,media=media),{bid})
         local.extend(value['issues'])
         audits.append({**request,'status':'confirmed' if value['issues'] else 'not_supported_by_actual_detailed_frames',

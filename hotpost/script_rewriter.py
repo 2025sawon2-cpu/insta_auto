@@ -26,6 +26,9 @@ def research_subject(evidence: dict) -> str:
 def _generate(settings: Settings, instruction: str, data: dict, *, research=False, media=None) -> dict:
     if research:
         raise RuntimeError('현재 집필기는 웹 검색을 수행하지 않습니다. 수집된 근거를 입력하세요.')
+    from .studio_pause import active_cancel
+    cancel=active_cancel()
+    if cancel:cancel()
     from .studio_adapter import StudioAdapter
     return StudioAdapter(settings).editorial(instruction, data, media)
 

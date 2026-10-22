@@ -7,7 +7,7 @@ import pytest
 from hotpost.config import Settings
 from hotpost.source_finder import Candidate
 from hotpost.source_outcomes import platform_outcomes
-from hotpost.source_policy import adopt_policy, current_policy
+from hotpost.source_policy import adopt_policy, current_policy, montage_policy
 from hotpost.source_targets import select_sources
 from hotpost.studio import Studio
 from hotpost.studio_sources import source_goal
@@ -87,15 +87,16 @@ def test_completed_legacy_policy_remains_readable_and_new_run_uses_new_policy(tm
     assert source_goal(state)['ready'] and 'source_policy' not in state['runs'][0]
     state.pop('run_id')
     run=init_run(state)
-    assert run['source_policy']==current_policy()
-    assert source_goal(state)['ready']
+    assert run['source_policy']==montage_policy()
+    # A newly requested v5 run cannot inherit the old run's search completion.
+    assert not source_goal(state)['ready'] and not source_goal(state)['search_ready']
     assert state['runs'][0]==original['runs'][0]
 
 
 def test_store_creation_and_explicit_refresh_freeze_policy_without_changing_old_completion(tmp_path):
     studio=Studio(Settings(data_dir=tmp_path),workers=False)
     created,_=studio.store.create('new','new',{'protocol':2,'active':True})
-    assert created['runs'][0]['source_policy']==current_policy()
+    assert created['runs'][0]['source_policy']==montage_policy()
     def historical(s,db):
         s.pop('source_policy');s['runs'][0].pop('source_policy')
         s['runs'][0]['status']='completed';s['status']='completed'
@@ -105,7 +106,7 @@ def test_store_creation_and_explicit_refresh_freeze_policy_without_changing_old_
     studio.action(state['id'],'refresh-sources',{})
     after=studio.store.get(state['id'])
     job=studio.store.claim('sources')
-    assert job['payload']['source_policy']==current_policy()
+    assert job['payload']['source_policy']==montage_policy()
     assert after['status']=='completed' and after['runs']==before
 
 

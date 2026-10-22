@@ -93,7 +93,7 @@ def test_challenge_arriving_after_last_poll_cannot_become_parser_failure(tmp_pat
         locator=lambda _:SimpleNamespace(inner_text=text),wait_for_timeout=lambda _:None)
     audit={}
     assert searcher._wait_platform_results(page,'tiktok','tent',audit,[]) is None
-    assert audit['status']=='captcha' and manual_required(access_record(tmp_path,'tiktok'))
+    assert audit['status']=='captcha_review_pending' and manual_required(access_record(tmp_path,'tiktok'))
 
 
 def test_challenge_in_final_diagnostic_snapshot_stops_without_more_queries(tmp_path,monkeypatch):
@@ -107,11 +107,16 @@ def test_challenge_in_final_diagnostic_snapshot_stops_without_more_queries(tmp_p
         goto=lambda url,**kw:calls.append(url) or SimpleNamespace(status=200),
         locator=lambda _:SimpleNamespace(inner_text=lambda:'슬라이더를 드래그하여 퍼즐을 맞추세요'))
     searcher=bs.BrowserSearcher(Settings(data_dir=tmp_path,source_browser_headless=True),tmp_path)
-    monkeypatch.setattr(searcher,'_check_block',lambda *a:False)
+    actual_check=searcher._check_block
+    checks=[]
+    def check_after_initial_polls(*args):
+        checks.append(1)
+        return False if len(checks)<=2 else actual_check(*args)
+    monkeypatch.setattr(searcher,'_check_block',check_after_initial_polls)
     monkeypatch.setattr(searcher,'_wait_platform_results',lambda *a:[])
     monkeypatch.setattr(searcher,'_page',lambda *a:page)
     monkeypatch.setattr(searcher,'_submit_search',lambda *a:calls.append(a[2]) or True)
     searcher._platforms(SimpleNamespace(new_page=lambda:page),['tent','camping'],10,providers={'tiktok'})
-    assert len(calls)==1 and searcher.searches[-1]['status']=='captcha'
+    assert len(calls)==1 and searcher.searches[-1]['status']=='captcha_review_pending'
     assert manual_required(access_record(tmp_path,'tiktok'))
     assert not (tmp_path/'search_readiness/tiktok.json').exists()

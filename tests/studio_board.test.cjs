@@ -4,6 +4,13 @@ const {describe,matches}=require('../web/studio-board.js');
 const {listPage}=require('../web/studio-board.js');
 const {boardPage}=require('../web/studio-board.js');
 
+test('real quality jobs keep the production board running',()=>{
+  for(const kind of ['quality_review','quality_reedit']){
+    const d=describe({status:kind==='quality_review'?'quality_review':'editing',jobs:[{kind,status:'running'}]});
+    assert.equal(d.state,'running');assert.equal(d.stage,'edit');assert.equal(d.primaryRunning,true);
+  }
+});
+
 test('board keeps three distinct columns with independently bounded pages',()=>{
   const tasks=[{id:'live',created:40,status:'voice_generating',jobs:[{kind:'voice',status:'running'}]},
     ...Array.from({length:9},(_,i)=>({id:'waiting-'+i,created:i,status:'paused'})),

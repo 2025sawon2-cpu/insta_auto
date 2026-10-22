@@ -59,9 +59,11 @@ def valid_review(source):
 
 
 def needs_presentation_review(source):
+    from .source_review_status import is_transient
     if valid_review(source):
         return False
-    if (source.get('presentation_review_error_policy') == ERROR_POLICY
+    if (source.get('presentation_review_error') and not is_transient(source,'presentation')
+            and source.get('presentation_review_error_policy') == ERROR_POLICY
             and source.get('presentation_review_error_scope') == review_scope(source)
             and source.get('presentation_review_error_sha256') == source.get('sha256')):
         return False  # Same-input failures are durable, not endless model retries.
@@ -71,10 +73,11 @@ def needs_presentation_review(source):
 def needs_pending_presentation_review(source):
     """Do not queue portrait work that a verified function rejection cannot use."""
     from .source_functional import needs_function_review, REVIEW_POLICY
+    from .source_core_priority import REVIEW_POLICY as core_policy
     from .source_quality import sha256_file
     review = source.get('functional_review') or {}
     rejected = (review.get('reviewed') is True
-                and review.get('policy') == REVIEW_POLICY
+                and review.get('policy') in {REVIEW_POLICY, core_policy}
                 and review.get('same_core_function') is False
                 and review.get('context_usable') is False
                 and review.get('observed_actions') and review.get('evidence_frames')
@@ -120,6 +123,8 @@ def review_presentation(settings, source, output):
          'portrait_geometry':scope['geometry']}, media=media)
     quality, action = value.get('quality_usable') is True, value.get('action_preserved') is True
     return {'policy':POLICY, 'reviewed':True, 'source_sha256':source['sha256'], 'scope':copy.deepcopy(scope),
+            'interval_evaluation_required':True,
+            'scope_limit':'File usability does not certify product visibility in every subinterval',
             'usable':quality and action, 'quality_usable':quality, 'action_preserved':action,
             'observations':[str(v)[:300] for v in value.get('observations', [])[:8]],
             'reason':str(value.get('reason', ''))[:1000], 'evidence_frames':evidence['frames'],
@@ -139,6 +144,12 @@ def apply_presentation_review(source, receipt):
     source['presentation_rejection_reasons'] = reasons
     if not confirmed or receipt.get('usable') is not True or reasons:
         source['editing_eligible'] = False
+    if confirmed:
+        from .source_review_status import POLICY as outcome_policy
+        source['review_outcome']={'policy':outcome_policy,'stage':'presentation',
+            'status':'content_rejected' if reasons or receipt.get('usable') is not True else 'approved',
+            'source_sha256':source.get('sha256'),'scope':copy.deepcopy(receipt['scope']),
+            'reason':receipt.get('reason','')}
 
 
 def protect_automatic_crop(plan, changes=()):
@@ -148,13 +159,16 @@ def protect_automatic_crop(plan, changes=()):
                and (s.get('presentation_review') or {}).get('usable') is True}
     shots = {s['id']:s for s in plan.get('shots', [])}
     by_beat = {c['beat_id']:c for c in changes if c.get('beat_id')}
-    for beat in plan.get('beats', []):
-        change = by_beat.get(beat['id'], {})
+    for beat in (plan.get('visual_cuts') or plan.get('beats', [])):
+        change = by_beat.get(beat['id'], by_beat.get(beat.get('parent_beat_id'),{}))
         if 'emphasis' in change or beat.get('presentation_crop_override'):
             beat['presentation_crop_override'] = True
             continue  # A user-requested new crop is outside the acquisition receipt.
         shot = shots.get(change.get('shot_id') or beat.get('selected_shot_id'), {})
         key = (shot.get('sha256'), str(Path(shot.get('path', '')).resolve()))
         if key in sources:
-            beat['emphasis'] = 0
-            beat['emphasis_reason'] = '검토한 세로 구도와 핵심 동작 보존'
+            if plan.get('visual_cuts'):
+                beat['visual_emphasis'] = 0
+            else:
+                beat['emphasis'] = 0
+                beat['emphasis_reason'] = '검토한 세로 구도와 핵심 동작 보존'

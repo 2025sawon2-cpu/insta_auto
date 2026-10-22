@@ -10,6 +10,44 @@ from hotpost.writing.jobs import Jobs
 REFERENCE='차문에 끼워서 컵을 놓고 휴대폰을 세울 수 있어요. 댓글에 홀더 남겨주세요.'
 DRAFT='컵 놓을 자리가 모자라요? 문 쪽에 걸어 음료 자리를 하나 늘려요. 폰도 세워둘 수 있어요. 댓글에 나도 남겨주세요.'
 
+
+def test_model_orphan_recovery_requires_exclusive_worker_lease(tmp_path):
+    from hotpost.production import file_lock
+    jobs=Jobs(tmp_path);job=jobs.create('video_agent',{'evidence':{},'instruction':'test'})
+    jobs.update(job['id'],state='running')
+    with file_lock(tmp_path/'worker.lock'):
+        assert jobs.recover_abandoned(job['id'],[])=='owned_by_active_writer'
+        assert jobs.get(job['id'])['state']=='running'
+    assert jobs.recover_abandoned(job['id'],[])=='recovered'
+    assert jobs.get(job['id'])['state']=='interrupted'
+
+
+def test_model_orphan_watch_uses_actual_content_not_heartbeat(tmp_path):
+    jobs=Jobs(tmp_path);job=jobs.create('video_agent',{'evidence':{},'instruction':'test'})
+    path=tmp_path/job['id']/'codex-test'/'events.jsonl';path.parent.mkdir()
+    path.write_text(json.dumps({'type':'heartbeat'}))
+    before=jobs.progress_receipt(job['id'])
+    path.write_text(json.dumps({'type':'heartbeat'})+'\n'+json.dumps({'type':'heartbeat'}))
+    assert jobs.progress_receipt(job['id'])==before
+    path.write_text(json.dumps({'type':'item.completed','item':{'text':'new model reasoning'}}))
+    assert jobs.recover_abandoned(job['id'],before)=='progress_resumed'
+    assert jobs.get(job['id'])['state']=='queued'
+
+
+def test_orphan_script_cannot_permanently_block_new_video_owner(tmp_path,monkeypatch):
+    jobs=Jobs(tmp_path);old=jobs.create('script',{});jobs.update(old['id'],state='running')
+    new=jobs.create('video_agent',{'instruction':'recover','evidence':{}});clock=[1000]
+    monkeypatch.setattr('hotpost.writing.jobs.time.time',lambda:clock[0])
+    monkeypatch.setattr(jobs,'active_children',lambda jid:jid==old['id'])
+    restored=[]
+    def recover(jid,progress):
+        restored.append(jid);jobs.update(jid,state='interrupted');return 'recovered'
+    monkeypatch.setattr(jobs,'_recover_without_owner',recover)
+    monkeypatch.setattr(jobs,'execute',lambda j:jobs.update(j['id'],state='completed',result={'value':{}}))
+    jobs.work();assert jobs.get(new['id'])['state']=='queued' and not restored
+    clock[0]+=901;jobs.work()
+    assert restored==[old['id']] and jobs.get(new['id'])['state']=='completed'
+
 def run(tmp_path, monkeypatch, replies):
     calls=[]
     def chat(instruction, data, schema, check, state):

@@ -18,6 +18,8 @@ from pathlib import Path
 from .editing_adapter import _atomic_json
 from .source_quality import sha256_file
 from .product_appeal_review import PRODUCT_APPEAL_INSTRUCTION
+from .thumbnail_copy import INSTRUCTION as THUMBNAIL_INSTRUCTION
+from .visual_media import review_frame_data
 
 POLICY='daily-render-review-20261011-v2'
 
@@ -29,6 +31,8 @@ class QualitySceneGap(ValueError):
         self.thumbnail_lines=thumbnail_lines
 
 REVIEW_INSTRUCTION = (
+    'Output boundary contract v1: inspect supplied exact k-1,k,k+1 frames at every cut and mask boundary, '
+    'including the cover transition. A single exposed creator watermark or inserted source subtitle is a defect. '
     'Review ONLY the supplied actual rendered video frames in temporal order and separately labelled actual first-frame cover. '
     'The overview is uniformly sampled BODY imagery: its first image is not the one-frame cover and cannot establish cover contents. '
     'all_beats gives sentence context; detailed_beat_ids identifies the actual detailed frame scope for this group. '
@@ -37,10 +41,13 @@ REVIEW_INSTRUCTION = (
     '{passed:boolean,issues:[{kind,beat_id,reason,search_query}],thumbnail_lines:[string,string]}. '
     'kind is scene_gap, repetition, cover, script_fact, script_clarity, or watermark. Review the two-line product curiosity hook, '
     'readability, product/action alignment and excessive repetitive VISUAL motifs, including reposts from different files. '
-    'Consecutive views continuing one product demonstration are not automatically excessive repetition; identify redundant returns with no new view/action. '
+    'Repeated feature shots and returns to the same product are allowed without new information on every return. '
+    'Report repetition only when the actual complete sequence is concretely distracting or incoherent; source reuse is not a defect by itself. '
     'The cover must contain no visible human face, including reflections and photographs. Blurring a face is not an acceptable cover solution; choose another actual scene. '
-    'Evaluate cover image and copy jointly: a question does not create curiosity if the image already gives away its whole answer. '
-    'Reject logo-only cuts or talking faces without meaningful product/use imagery used to pad source diversity; physical branding on a visible product is allowed. '
+    'Evaluate cover image and copy jointly: visible benefits, desires and concrete conflicts can motivate viewing without a hidden answer. '
+    'Observed surprise, happiness, satisfaction and relevant context/person shots may support feature narration without a product in that cut. '
+    'Judge whether the complete video communicates product appeal; do not reject a reaction simply for lacking a product view. '
+    'Unrelated logo-only padding cannot replace meaningful product communication; physical branding on a visible product is allowed. '
     'The script was written under a shared cognitive-psychology/behavioral-economics contract: '
     'A/B change conflict/order with different unused mechanisms; C intentionally preserves flow with meaningful surface changes. '
     'Do not reject C for keeping flow. Do not rewrite narration because matching footage is missing. '
@@ -50,20 +57,25 @@ REVIEW_INSTRUCTION = (
     'Use original_text as supplied product information: ordinary features or setup times explicitly stated there '
     'may be retained. Lack of an independent uncut timing demo is not alone a script_fact failure. '
     'Flag a newly invented fact, a concrete contradiction, or unsupported health/safety certainty; '
-    'distinguish a missing illustration (scene_gap) from a factual error. '
+    'Missing literal illustration is advisory, not a scene_gap. A scene_gap needs an actual failure '
+    'to communicate product appeal or an observed misleading demonstration; distinguish those from factual errors. '
     'Read the whole sentence around each short beat. A reference-stated capability (can be used, '
     'can scratch, waterproof) is not a claim that the pictured subject is performing that action right now. '
     'A clear view of the correct product and relevant functional part may illustrate that capability; '
     'do not demand a new performance demonstration for every such clause. Actual action/result narration '
     'may accompany honest supportive product footage; only a shot presented as its direct demonstration '
-    'needs evidence of that action. An actual misleading functional state or object remains a scene_gap; '
+    'needs evidence of that action. For a short cooking/preparation clause (such as putting ingredients into a batter and mixing), '
+    'showing the ingredients combined and being mixed in a bowl without any contradicting cooking order satisfies the beat '
+    'without requiring a separate pre-entry frame. An actual misleading functional state or object remains a scene_gap; '
     'an ordinary chair view may support the furniture topic but must not be presented as a usable tabletop. '
     'Compare the reference overview to identify the promoted object structure and purpose. '
     'Functionally similar products may illustrate context, but a distinctly different structure is not a direct illustration of the promoted object. '
     'For example, narration explicitly about a small envelope/pocket should not show a large multi-pocket organizer as that envelope; '
-    'folding must not show unfolding. Flag the concrete conflicting beat, not the entire video for a color/model difference. '
+    'a shot presented as a direct folding demonstration must not show unfolding. Flag the concrete misleading demonstration, '
+    'not the entire video for a color/model difference or a different action in honest supportive montage footage. '
     'Respect each beat relation and source usage_limits. A context-only paper-storage or bag shot can illustrate a general situation; '
-    'do not require it to prove exact product identity or direct insertion. It must not visually contradict an explicitly described object/action. '
+    'do not require it to prove exact product identity or direct insertion. It must not present an actually conflicting '
+    'object/action as the claimed direct demonstration; a supportive montage cut is not automatically a direct claim. '
     'Use only supplied beat IDs. Each issue needs a specific visible observation and a short targeted search_query if footage is needed. '
     'A percentage alone is not a visible repetition finding. A still cannot establish unseen motion; say insufficient evidence rather than invent it. '
     'Read the full script as an ordinary viewer: the object, pronoun references, conflict and change must be immediately understandable. '
@@ -72,7 +84,7 @@ REVIEW_INSTRUCTION = (
     'physical product branding and the new narration subtitles are not creator watermarks. Prefer clean alternative footage. '
     'thumbnail_lines must stay faithful to product facts and selected conflict, not add price/health/availability promises. '
     'If no demonstrated issue, passed=true with issues=[]; never claim auditory listening or audience-response testing. '
-    + PRODUCT_APPEAL_INSTRUCTION
+    + PRODUCT_APPEAL_INSTRUCTION + THUMBNAIL_INSTRUCTION
     + 'Return only blocking defects in issues; optional improvements belong in advisories '
     'with the same {kind,beat_id,reason,search_query} fields. If there are only advisories, passed=true. '
 )
@@ -83,18 +95,26 @@ def enabled(state):
 def read(path): return json.loads(Path(path).read_text('utf-8'))
 
 
-def verified_quality_export(state, edit):
+def verified_quality_export(state, edit, *, historical=False):
     """A pass belongs to the exact reviewed render and plan, not an edit ID."""
+    from .source_diversity import policy_for_state, require_body_minimum
+    try:
+        expected = None if historical else policy_for_state(state)
+        if expected is not None or (edit.get('plan_path') and Path(edit['plan_path']).is_file()):
+            require_body_minimum(read(edit['plan_path']), expected_policy=expected)
+    except (OSError, KeyError, ValueError, TypeError):
+        return False
     if not enabled(state):
         return True
     quality = state.get('daily_quality', {})
-    if (quality.get('status') != 'passed' or quality.get('reviewed_edit_id') != edit.get('id')
-            or edit.get('quality_verified') is not True):
+    if (edit.get('quality_verified') is not True or (not historical and
+            (quality.get('status') != 'passed' or quality.get('reviewed_edit_id') != edit.get('id')))):
         return False
     receipt = next((r for r in reversed(quality.get('reviews', []))
-                    if r.get('edit_id') == edit.get('id') and r.get('passed')), {})
+                    if r.get('edit_id') == edit.get('id')), {})
     try:
-        return (receipt.get('render_sha256') == sha256_file(Path(edit['export_path']))
+        return (receipt.get('passed') is True
+                and receipt.get('render_sha256') == sha256_file(Path(edit['export_path']))
                 and receipt.get('plan_sha256') == sha256_file(Path(edit['plan_path'])))
     except (OSError, KeyError, ValueError):
         return False
@@ -109,9 +129,24 @@ def verify_narration_version(state, edit, plan):
     script=next((s for s in state['scripts'] if s['id']==edit['script_id']),None)
     voice=next((v for v in state['voices'] if v['id']==edit['voice_id']),None)
     source=plan.get('voice_source') or plan['voice']
+    expected_spoken = script['text'] if script else None
+    if script and voice and voice.get('spoken_text') != expected_spoken:
+        # Pronunciation substitutions belong to the saved synthesis run, not
+        # whichever run happens to be selected when an older edit is reviewed.
+        runs = [r for r in state.get('runs', [])
+                if r.get('artifacts', {}).get('script_id') == script['id']
+                and r.get('artifacts', {}).get('voice_id') == voice['id']
+                and r.get('inputs', {}).get('script_text') == script['text']]
+        if len(runs) == 1:
+            pairs = runs[0]['inputs'].get('pronunciations', [])
+            if isinstance(pairs, list) and all(isinstance(p, dict)
+                    and isinstance(p.get('from'), str) and p['from']
+                    and isinstance(p.get('to'), str) for p in pairs):
+                for pair in pairs:
+                    expected_spoken = expected_spoken.replace(pair['from'], pair['to'])
     if (not script or not voice or voice.get('script_id')!=script['id']
             or plan['script_text']!=script['text']
-            or voice.get('spoken_text')!=script['text']
+            or voice.get('spoken_text')!=expected_spoken
             or source.get('id')!=voice['id'] or source.get('script_id')!=script['id']
             or source.get('spoken_text')!=voice['spoken_text']
             or source.get('sha256')!=voice['sha256']
@@ -125,13 +160,16 @@ def verify_narration_version(state, edit, plan):
 def repetition_metrics(plan):
     shots={s['id']:s for s in plan['shots']};sources={s['id']:s for s in plan['sources']}
     intervals={};screen={};total=0
-    for b in plan['beats']:
+    from .source_diversity import parent_groups
+    parents=parent_groups(plan['sources'])
+    for b in (plan.get('visual_cuts') or plan['beats']):
         shot=shots[b['selected_shot_id']];s=sources[shot['source_id']]
         from .source_coverage import footage_coordinates
         coordinates=footage_coordinates(s)
         if s.get('retiming') and coordinates is None:raise ValueError('속도 조정 소스의 원본 시간 기록이 다릅니다.')
         if coordinates:(_,key),offset,scale=coordinates
         else:key=s.get('original_sha256') or s['sha256'];offset=s.get('original_interval',{}).get('start',0);scale=1
+        key=parents.get(s['id'],key)
         a=offset+b['source_start']*scale;z=offset+b['source_end']*scale;total+=z-a
         intervals.setdefault(key,[]).append((a,z));screen[key]=screen.get(key,0)+b['end']-b['start']
     unique=0
@@ -177,7 +215,7 @@ def visual_metric_advisories(plan,metrics):
     replay=metrics.get('same_source_time_replay_seconds',0)
     if replay>.08:
         findings.append({'kind':'repetition','beat_id':'','search_query':'',
-            'reason':f'같은 원본 시간 {replay}초 재등장 · 새 장점·구도·마무리를 제공하는지 실제 영상 검토 참고'})
+            'reason':f'같은 원본 시간 {replay}초 재등장 · 특장점 반복은 허용하며 전체 흐름의 자연스러움 검토 참고'})
     for bid in plan.get('footage_diversity',{}).get('frozen_beats',[]):
         findings.append({'kind':'scene_gap','beat_id':bid,'search_query':'',
             'reason':'정지 프레임 유지 구간 · 제품 디테일 전달과 실제 움직임 필요 여부 검토 참고'})
@@ -257,8 +295,11 @@ class DailyQualityMixin:
                 return None
             if not output.get('no_render') or not output.get('prepared_plan'):
                 raise QualityProgressHold('표지 사전 검토가 실제 편집 결과를 생성하지 않는 경계와 다릅니다.')
-            prepared=output['prepared_plan'];_atomic_json(path,prepared)
+            prepared=output['prepared_plan']
             selected=prepared['cover_spec']['source']
+            if selected.get('frame_path') and 'frame_sha256' not in selected and Path(selected['frame_path']).is_file():
+                selected['frame_sha256']=sha256_file(Path(selected['frame_path']))
+            _atomic_json(path,prepared)
             marker={'scope':scope,'plan_sha256':sha256_file(path),'path':str(path)}
             job.setdefault('checkpoint',{})['quality_cover_preparation']=marker
             self.store.checkpoint(job,job['checkpoint'])
@@ -286,8 +327,13 @@ class DailyQualityMixin:
             quality=state['daily_quality']
             from .quality_progress import finish_attempt
             finish_attempt(state,job,failed=True)
-            quality.update(status='needs_attention',pending='failed',error=str(error)[:500])
-            state['automation'].update(active=False,stage='quality_review')
+            quality.update(status='needs_attention',pending='failed',error=str(error)[:500],
+                           failed_job_kind=str(job.get('kind') or ''),failed_job_id=str(job.get('id') or ''))
+            auto=state['automation']
+            # An internal production failure does not revoke its responsible
+            # owner's authority. User pauses remain false and are never resumed.
+            if auto.get('protocol')!=2:auto['active']=False
+            auto['stage']='quality_review'
             state.update(status='attention',message='품질 보완 중 실행 오류 · 기존 영상과 검토 기록 보존')
         change_claimed(self.store, job,change)
 
@@ -310,13 +356,20 @@ class DailyQualityMixin:
         video=Path(edit.get('export_path') or edit['preview_path'])
         initial_render_sha=sha256_file(video)
         initial_plan_sha=sha256_file(Path(edit['plan_path']))
+        explicit_recheck=bool(job['payload'].get('explicit_policy_recheck'))
+        contract_sha=hashlib.sha256(REVIEW_INSTRUCTION.encode()).hexdigest()
+        if (explicit_recheck or job['payload'].get('agent_bound_review')) and any(job['payload'].get(k)!=v for k,v in (
+                ('render_sha256',initial_render_sha),('plan_sha256',initial_plan_sha),
+                ('review_contract_sha256',contract_sha))):
+            raise ValueError('재검토 요청 이후 영상·계획 또는 검토 기준이 변경되었습니다.')
         plan=read(edit['plan_path'])
+        from .source_diversity import require_body_minimum, policy_for_state
+        source_usage = require_body_minimum(plan, expected_policy=policy_for_state(state))
         initial_voice_sha=sha256_file(Path(plan['voice']['path']))
         if initial_voice_sha != plan['voice']['sha256']:
             raise ValueError('검토할 영상의 개인 음성 파일이 변경되었습니다.')
         root=self.folder(state['id'])/job['id'];root.mkdir(exist_ok=True)
         report_path=root/'review.json'
-        contract_sha=hashlib.sha256(REVIEW_INSTRUCTION.encode()).hexdigest()
         if report_path.exists():
             saved=read(report_path)
             if saved['render_sha256']!=sha256_file(video) or saved['plan_sha256']!=sha256_file(Path(edit['plan_path'])):
@@ -327,11 +380,15 @@ class DailyQualityMixin:
             raise ValueError('검토할 영상의 개인 음성 파일이 변경되었습니다.')
         verify_narration_version(state,edit,plan)
         spec=plan['cover_spec']
-        if len(spec.get('lines',[]))!=2 or spec.get('font',{}).get('font_family')!='Do Hyeon':
+        manual_thumbnail=spec.get('copy_origin')=='manual_thumbnail_document' and bool(plan.get('thumbnail_document'))
+        if manual_thumbnail:
+            from .studio_thumbnail import verify_manual_thumbnail
+            verify_manual_thumbnail(state,edit,plan,video)
+        elif len(spec.get('lines',[]))!=2 or spec.get('font',{}).get('font_family')!='Do Hyeon':
             raise ValueError('도현 두 줄 썸네일 설정이 확인되지 않았습니다.')
-        draft=read(Path(edit['portable_draft_path'])/'draft_content.json')
+        draft=read(Path(edit['portable_draft_path'])/'draft_content.json') if not manual_thumbnail else {'tracks':[],'materials':{'texts':[]}}
         cover_ids={s['material_id'] for t in draft['tracks'] if t.get('name','').startswith('cover-line-') for s in t['segments']}
-        if len(cover_ids)!=2:raise ValueError('썸네일 두 줄 프로젝트 소재가 없습니다.')
+        if not manual_thumbnail and len(cover_ids)!=2:raise ValueError('썸네일 두 줄 프로젝트 소재가 없습니다.')
         for t in draft['tracks']:
             if t.get('name','').startswith('cover-line-') and any(s['target_timerange']!={'start':0,'duration':33333} for s in t['segments']):
                 raise ValueError('첫 1프레임 썸네일 시간이 다릅니다.')
@@ -343,8 +400,10 @@ class DailyQualityMixin:
                 raise ValueError('본문 십대 폰트가 다릅니다.')
         from .quality_progress import projection,load_plan
         actual_sha=sha256_file(video)
-        for previous in state['daily_quality'].get('reviews',[]):
+        for previous in ([] if explicit_recheck else state['daily_quality'].get('reviews',[])):
             if (previous.get('render_sha256')==actual_sha and not previous.get('pre_render_scene_gap')
+                    and previous.get('review_contract_sha256')==contract_sha
+                    and (previous.get('boundary_evidence') or {}).get('policy')=='output-boundaries-v1'
                     and projection(load_plan(state,previous.get('edit_id')))==projection(plan)):
                 return {**copy.deepcopy(previous),'edit_id':edit['id'],'plan_sha256':sha256_file(Path(edit['plan_path'])),
                     'reused_evidence_review':True}
@@ -359,27 +418,52 @@ class DailyQualityMixin:
         reference_overview=root/'reference-overview.jpg'
         subprocess.run(['ffmpeg','-v','error','-y','-i',str(reference),'-vf',
             f"fps={12/reference_meta['duration']},scale=270:480,tile=4x3",'-frames:v','1',str(reference_overview)],check=True,capture_output=True)
+        from .quality_boundaries import extract_boundaries
+        boundary_evidence=extract_boundaries(video,plan,root/'boundaries')
+        _atomic_json(root/'boundary-evidence.json',boundary_evidence)
         groups=[];beats=plan['beats'];shared_media=[]
         all_details=[{**{k:b[k] for k in ('id','text','start','end')},'relation':b.get('relation'),
             'usage_limits':next((s.get('context_usage_limits',[]) for s in plan['shots'] if s['id']==b['selected_shot_id']),[])} for b in beats]
+        from .quality_progress import beat_view,same_window
+        prev_review=next((r for r in reversed(state['daily_quality'].get('reviews',[]))
+                          if r.get('edit_id')==edit.get('parent_id') and not r.get('pre_render_scene_gap')),None) if edit.get('parent_id') else None
+        old_plan=load_plan(state,edit.get('parent_id')) if prev_review else {}
+        old_beats_by_id={b.get('id'):b for b in old_plan.get('beats',[]) if isinstance(b,dict) and b.get('id')}
+        cover_unchanged=bool(prev_review and old_plan
+            and not any(i.get('kind') in {'cover','repetition','script_fact','script_clarity','voice_consistency','caption_sync'}
+                        for i in prev_review.get('issues',[]))
+            and (plan.get('cover_spec') or {}).get('lines')==(old_plan.get('cover_spec') or {}).get('lines')
+            and ((plan.get('cover_spec') or {}).get('source') or {}).get('source_sha256')==((old_plan.get('cover_spec') or {}).get('source') or {}).get('source_sha256')
+            and abs(float(((plan.get('cover_spec') or {}).get('source') or {}).get('timestamp',-1))-float(((old_plan.get('cover_spec') or {}).get('source') or {}).get('timestamp',-2)))<1e-4)
         for start in range(0,len(beats),6):
             media=[{'text':'BODY overview: 12 uniformly spaced frames, row-major chronological order. Its first sample is not the one-frame cover. Compare body motifs only; see the separate actual first-frame cover.'},
-                {'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(overview.read_bytes()).decode()}},
+                {'inlineData':review_frame_data(overview)},
                 {'text':'Original reference: 12 uniformly spaced frames across its whole duration. Identify product structure and intended appeal; do not copy its scene order.'},
-                {'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(reference_overview.read_bytes()).decode()}}];sampled=[]
+                {'inlineData':review_frame_data(reference_overview)}];sampled=[]
             # Every group gets the actual cover; overview frame 1 is a BODY
             # sample and must never be mistaken for the first-frame cover.
             media.extend([{'text':'ACTUAL FIRST FRAME extracted from the final MP4, with rendered two-line thumbnail copy. This is the only cover evidence.'},
-              {'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(actual_cover.read_bytes()).decode()}}])
+              {'inlineData':review_frame_data(actual_cover)}])
             if start==0:shared_media=list(media)
+            first=min(round(b['start']*30) for b in beats[start:start+6])-1
+            last=max(round(b['end']*30) for b in beats[start:start+6])+1
+            for sheet_index,sheet in enumerate(boundary_evidence['sheets']):
+                if not any(first<=f['index']<=last for f in boundary_evidence['frames'][sheet_index*12:(sheet_index+1)*12]):continue
+                media.extend([{'text':'Exact OUTPUT cut/mask boundary frames, labeled by zero-based frame number. Inspect first and last active frames.'},
+                              {'inlineData':review_frame_data(sheet)}])
             for b in beats[start:start+6]:
-                media.append({'text':f"BEAT {b['id']}: {b['text']}. Rendered frames start/middle/end in temporal order."})
-                for n,ratio in enumerate((.12,.5,.88)):
-                    stamp=max(1/30,b['start']+(b['end']-b['start'])*ratio)
-                    frame=root/f"{b['id']}-{n}.jpg"
-                    subprocess.run(['ffmpeg','-v','error','-y','-ss',str(stamp),'-i',str(video),'-frames:v','1','-vf','scale=540:960',str(frame)],check=True,capture_output=True)
-                    sampled.append({'path':str(frame),'timestamp':stamp,'beat_id':b['id'],'sha256':sha256_file(frame)})
-                    media.append({'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(frame.read_bytes()).decode()}})
+                cuts=[c for c in plan.get('visual_cuts',[]) if c.get('parent_beat_id')==b['id']] or [b]
+                for cut in cuts:
+                    media.append({'text':f"BEAT {b['id']}, VISUAL CUT {cut['id']}: {b['text']}. Rendered frames start/middle/end in temporal order."})
+                    for n,ratio in enumerate((.12,.5,.88)):
+                        fps=plan.get('fps',30)
+                        first_frame=max(1,round(cut['start']*fps))
+                        last_frame=max(first_frame,round(cut['end']*fps)-1)
+                        stamp=max(first_frame,min(last_frame,round((cut['start']+(cut['end']-cut['start'])*ratio)*fps)))/fps
+                        frame=root/f"{cut['id']}-{n}.jpg"
+                        subprocess.run(['ffmpeg','-v','error','-y','-ss',str(stamp),'-i',str(video),'-frames:v','1','-vf','scale=540:960',str(frame)],check=True,capture_output=True)
+                        sampled.append({'path':str(frame),'timestamp':stamp,'beat_id':b['id'],'visual_cut_id':cut['id'],'sha256':sha256_file(frame)})
+                        media.append({'inlineData':review_frame_data(frame)})
             evidence={'purpose':'daily_video_quality','script':plan['script_text'],
                 'original_text':state.get('reviewed_original_text') or state.get('original_text',''),
                 'selected_candidate':state.get('selected_candidate'),'benchmark_analysis':state.get('benchmark_analysis',{}),
@@ -391,8 +475,23 @@ class DailyQualityMixin:
                 'all_beats':[{k:b[k] for k in ('id','text','start','end')} for b in beats],
                 'all_beat_details':all_details,
                 'detailed_beat_ids':[b['id'] for b in beats[start:start+6]],
+                'visual_cuts':[{**c,'usage_limits':next((s.get('context_usage_limits',[]) for s in plan['shots']
+                    if s['id']==c.get('selected_shot_id')),[])} for c in plan.get('visual_cuts',[])
+                    if c.get('parent_beat_id') in {b['id'] for b in beats[start:start+6]}],
                 'previous_findings':state.get('daily_quality',{}).get('feedback',[])}
-            value=validate_report(_generate(self.settings,REVIEW_INSTRUCTION,evidence,media=media),{b['id'] for b in beats})
+            group_idx=start//6
+            prev_group_review=(prev_review.get('groups',[])[group_idx].get('review')
+                if prev_review and len(prev_review.get('groups',[]))>group_idx else None)
+            if (not plan.get('visual_cuts') and not explicit_recheck and cover_unchanged and getattr(_generate,'__module__','')=='hotpost.script_rewriter'
+                    and prev_review.get('review_contract_sha256')==contract_sha
+                    and isinstance(prev_group_review,dict) and prev_group_review.get('passed') is True
+                    and not prev_group_review.get('issues')
+                    and all(b.get('id') in old_beats_by_id and old_beats_by_id[b['id']].get('text')==b.get('text')
+                            and same_window(beat_view(plan,b),beat_view(old_plan,old_beats_by_id[b['id']]))
+                            for b in beats[start:start+6])):
+                value=validate_report(prev_group_review,{b['id'] for b in beats})
+            else:
+                value=validate_report(_generate(self.settings,REVIEW_INSTRUCTION,evidence,media=media),{b['id'] for b in beats})
             groups.append({'review':value,'frames':sampled})
             _atomic_json(root/f'group-{start//6}.json',groups[-1])
         metrics=repetition_metrics(plan)
@@ -407,8 +506,12 @@ class DailyQualityMixin:
         lines=next((g['review']['thumbnail_lines'] for g in groups if g['review']['thumbnail_lines']),None)
         result={'edit_id':edit['id'],'policy':POLICY,'passed':not issues,'issues':issues,
             'advisories':[i for g in groups for i in g['review'].get('advisories',[])]+metric_advisories,
+            'source_diversity':source_usage,
             'thumbnail_lines':lines,'metrics':metrics,'groups':groups,'full_decode_passed':True,
-            'scope_confirmations':scope_confirmations,
+            'scope_confirmations':scope_confirmations,'boundary_evidence':boundary_evidence,
+            'technical_review':{'boundary_policy':boundary_evidence['policy'],
+                                'mask_application_clock':plan.get('mask_application_clock')},
+            'editorial_review':{'metrics_are_advisories':True,'full_motion_review_complete':False},
             'render_sha256':sha256_file(video),'plan_sha256':sha256_file(Path(edit['plan_path'])),
             'review_contract_sha256':contract_sha,
             'review_path':str(report_path),'checked_at':time.time(),'audio_listened':False,
@@ -443,12 +546,12 @@ class DailyQualityMixin:
                     '-frames:v','1','-vf','scale=540:960',str(path)],check=True,capture_output=True)
                 frames.append({'beat_id':b['id'],'timestamp':stamp,'path':str(path),'sha256':sha256_file(path)})
                 media.extend([{'text':f"Actual dense evidence {b['id']} at {stamp:.3f}s"},
-                    {'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(path.read_bytes()).decode()}}])
+                    {'inlineData':review_frame_data(path)}])
         if 'cover' in anchors:
             path=root/'actual-first-frame.jpg'
             frames.append({'scope':'cover','timestamp':0,'path':str(path),'sha256':sha256_file(path)})
             media.extend([{'text':'ACTUAL FIRST FRAME COVER'},
-                {'inlineData':{'mimeType':'image/jpeg','data':base64.b64encode(path.read_bytes()).decode()}}])
+                {'inlineData':review_frame_data(path)}])
         if not media:return result
         receipt=root/'quality-disagreement-confirmation.json'
         if receipt.exists() and read(receipt).get('key')==key:
@@ -484,6 +587,8 @@ class DailyQualityMixin:
         if not result.get('pre_render_scene_gap'):
             edit=next(e for e in state['edits'] if e['id']==result['edit_id'])
             video=Path(edit.get('export_path') or edit['preview_path'])
+            from .source_diversity import require_body_minimum, policy_for_state
+            require_body_minimum(read(edit['plan_path']), expected_policy=policy_for_state(state))
             if (result.get('render_sha256')!=sha256_file(video)
                     or result.get('plan_sha256')!=sha256_file(Path(edit['plan_path']))):
                 raise ValueError('검수 완료 이후 영상·편집 계획이 변경되었거나 실제 검수 근거가 없습니다.')
@@ -495,7 +600,8 @@ class DailyQualityMixin:
             hold(state,'실제 출력에 대한 검토 판정 상충 · 해당 구간 근거 재확인 필요','recheck')
             return
         if comparison.get('duplicate'):
-            if quality.get('reviewed_edit_id')!=result['edit_id']:
+            if (quality.get('reviewed_edit_id')!=result['edit_id']
+                    or job.get('payload',{}).get('explicit_policy_recheck')):
                 if result['passed']:
                     current=next(e for e in state['edits'] if e['id']==result['edit_id'])
                     current.update(export_path=current.get('export_path') or current['preview_path'],
@@ -521,86 +627,8 @@ class DailyQualityMixin:
         self.advance_workflow(state,db)
 
     def advance_daily_quality(self,state,db,script,voice,edit):
-        quality=state.get('daily_quality',{})
-        if not enabled(state):return False
-        from .quality_progress import ensure, permit, hold, queue_method
-        ensure(state)
-        if state.get('automation',{}).get('paused_by_user'):return True
-        pending=quality.get('pending');cycle=quality.get('repair_round',0)
-        key=f"quality:{state['run_id']}:{cycle}"
-        payload={'script_id':state['script_id'],'voice_id':state.get('voice_id'),'edit_id':state.get('edit_id')}
-        if pending=='rewrite':
-            method=queue_method(state,db,'rewrite')
-            if not method:return True
-            quality['repair_context'] = {'reason':'quality_feedback_rewrite',
-                'parent_edit_id':state.get('edit_id'), 'feedback':quality.get('feedback', [])}
-            state['rewrite_instructions']='완성본 검토에서 확인한 사실·의미 연결·전체 음성 일관성 문제를 보완하고 공통 규칙으로 대본 3안을 다시 생성. 소스 부족 때문에 대본을 바꾸지 말 것: '+json.dumps(quality['feedback'],ensure_ascii=False)
-            state['automation']['needs_top_pick']=True
-            # Force fresh contract-bound proposals instead of merely ranking the old candidates.
-            payload={'quality_rewrite':True,'generation_key':key,'quality_method':method}
-            stage='rewrite';quality['pending']='rewriting'
-        elif pending in {'rewriting','recollecting','reediting','exhausted','failed','scene_wait'}:return True
-        elif pending=='recollect':
-            brief=' '.join(i['search_query'] for i in quality['feedback'] if i.get('search_query'))
-            brief=brief or state.get('product') or state['title']
-            stage='refresh_sources';payload={'request':brief,'daily_quality_repair':True}
-            key+=':collection:'+str(quality.get('collection_attempt',0))
-            if db is not None:
-                previous=db.execute('SELECT id,status FROM jobs WHERE key=?',
-                    (key+':'+stage+':'+str(state.get('edit_id')),)).fetchone()
-                if previous and previous['status'] in {'done','failed','superseded','cancelled'}:
-                    quality['collection_queue_hold']={'job_id':previous['id'],
-                        'job_status':previous['status'], 'request':brief,
-                        'reason':'완료한 수집 범위의 재등록 대신 현재 로컬 근거·미소비 범위 평가 필요'}
-                    hold(state,'완료한 품질 수집 큐 보존 · 실제 새 구간·미소비 검색 근거 대기')
-                    return True
-            quality['pending']='recollecting'
-        elif pending=='reedit':
-            from .scene_requirements import repair_render_signature,REPAIR_SIGNATURE_POLICY
-            signature=repair_render_signature(state)
-            quality['repair_signature_policy']=REPAIR_SIGNATURE_POLICY
-            coverage=quality.get('scene_requirements',{})
-            from .scene_requirements import coverage_current
-            from .mask_application_evidence import approved_material
-            mask_only=bool(approved_material(state))
-            if any(i['kind'] in {'scene_gap','repetition','watermark'} for i in quality.get('feedback',[])) and (
-                    not coverage_current(state)) and not mask_only:
-                quality['pending']='recollect'
-                return self.advance_daily_quality(state,db,script,voice,edit)
-            method=queue_method(state,db,'reedit')
-            if not method:return True
-            from .source_quality import editing_ready
-            stage='quality_reedit';payload.update(source_ids=[s['id'] for s in state['sources'] if editing_ready(s)])
-            # New approved scenes are new edit inputs even when the old draft and
-            # repair cycle are unchanged. Do not reuse an already finished/paused
-            # queue item after local source recovery.
-            key+=':method:'+method['key'][:24]
-            payload['repair_input_signature']=signature
-            payload['repair_signature_policy']=REPAIR_SIGNATURE_POLICY
-            payload['quality_method']=method
-            if mask_only:payload['mask_application_only']=True
-            quality['pending']='reediting'
-        elif edit and voice and script and voice['script_id']==script['id'] and edit['script_id']==script['id'] and edit['voice_id']==voice['id']:
-            if quality.get('reviewed_edit_id')==edit['id'] and quality.get('status')=='passed':return False
-            stage='quality_review'
-        else:return False
-        queue_key=key+':'+stage+':'+str(state.get('edit_id'))
-        if stage=='quality_reedit' and db is not None:
-            previous=db.execute('SELECT id,status FROM jobs WHERE key=?',(queue_key,)).fetchone()
-            if previous and previous['status'] in {'done','failed','superseded','cancelled'}:
-                quality.update(pending='scene_wait',status='needs_attention',repair_queue_hold={
-                    'job_id':previous['id'],'job_status':previous['status'],
-                    'repair_input_signature':signature,'repair_signature_policy':REPAIR_SIGNATURE_POLICY})
-                state.update(status='source_wait',message='같은 편집 자료·계약의 완료 또는 실패 작업 재실행 보류')
-                return True
-        identity=self.store.enqueue(db,state['id'],stage,payload,queue_key)
-        if stage in {'quality_reedit','rewrite'}:
-            permit(state,'rewrite' if stage=='rewrite' else 'reedit',reserve=True,job_id=identity)
-        state['automation']['stage']=stage
-        state.update(status='quality_review' if stage=='quality_review' else 'editing' if stage=='quality_reedit' else 'source_wait' if stage=='refresh_sources' else 'rewriting',
-            message={'quality_review':'완성 영상 실제 프레임·썸네일·반복감 검토','refresh_sources':'품질 보완용 장면 추가 수집',
-                     'quality_reedit':'검토 피드백과 추가 소스로 새 편집본 제작','rewrite':'사실 문제 보완 · 대본 3안 다시 생성'}[stage],progress=0,error='')
-        return True
+        from .daily_quality_routing import advance_daily_quality
+        return advance_daily_quality(self,state,db,script,voice,edit)
 
     def _quality_reedit(self,state,job):
         if job['payload'].get('mask_application_only'):
@@ -627,15 +655,55 @@ class DailyQualityMixin:
             result['repair_signature_policy']=job['payload'].get('repair_signature_policy') or REPAIR_SIGNATURE_POLICY
             return result
         prepared=(state['daily_quality'].get('cover_repair_evidence') or {}).get('prepared_plan') or {}
+        # A previous cover-only preparation is not a plan for a new voice/body.
+        feedback=state['daily_quality'].get('feedback',[])
+        from .quality_issue_scope import is_cover_scene_gap
+        cover_feedback=bool(feedback) and all(i.get('kind')=='cover' or is_cover_scene_gap(i) for i in feedback)
+        if not cover_feedback:prepared={}
         from .scene_requirements import input_signature
         from .quality_progress import valid_cover_evidence,QualityProgressHold
         if prepared and (prepared.get('scope')!=input_signature(state) or not valid_cover_evidence(state,state['daily_quality']['cover_repair_evidence'])):
             raise QualityProgressHold('검토된 표지·선택 계획의 파일 또는 입력이 변경됨 · 새로운 실제 검토 근거 대기')
         if prepared:
             plan=read(prepared['path'])
-            result={'id':job['id'],'script_id':state['script_id'],'voice_id':state['voice_id'],'created':time.time(),
-                    **self.render_feedback(state,job,plan)}
-        else:result=self._edit(state,job)
+            from .initial_prepared_render import without_cover
+            feedback=state['daily_quality'].get('feedback',[])
+            parent=next((e for e in state['edits'] if e['id']==job['payload']['edit_id']),None)
+            cover_only=(feedback and all(i.get('kind')=='cover' for i in feedback) and parent
+                and without_cover(plan)==without_cover(read(parent['plan_path'])))
+            if cover_only:
+                # This exact image/copy/crop was independently reviewed. Reselecting
+                # full-frame candidates could discard the approved crop (or its face exclusion).
+                from .scene_requirements import validate_selected_scenes
+                from .quality_progress import guard_render,hold
+                from .cover_frame_copy import render_if_cover_only
+                validate_selected_scenes(state,plan)
+                blocked=[]
+                def before_prepared_cover(current,db):
+                    if current.get('automation',{}).get('paused_by_user'):
+                        blocked.append('사용자 중지 유지');return
+                    if not valid_cover_evidence(current,current['daily_quality'].get('cover_repair_evidence') or {}):
+                        blocked.append('검토한 실제 표지 근거가 변경됨');return
+                    reason=guard_render(current,plan,job['id']);blocked.append(reason)
+                    if reason:hold(current,reason,'stop_method')
+                change_claimed(self.store,job,before_prepared_cover)
+                if blocked[0]:raise QualityProgressHold(blocked[0])
+                rendered=render_if_cover_only(self,state,job,plan)
+                if rendered is None:rendered=self._process(state,job,'render',{'plan':plan})
+            else:rendered=self.render_feedback(state,job,plan)
+            result={'id':job['id'],'script_id':state['script_id'],'voice_id':state['voice_id'],'created':time.time(),**rendered}
+        else:
+            feedback=state['daily_quality'].get('feedback',[])
+            lines=state['daily_quality'].get('thumbnail_lines')
+            parent=next((e for e in state['edits'] if e['id']==job['payload']['edit_id']),None)
+            plan=read(parent['plan_path']) if parent and feedback and all(i.get('kind')=='cover' for i in feedback) else None
+            if (plan and isinstance(lines,list) and len(lines)==2 and all(isinstance(s,str) and s.strip() for s in lines)
+                    and lines!=plan.get('cover_spec',{}).get('lines')):
+                plan['cover_spec']['lines']=copy.deepcopy(lines)
+                plan['cover_spec']['copy_origin']='quality_cover_copy_revision'
+                result={'id':job['id'],'script_id':state['script_id'],'voice_id':state['voice_id'],'created':time.time(),
+                        **self.render_feedback(state,job,plan)}
+            else:result=self._edit(state,job)
         result['parent_id']=job['payload']['edit_id']
         result['quality_repair_round']=state['daily_quality'].get('repair_round',0)+1
         result['repair_input_signature']=job['payload'].get('repair_input_signature')

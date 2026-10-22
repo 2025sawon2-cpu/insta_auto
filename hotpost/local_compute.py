@@ -54,16 +54,31 @@ def compute_slot(settings, kind: str):
         return
     timeout = float(getattr(settings, 'studio_timeout' if kind == 'script' else 'voicebench_timeout', 7200))
     deadline = time.monotonic() + timeout
-    if not _lock.acquire(timeout=max(0, timeout)):
-        raise ModelServiceUnavailable('로컬 AI 작업 대기 시간이 초과됐습니다. 실행 중인 작업을 확인하세요.', attempted=False)
+    from .studio_pause import active_cancel, active_receipt_hook
+    wait_hook = active_receipt_hook('supervision_wait')
+    cancel = active_cancel()
+    def observe_wait(reason=None):
+        if cancel: cancel()
+        if wait_hook: wait_hook(reason)
     try:
+        while not _lock.acquire(timeout=min(.5, max(0, deadline-time.monotonic()))):
+            observe_wait('local_compute')
+            if time.monotonic() >= deadline:
+                raise ModelServiceUnavailable('로컬 AI 작업 대기 시간이 초과됐습니다. 실행 중인 작업을 확인하세요.', attempted=False)
+    except BaseException:
+        if wait_hook: wait_hook(None)
+        raise
+    try:
+        observe_wait()
         depth = getattr(_current, 'depth', 0)
         if depth == 0 and kind == 'script':
             while release_idle_voice(settings).get('status') == 'busy':
+                observe_wait('voice_service_busy')
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ModelServiceUnavailable('VoiceBench 음성 작업이 진행 중이어서 로컬 AI를 시작하지 못했습니다.', attempted=False)
                 time.sleep(min(2, remaining))
+            observe_wait()
         _current.depth = depth + 1
         try:
             yield
@@ -71,6 +86,7 @@ def compute_slot(settings, kind: str):
             _current.depth = depth
     finally:
         _lock.release()
+        if wait_hook: wait_hook(None)
 
 
 def serialized_compute(kind: str):

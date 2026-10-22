@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {classifyVisibleAccess,classifyControlError,queryArgument} from '../hotpost/ego_source_backend.mjs';
+const normal={url:'https://www.tiktok.com/search?q=leg+warmers',body:'Video caption says too many requests, 请求过于频繁, 요청이 너무 많',loginDialog:false};
+assert.equal(classifyVisibleAccess(normal).status,'ready');
+assert.equal(classifyVisibleAccess({...normal,rateEvent:'current-exact-search-429'}).status,'rate_limited');
+assert.equal(classifyVisibleAccess({...normal,rateErrorSurface:true}).status,'rate_limited');
+assert.equal(classifyVisibleAccess({...normal,body:'Verify to continue'}).status,'captcha_review_pending');
+assert.equal(classifyVisibleAccess({...normal,loginDialog:true}).status,'login_required');
+assert.equal(classifyControlError('Error: task space not found: 3'),'space_unavailable');
+assert.equal(JSON.stringify(queryArgument({operation:'observe'})),'null');
+console.log('7 observation/control/API-argument assertions passed; no browser called');

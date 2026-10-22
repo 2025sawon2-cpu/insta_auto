@@ -1,0 +1,17 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>영상 이후 준비 · Hotpost</title><link rel="stylesheet" href="style.css">
+<style>main{max-width:850px;margin:25px auto;padding:20px}label{display:block;margin:15px 0}input,textarea{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:5px;background:#fff;color:#111}textarea{min-height:140px}button,a.btn{margin:8px 8px 8px 0}button{background:#f4f4f4;color:#111;border:1px solid #aaa;border-radius:6px;padding:8px 12px}button:disabled{opacity:.55}pre{white-space:pre-wrap;overflow-wrap:anywhere}#message{padding:14px;border:1px solid #888;border-radius:8px}small{display:block;margin:10px 0}</style>
+<main><a href="settings.html">← 설정</a> · <a href="studio.html">제작실</a><h1>영상 이후 준비</h1>
+<p>완성 영상에서 상품 확인 → 우리 제휴 링크 → 게시글 본문·표지 → 리틀리 등록 → 인스타 게시 → 게시물 연결 확인 순서로 진행합니다.</p>
+<p id="message" role="status">연결 확인 중…</p>
+<section class="section"><h2>연결 상태</h2><p id="connections"></p>
+<div id="coupang-setup-notice" role="status" hidden><p>설정에서 쿠팡파트너스 API를 먼저 설정해 주세요. 설정을 마친 뒤 후속 작업을 시작할 수 있습니다.</p><a class="btn" href="settings.html#coupang-partners">쿠팡파트너스 API 설정 바로가기</a></div></section>
+<section class="section"><h2>우리 인스타 계정</h2><form id="automation"><label>게시·리틀리 계정<input name="account" autocomplete="off" required placeholder="한 번 저장하면 다음 작업에도 사용합니다"></label>
+<label>상품 확인 댓글·DM 계정<input name="discovery_account" autocomplete="off" placeholder="같은 계정이면 비워 두세요"></label>
+<label><input type="checkbox" name="enabled" style="width:auto;display:inline"> 앞으로 새로 완성되는 영상의 후속 작업 자동 진행</label>
+<button type="submit">계정·자동 연결 설정 저장</button><small>계정은 이 PC에 저장해 모든 후속 작업에서 사용합니다. 자동 진행 체크는 선택 사항입니다. 체크하면 제작 서버가 새로 완성된 영상의 리틀리 등록까지 진행합니다. 인스타 게시는 아래 게시 버튼으로 실행합니다.</small></form></section>
+<section class="section"><h2>게시물 후속 작업</h2><form id="work"><label>완성 영상<select name="task" required aria-label="완성 영상" style="display:block;width:100%;padding:10px;margin-top:5px"><option value="">완성 영상 불러오는 중…</option></select></label>
+<p id="saved-account"></p><p id="reference-keyword">댓글 요청 문구는 ‘나도’로 고정합니다.</p>
+<button type="submit" disabled>후속 자동화 진행</button><button type="button" id="refresh">현재 상태 확인</button><button type="button" id="verify-binding">연결만 확인</button>
+<small>상품 확인은 계정·레퍼런스당 한 번만 시도합니다. 실패하거나 전송 결과가 불명확하면 댓글을 다시 보내지 않습니다.</small></form>
+<p id="binding-check" role="status"></p><div id="result"></div></section></main><script src="monetization.js?v=20261022-settings"></script></html>

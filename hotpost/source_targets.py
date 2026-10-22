@@ -12,10 +12,12 @@ def usable_tiktok(candidate):
     return source_platform(item) == 'tiktok' and editing_ready(item)
 
 
-def candidate_batch(candidates, limit, target):
+def candidate_batch(candidates, limit, target, *, core_priority=False):
     # Preserve platform diversity, but spend each platform's first slices on
     # candidates whose titles actually name the observed action.
     ordered = round_robin_candidates(sorted(candidates,key=lambda c:-(c.discovery_score or 0)), len(candidates))
+    if core_priority:
+        return sorted(ordered,key=lambda c:-(c.discovery_score or 0))[:limit]
     # Inspect enough TikTok candidates for quality rejection, before other platforms
     # consume the shared download budget. All original time/request limits remain.
     first = [c for c in ordered if c.platform == 'tiktok'][:min(limit, max(0, target) * 3)]
@@ -23,20 +25,20 @@ def candidate_batch(candidates, limit, target):
     return (first + [c for c in ordered if id(c) not in ids])[:limit]
 
 
-def select_sources(candidates, limit, target, *, required=True):
+def select_sources(candidates, limit, target, *, required=True,core_priority=False):
     if not required:
         # Only prefer TikTok among equally ranked candidates. Never reserve
         # mandatory slots ahead of more relevant footage from another site.
         ordered = sorted(candidates, key=lambda c: (c.source_score or 0,
                          c.similarity or 0, c.platform == 'tiktok'), reverse=True)
-        return select_valid_candidates(ordered, limit)
+        return select_valid_candidates(ordered, limit,core_priority=core_priority)
     # Probe a copy so duplicate/limit annotations do not reject the final pool.
     preferred = select_valid_candidates(copy.deepcopy([c for c in candidates if usable_tiktok(c)]),
-                                        min(limit, max(0, target)))
+                                        min(limit, max(0, target)),core_priority=core_priority)
     urls = {c.original_url for c in preferred}
     ordered = [c for c in candidates if c.original_url in urls]
     ordered += [c for c in candidates if c.original_url not in urls]
-    return select_valid_candidates(ordered, limit)
+    return select_valid_candidates(ordered, limit,core_priority=core_priority)
 
 
 def tiktok_count(candidates, limit):

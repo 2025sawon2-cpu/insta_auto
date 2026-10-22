@@ -13,15 +13,21 @@ from hotpost.studio_workflow import snapshot
 def ready(tmp_path):
     settings=Settings(data_dir=tmp_path,source_min_usable=1)
     studio=Studio(settings,workers=False)
+    # Existing quality/cache/recovery tests exercise a saved pre-minimum-five
+    # run. Freeze its legacy v4 contract at creation, not the new v5 default.
+    legacy_policy={'version':4,'minimum_total':1,'platform_minimums':{},
+        'editorial_policy':'normal-speed-editorial-v1','allow_source_reuse':True,
+        'duration_requirement':'preference','core_duration_requirement':'preference'}
     state,_=studio.store.create('quality-fixture','테스트 제품',
         automation={'active':True,'protocol':2,'selection_mode':'manual','stage':'edit'},prepare=False,
-        initial={'daily_quality':{'policy':POLICY,'max_repairs':3,'repair_round':0,'status':'pending','reviews':[]}})
+        initial={'source_policy':copy.deepcopy(legacy_policy),
+            'daily_quality':{'policy':POLICY,'max_repairs':3,'repair_round':0,'status':'pending','reviews':[]}})
     root=studio.folder(state['id']);voice=root/'voice.wav';voice.write_bytes(b'voice')
     video=root/'preview.mp4';video.write_bytes(b'old result')
     plan=root/'plan.json';plan.write_text('{}')
     src=root/'source.mp4';src.write_bytes(b'source');sha=hashlib.sha256(b'source').hexdigest()
     def init(s,db):
-        s.update(original_text='원본 제품 설명',source_policy={'version':1,'minimum_total':1,'platform_minimums':{}},
+        s.update(original_text='원본 제품 설명',source_policy=copy.deepcopy(legacy_policy),
             sources=[{'id':'source','path':str(src),'sha256':sha,'source_quality':'clean-source','editing_eligible':True,
                 'functional_review':{'reviewed':True,'same_core_function':True,'source_sha256':sha,
                     'observed_actions':['제품 실제 동작'],'evidence_frames':['frame.jpg']}}])
@@ -57,6 +63,95 @@ def test_completed_render_waits_for_actual_review_before_completion(ready):
     s=studio.store.get(task)
     assert s['status']=='completed' and s['edits'][0]['quality_verified']
     assert s['edits'][0]['export_path'].endswith('preview.mp4')
+
+
+@pytest.mark.parametrize('paused',[False,True])
+def test_internal_quality_failure_preserves_owner_authority_and_user_pause(ready,paused):
+    studio,task=ready
+    job=studio.store.claim(task_id=task)
+    before=studio.store.get(task)
+    if paused:
+        studio.store.change(task,lambda s,db:s['automation'].update(active=False,paused_by_user=True))
+    studio.store.fail(job,ValueError('internal placement computation failed'))
+    studio.fail_daily_quality(job,ValueError('internal placement computation failed'))
+    current=studio.store.get(task)
+    assert current['automation']['active'] is (not paused)
+    assert current['daily_quality']['pending']=='failed'
+    assert current['daily_quality']['failed_job_id']==job['id']
+    assert current['edits']==before['edits'] and current['voices']==before['voices']
+    from hotpost.video_agent_actions import capabilities
+    available=capabilities(studio,current)
+    assert ('retry_repaired' in available) is (not paused)
+
+
+@pytest.mark.parametrize('paused',[False,True])
+def test_explicit_quality_retry_resumes_failure_but_preserves_user_pause(ready,paused):
+    studio,task=ready
+    job=studio.store.claim(task_id=task)
+    studio.store.fail(job,ValueError('technical cover guard'))
+    def stopped(s,db):
+        s.update(status='attention',error='technical cover guard')
+        s['automation'].update(active=False,paused_by_user=paused)
+        s['daily_quality'].update(status='needs_attention',pending='failed')
+    studio.store.change(task,stopped)
+    studio.action(task,'retry',{'job_id':job['id']})
+    current=studio.store.get(task)
+    assert current['status']=='quality_review' and not current['error']
+    assert current['automation']['active'] is (not paused)
+    assert current['daily_quality']['pending']=='quality_review'
+    if paused:
+        assert studio.store.claim(task_id=task) is None
+    else:
+        finish(studio,task,passed('old-edit'))
+        assert studio.store.get(task)['status']=='completed'
+
+
+@pytest.mark.parametrize('paused',[False,True])
+def test_narration_hold_keeps_owner_diagnosis_alive_without_releasing_evidence_hold(ready,paused):
+    from hotpost.scene_narration_prepare import NarrationContextHold
+    from hotpost.video_agent_actions import capabilities
+    studio,task=ready;job=studio.store.claim(task_id=task)
+    if paused:studio.store.change(task,lambda s,db:s['automation'].update(active=False,paused_by_user=True))
+    studio.handle_narration_context_hold(job,NarrationContextHold([{'reason':'Actual mapping unresolved'}]))
+    state=studio.store.get(task)
+    assert state['automation']['active'] is (not paused)
+    assert state['daily_quality']['narration_context_hold']['job_id']==job['id']
+    assert state['daily_quality']['pending']=='scene_wait'
+    assert not capabilities(studio,state)
+
+
+def test_old_quality_retry_cannot_overwrite_a_new_video_version(ready):
+    from hotpost.studio_store import Conflict
+    studio,task=ready
+    job=studio.store.claim(task_id=task);studio.store.fail(job,ValueError('old failure'))
+    studio.store.change(task,lambda s,db:s.update(edit_id='new-edit',approved_voice_id='new-voice',status='editing'))
+    before=studio.store.get(task)
+    with pytest.raises(Conflict,match='이전 영상·음성'):
+        studio.action(task,'retry',{'job_id':job['id']})
+    assert studio.store.get(task)==before
+    assert next(j for j in studio.store.jobs(task) if j['id']==job['id'])['status']=='failed'
+
+
+@pytest.mark.parametrize('kind',['scene_gap','cover'])
+def test_old_cover_preparation_cannot_replace_a_new_body_repair(kind):
+    from types import SimpleNamespace
+    from hotpost.daily_quality import DailyQualityMixin
+    from hotpost.quality_progress import QualityProgressHold
+    state={'id':'task','script_id':'script','voice_id':'voice','sources':[], 'edits':[],
+        'daily_quality':{'feedback':[{'kind':kind}],
+            'cover_repair_evidence':{'prepared_plan':{'scope':'old-voice','path':'old-plan'}}}}
+    old=copy.deepcopy(state)
+    calls=[]
+    def fresh(current,job):calls.append(current['voice_id']);return {'id':job['id']}
+    facade=SimpleNamespace(_edit=fresh)
+    job={'id':'repair','payload':{'edit_id':'current-body'}}
+    if kind=='cover':
+        with pytest.raises(QualityProgressHold):DailyQualityMixin._quality_reedit(facade,state,job)
+        assert not calls
+    else:
+        result=DailyQualityMixin._quality_reedit(facade,state,job)
+        assert calls==['voice'] and result['parent_id']=='current-body'
+    assert state==old
 
 def test_recollect_reedit_recheck_survives_restart_and_preserves_old_edit(ready):
     studio,task=ready;old=copy.deepcopy(studio.store.get(task)['edits'])
@@ -321,3 +416,31 @@ def test_narration_check_rejects_stale_or_replaced_receipts(narration_receipts,c
     elif change=='declared_hash':plan['voice']['script_sha256']='wrong'
     with pytest.raises(ValueError,match='버전'):
         verify_narration_version(state,edit,plan)
+
+
+@pytest.mark.parametrize('fault', [None, 'missing_run', 'other_voice', 'other_script',
+                                  'wrong_input', 'wrong_mapping', 'malformed', 'duplicate', 'source_text'])
+def test_saved_pronunciation_mapping_is_bound_to_synthesis_run(narration_receipts, fault):
+    from hotpost.daily_quality import verify_narration_version
+    state, edit, plan = narration_receipts
+    original = state['scripts'][0]['text'].replace('나도', '‘나도’')
+    state['scripts'][0]['text'] = plan['script_text'] = original
+    state['voices'][0]['script_sha256'] = hashlib.sha256(original.encode()).hexdigest()
+    run = {'id':'saved', 'inputs':{'script_text':original,
+            'pronunciations':[{'from':'‘나도’','to':'나도'}]},
+           'artifacts':{'script_id':'s1','voice_id':'v1'}}
+    state['runs'] = [run]
+    state['run_id'] = 'unrelated-current-run'
+    if fault == 'missing_run': state['runs'] = []
+    elif fault == 'other_voice': run['artifacts']['voice_id'] = 'other'
+    elif fault == 'other_script': run['artifacts']['script_id'] = 'other'
+    elif fault == 'wrong_input': run['inputs']['script_text'] = 'changed'
+    elif fault == 'wrong_mapping': run['inputs']['pronunciations'][0]['to'] = '다른말'
+    elif fault == 'malformed': run['inputs']['pronunciations'] = [{'from':'','to':'나도'}]
+    elif fault == 'duplicate': state['runs'].append(copy.deepcopy(run))
+    elif fault == 'source_text': plan['voice_source']['spoken_text'] = original
+    if fault is None:
+        verify_narration_version(state, edit, plan)
+    else:
+        with pytest.raises(ValueError, match='버전'):
+            verify_narration_version(state, edit, plan)

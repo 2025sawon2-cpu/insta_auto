@@ -41,6 +41,8 @@ class Settings:
     studio_auto_start_date_kst: str = ''  # optional activation date; no backfill
     studio_daily_quality_enabled: bool = False  # opt-in, preserve existing/manual workflows
     studio_daily_quality_max_repairs: int = 3  # legacy config/history only; no quality stopping limit
+    monetization_dm_initial_wait_seconds: int = 120
+    monetization_dm_followup_wait_seconds: int = 120
     script_model: str = "gemini-3.6-flash"
     voicebench_root: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py'))
     voicebench_url: str = "http://127.0.0.1:8765"
@@ -117,6 +119,7 @@ class Settings:
     source_google_vision_api_key: str = ""
     source_pexels_api_key: str = ""
     source_browser_search: bool = True
+    source_ego_binding: str = ""  # opt-in existing TaskSpace; empty preserves legacy backend
     source_browser_headless: bool = False
     source_browser_allow_same_window_tabs: bool = False  # explicit tab creation only
     source_browser_existing_window_only: bool = False  # never launch/restart/import cookies

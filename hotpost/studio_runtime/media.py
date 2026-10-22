@@ -10,8 +10,7 @@ from .common import digest
 
 
 class MediaMixin:
-    def public(self, state):
-        state = copy.deepcopy(state)
+    def _collection_projection(self, state):
         collected_at, detected_at = state.get('collected_at'), state.get('hot_detected_at')
         if state.get('creation_mode') != 'self_shot' and self.settings.db_path.is_file():
             import sqlite3
@@ -37,6 +36,47 @@ class MediaMixin:
             from ..daily_hot import date_key
             state.update(collection_date_at=state['created'], collection_date_kst=date_key(state['created']),
                          collection_date_basis='self_shot')
+        return state
+
+    def brief(self, state):
+        """Board polling never reads every historical timeline or sends its frames."""
+        keys=('id','shortcode','title','revision','status','message','error','progress','created','updated',
+            'creation_mode','collected_at','hot_detected_at','script_id','voice_id','edit_id',
+            'approved_script_id','approved_voice_id','run_id','latest_completed_run_id','production_blockers')
+        result={k:copy.deepcopy(state[k]) for k in keys if k in state}
+        result['_summary']=True
+        result['automation']={k:v for k,v in state.get('automation',{}).items()
+            if k in {'protocol','stage','active','paused_by_user','consumed_by_daily_policy'}}
+        result['self_shot']={'started':state.get('self_shot',{}).get('started')}
+        result['source_search']={k:v for k,v in state.get('source_search',{}).items() if k in {'status','message','hold'}}
+        result['source_acquisition']={'hold':state.get('source_acquisition',{}).get('hold')}
+        result['source_goal']={'ready':state.get('source_goal',{}).get('ready',False)}
+        result['original_text']='ready' if state.get('original_text') else ''
+        for key in ('sources','scripts','voices'):
+            result[key]=[{'id':row.get('id')} for row in state.get(key,[])]
+        result['jobs']=self.store.jobs(state['id'])
+        if getattr(self,'video_agents',None):result['video_agent']=self.video_agents.summary(state['id'])
+        if getattr(self, 'supervisor', None):
+            result['supervision'] = self.supervisor.summary(state['id'])
+        edits={e['id']:e for e in state.get('edits',[])}
+        current=edits.get(state.get('edit_id'),{})
+        result['completed_video_ready']=bool(state.get('status')=='completed' and current.get('export_verified'))
+        if current.get('cover_path'):result['thumbnail_url']=self.media_url(state['id'],current['cover_path'])
+        result['pipeline']=[]
+        from ..studio_workflow import STEPS
+        for run in state.get('runs',[]):
+            a=run.get('artifacts',{});edit=edits.get(a.get('edit_id'),{})
+            ready={'sources':bool(a.get('sources')),'transcript':bool(a.get('original_text')),
+                'script':bool(a.get('script_id')),'voice':bool(a.get('voice_id')),
+                'project':bool(edit.get('portable_draft_path')),
+                'export':bool(run.get('status')=='completed' and edit.get('export_verified'))}
+            result['pipeline'].append({'id':run['id'],'number':run.get('number'), 'status':run.get('status'),
+                'steps':[{'key':k,'status':'completed' if ready[k] else 'pending'} for k,_ in STEPS]})
+        return self._collection_projection(result)
+
+    def public(self, state):
+        state = self._collection_projection(copy.deepcopy(state))
+        if getattr(self,'video_agents',None):state['video_agent']=self.video_agents.summary(state['id'])
         state['source_search_retry_supported'] = True
         state['caption_editor_supported'] = True
         from ..remotion_editor import available
@@ -59,6 +99,9 @@ class MediaMixin:
                         shot["thumbnail_url"] = self.media_url(state["id"], frames[1 if len(frames)>1 else 0]) if frames else ''
                         shot["video_url"] = self.media_url(state["id"], shot["path"])
                     item["plan"] = plan
+                    from ..source_diversity import body_usage_report
+                    try:item['source_usage']=body_usage_report(plan)
+                    except ValueError:item['source_usage_error']='원본 사용 정책 확인 필요'
                     background = plan.get('cover_spec', {}).get('background_path')
                     if background and Path(background).is_file() and Path(background).resolve().is_relative_to(self.settings.data_dir.resolve()):
                         item['thumbnail_background_url'] = self.media_url(state['id'], background)
@@ -104,6 +147,8 @@ class MediaMixin:
             url = candidate.get("original_url") or candidate.get("url", "")
             record.update(origin_url=url if urlparse(url).scheme in {"http", "https"} else "",
                           rights=candidate.get("rights", "unknown"), manifest_path=str(manifest))
+            if candidate.get('title'):
+                record['source_title']=str(candidate['title'])[:1000]
             for key in ('source_quality', 'functional_review', 'blur_required', 'watermark_masks', 'frame_hashes', 'editing_eligible',
                         'video_meta', 'reviewed_intervals', 'mask_review', 'relevance_review_required', 'similarity_warnings',
                         'format_warnings', 'portrait_geometry', 'presentation_review_required', 'presentation_review',

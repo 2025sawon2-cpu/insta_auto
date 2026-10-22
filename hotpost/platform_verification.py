@@ -3,15 +3,17 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 from .search_access import challenge_on_page, empty_results_on_page, login_wall_on_page, search_restriction_on_page
 from .source_search.tiktok_results import search_response_candidates
+from .source_queries import within_query_word_limit
 
 
 class TikTokSearchVerification:
-    def __init__(self, query):
-        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 180:
-            raise ValueError('검색어는 1~180자로 입력하세요.')
+    def __init__(self, query,settings=None):
+        if not within_query_word_limit(query):
+            raise ValueError('검색어는 띄어쓰기 기준 1~10단어로 입력하세요.')
         self.query = ' '.join(query.split())
         self.url = 'https://www.tiktok.com/search/video?q=' + quote_plus(self.query)
         self.candidates = {}
+        self.settings=settings
 
     def attach(self, page):
         def receive(response):
@@ -31,7 +33,13 @@ class TikTokSearchVerification:
         if parsed.hostname not in {'www.tiktok.com', 'tiktok.com'}:
             return {'status': 'loading', 'candidates': 0}
         if challenge_on_page(page):
-            return {'status': 'captcha', 'candidates': 0}
+            from .captcha_review import review_page
+            if self.settings is None:
+                from .config import load_settings
+                self.settings=load_settings()
+            review=review_page(self.settings,'tiktok',page,query=self.query)
+            if review['status']!='clear':
+                return {'status':review['status'],'candidates':0,'captcha_review':review}
         if login_wall_on_page(page, 'tiktok'):
             return {'status': 'login_required', 'candidates': 0}
         if (parsed.path.rstrip('/') not in {'/search', '/search/video'} or
@@ -50,6 +58,8 @@ class TikTokSearchVerification:
         status = result['status']
         if status == 'captcha':
             return '검색 화면에 인증이 필요합니다. Chrome에서 직접 완료한 뒤 세션 저장 완료를 누르세요.'
+        if status == 'captcha_review_pending':
+            return '인증 의심 화면의 캡처·재검토 대기 중입니다. CAPTCHA로 확정되지 않았습니다.'
         if status == 'login_required':
             return '검색 화면에서 로그인한 뒤 세션 저장 완료를 누르세요.'
         if status == 'results':

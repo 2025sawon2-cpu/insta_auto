@@ -45,7 +45,7 @@ def test_script_lane_cannot_take_voice_edit_or_preparation_jobs(tmp_path):
     assert studio.store.claim('media')['kind']=='prepare'
 
 
-def test_slow_media_job_does_not_stop_another_tasks_real_worker_script_completion(tmp_path):
+def test_current_video_prevents_other_tasks_script_preproduction(tmp_path):
     started=threading.Event();release=threading.Event();saved=threading.Event()
 
     class FixtureStudio(Studio):
@@ -71,13 +71,14 @@ def test_slow_media_job_does_not_stop_another_tasks_real_worker_script_completio
         assert started.wait(timeout=3)
         writer=pool.submit(studio._worker,'scripts')
         try:
-            assert saved.wait(timeout=3)
+            assert not saved.wait(timeout=.2)
         finally:
             studio.stop.set();release.set()
         media.result(timeout=4);writer.result(timeout=4)
-    assert studio.store.get(script_tid)['lane_test_result']['text']=='다른 게시물의 새 대본'
+    assert 'lane_test_result' not in studio.store.get(script_tid)
     assert next(j for j in studio.store.jobs(media_tid) if j['id']==media_id)['status']=='done'
-    assert next(j for j in studio.store.jobs(script_tid) if j['id']==script_id)['status']=='done'
+    assert next(j for j in studio.store.jobs(script_tid) if j['id']==script_id)['status']=='queued'
+    assert studio.store.claim('scripts') is None  # An edit job alone is not final QA.
 
 
 def test_legacy_production_claim_still_accepts_script_jobs(tmp_path):

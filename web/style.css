@@ -296,6 +296,12 @@ tr.acc.on td { background: var(--accent-soft); }
 .field-label { font-size:13px; font-weight:650; }
 .setting-field .seg { flex-wrap:wrap; }
 .setting-field select { width:100%; }
+.partner-credentials { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin:20px 0; }
+.partner-credentials .setting-field input { width:100%; min-width:0; box-sizing:border-box; padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--text); }
+.partner-wide { grid-column:1 / -1; }
+.partner-wide .hint { margin-top:10px; }
+#coupang-partners { scroll-margin-top:160px; }
+@media (max-width:680px) { .partner-credentials { grid-template-columns:1fr; } }
 .settings-panel .presets { flex-wrap:wrap; margin:12px 0; }
 .settings-panel .criteria-body { padding:20px 0 0; }
 .settings-save { position:sticky; bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 20px; border:1px solid var(--line); border-radius:16px; background:var(--panel); box-shadow:var(--shadow); font-size:13px; }

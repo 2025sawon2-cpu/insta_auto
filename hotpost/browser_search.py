@@ -23,7 +23,7 @@ from .source_browser_runtime import attach_browser, browser_lease, existing_page
 VIDEO_HOSTS = ("tiktok.com", "douyin.com", "xiaohongshu.com", "youtube.com", "youtu.be", "bilibili.com",
                "vimeo.com", "lazada.", "manuals.plus", "made-in-china.com")
 SKIP_HOSTS = ("google.com", "gstatic.com", "googleusercontent.com", "yandex.com", "yandex.ru", "yandex.net")
-from .source_search.strategy import fresh_queries, fresh_frames, image_sha256, image_signature
+from .source_search.strategy import fresh_queries, fresh_frames, image_sha256, image_signature, minimum_search_queries
 from .source_search.readiness import readiness_blocked, record_unresolved, parser_revision
 BROWSER_COOLDOWNS: dict[str, float] = {}
 
@@ -205,7 +205,7 @@ class BrowserSearcher:
             return True
         record=access_record(self.settings.data_dir,provider)
         captcha_check = None
-        if record.get('reason')=='captcha' and manual_required(record):
+        if record.get('reason') in {'captcha','captcha_review_pending'} and manual_required(record):
             captcha_check=self._recheck_saved_captcha(provider,context,page)
             if captcha_check['status']=='unavailable':
                 self.searches.append({'provider':provider,'query':'','language':'','status':'not_attempted',
@@ -223,10 +223,12 @@ class BrowserSearcher:
             self.progress(f'{provider} · 검색 화면 판독 실패로 경로 중지')
             return True
         if manual_required(record):
-            reason='login_required' if record.get('reason')=='login_required' else 'verification_required'
+            reason=('captcha_review_pending' if record.get('reason')=='captcha_review_pending' else
+                    'login_required' if record.get('reason')=='login_required' else 'verification_required')
             self.searches.append({'provider':provider,'query':'','language':'','status':reason,'candidates':0,
                                   **({'captcha_check':captcha_check} if captcha_check else {})})
-            self.notes.append(f'{provider} · '+('현재 화면에 CAPTCHA 있음 · 해당 플랫폼 요청 중지' if captcha_check else '로그인 확인 필요'))
+            self.notes.append(f'{provider} · '+('CAPTCHA 의심 화면 캡처·재검토 대기 · 미확정' if reason=='captcha_review_pending' else
+                '스크린샷 재검토로 CAPTCHA 확인 · 해당 플랫폼 요청 중지' if captcha_check else '로그인 확인 필요'))
             self.progress(f'{provider} · 인증 확인 필요 · 다른 검색으로 진행')
             return True
         until = BROWSER_COOLDOWNS.get(provider, 0)
@@ -249,6 +251,10 @@ class BrowserSearcher:
 
     def _block(self, provider, audit, reason, response=None):
         from .editing_adapter import _atomic_json
+        if reason=='captcha':
+            from .captcha_review import saved_review
+            verified=saved_review(audit.get('captcha_review') or {})
+            if not verified or verified.get('status')!='captcha':reason='captcha_review_pending'
         target = self._cooldown_path(provider)
         previous = {}
         try:
@@ -277,9 +283,11 @@ class BrowserSearcher:
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_json(target, {'until': until, 'reason': reason, 'blocked_at': now, 'strikes': strikes,
                              'server_retry_after': server_retry_after,
-                             'requires_verification':reason in {'captcha','login_required'}})
+                             'requires_verification':reason in {'captcha','captcha_review_pending','login_required'},
+                             **({'captcha_review':audit['captcha_review']} if audit.get('captcha_review') else {})})
         audit['status'] = reason
-        self.notes.append(f'{provider} {reason} · '+('사용자 인증 확인 전 재검색 중지' if reason in {'captcha','login_required'} else f'{seconds}초 동안 재검색 중지'))
+        self.notes.append(f'{provider} {reason} · '+('CAPTCHA 의심 화면 재검토 대기 · 미확정' if reason=='captcha_review_pending' else
+            '사용자 인증 확인 전 재검색 중지' if reason in {'captcha','login_required'} else f'{seconds}초 동안 재검색 중지'))
         self.progress(f'{provider} · 인증/요청 제한으로 검색 중지 · 다른 검색으로 진행')
 
     @staticmethod
@@ -295,6 +303,18 @@ class BrowserSearcher:
                 self._block(provider,audit,'login_required')
                 return True
             return False
+        from .captcha_review import review_page
+        review=review_page(self.settings,provider,page,query=audit.get('query',''))
+        audit['captcha_review']=review
+        if review['status']=='clear':
+            if login_wall_on_page(page,provider):
+                self._block(provider,audit,'login_required')
+                return True
+            return False
+        if review['status']!='captcha':
+            self._block(provider,audit,'captcha_review_pending')
+            self.progress(f'{provider} · CAPTCHA 의심 화면 캡처/재검토 대기 · 확정 차단으로 세지 않음')
+            return True
         audit['challenge_detected_at'] = time.time()
         audit['challenge_page'] = page.url.split('?',1)[0]
         if provider == 'tiktok':
@@ -311,6 +331,14 @@ class BrowserSearcher:
                         self._block(provider,audit,'login_required')
                         return True
                     return False
+        # The page may have changed while waiting. Recheck the actual captured
+        # screen instead of retaining the initial positive image as current proof.
+        review=review_page(self.settings,provider,page,query=audit.get('query',''))
+        audit['captcha_review']=review
+        if review['status']=='clear':return False
+        if review['status']!='captcha':
+            self._block(provider,audit,'captcha_review_pending')
+            return True
         audit['challenge_still_present'] = True
         self._block(provider, audit, 'captcha')
         return True
@@ -333,6 +361,10 @@ class BrowserSearcher:
             try:
                 routes = self.routes if self.routes is not None else ['youtube','tiktok','douyin','xiaohongshu','bilibili','google-lens','yandex-images']
                 for provider in routes:
+                    if getattr(self,'search_only',False):
+                        from .source_search.strategy import search_quota_needed
+                        if not search_quota_needed([*self.previous_searches,*self.searches],getattr(self,'search_minimums',{}),search_identity=getattr(self,'search_identity',None)):break
+                        if provider in {'google-lens','yandex-images'}:continue
                     self.visual_candidates.extend(self.candidates)
                     self.candidates = []
                     try:
@@ -370,7 +402,12 @@ class BrowserSearcher:
                 "searches": self.searches}
 
     def _run_route(self, context, provider, selected, queries, limit):
-        queries = getattr(self, 'provider_queries', {}).get(provider, queries)
+        provider_pool = getattr(self, 'provider_queries', {})
+        if provider == 'tiktok' and 'tiktok' in provider_pool:
+            from .source_queries import register_tiktok_noun_head
+            for raw in provider_pool.get('tiktok') or []:
+                register_tiktok_noun_head(raw)
+        queries = provider_pool.get(provider, queries)
         if provider == 'google-lens' and selected:
             self._google(context, selected, limit)
         elif provider == 'yandex-images' and selected:
@@ -492,14 +529,19 @@ class BrowserSearcher:
     def _submit_search(self, page, provider, query, audit):
         """Use the site's visible search box; never silently replace it with a URL."""
         execution = audit.setdefault('execution', {'query_submitted':False, 'query_url_matched':False})
+        from .source_queries import within_query_word_limit
+        if not within_query_word_limit(query):
+            audit.update(status='query_rejected',stage='query_validation',reason='query_word_limit_exceeded')
+            return False
         homes = {'tiktok': 'https://www.tiktok.com/', 'douyin': 'https://www.douyin.com/',
                  'xiaohongshu': 'https://www.xiaohongshu.com/explore',
                  'bilibili': 'https://search.bilibili.com/'}
-        host = urlparse(page.url).hostname or ''
+        parsed_url = urlparse(page.url)
+        host = parsed_url.hostname or ''
         # Both the homepage and watch-page headers open a native results tab.
         # Waiting for their original URL falsely reports an unresolved result.
         # Reuse this tab's search home and its visible box instead.
-        bili_header = provider == 'bilibili' and host == 'www.bilibili.com'
+        bili_header = provider == 'bilibili' and host == 'www.bilibili.com' and not (parsed_url.path or '').startswith('/search')
         if bili_header and self._check_block(page, provider, audit):
             return False
         if bili_header or not (host == provider + '.com' or host.endswith('.' + provider + '.com')):
@@ -559,19 +601,31 @@ class BrowserSearcher:
             self.progress(f'{provider} · 검색 입력란을 하나로 확인하지 못함 · 제출 중지')
             return False
         # Filling can trigger suggestions, so pace before touching the input.
-        self._pace(provider, reserve=self.settings.source_browser_result_timeout + 5)
-        self._audit_request(audit, 'search_input')
-        self.progress(f'{provider} · 검색창 입력: {query}')
-        audit['stage'] = 'submit_search'
-        if provider in ('tiktok', 'bilibili'):
-            # Controlled inputs can restore or concatenate the previous query
-            # after fill(). Both behaviours were observed in the live collector.
-            # Real key events replace it and update the site's input state.
-            field.press('ControlOrMeta+A')
-            field.press_sequentially(query, delay=90)
-            page.wait_for_timeout(750)
-        else:
-            field.fill(query)
+        from .source_input_observation import InputObservation
+        observation=InputObservation(field,query,audit) if provider=='tiktok' else None
+        try:
+            if observation:observation.capture('before_pacing')
+            self._pace(provider, reserve=self.settings.source_browser_result_timeout + 5)
+            self._audit_request(audit, 'search_input')
+            self.progress(f'{provider} · 검색창 입력: {query}')
+            audit['stage'] = 'submit_search'
+            if observation:observation.capture('after_pacing')
+            if provider in ('tiktok', 'bilibili'):
+                # Controlled inputs can restore or concatenate the previous query
+                # after fill(). Both behaviours were observed in the live collector.
+                # Real key events replace it and update the site's input state.
+                if provider == 'bilibili' and hasattr(field, 'fill'):
+                    field.fill('')
+                field.press('ControlOrMeta+A')
+                if observation:observation.capture('after_select_all')
+                field.press_sequentially(query, delay=90)
+                if observation:observation.capture('after_typing')
+                page.wait_for_timeout(750)
+                if observation:observation.capture('after_settle')
+            else:
+                field.fill(query)
+        finally:
+            if observation:observation.close()
         actual_value = field.input_value()
         execution['input_value'] = actual_value
         if ' '.join(actual_value.split()) != query:
@@ -614,8 +668,11 @@ class BrowserSearcher:
             if self._cooling_down(provider,context=context):
                 continue
             query_limit = max(3, self.settings.source_queries_per_platform) if provider == 'tiktok' else self.settings.source_queries_per_platform
-            available = platform_queries(queries, provider, len(queries))
-            selected = platform_queries(fresh_queries(available, provider, [*self.previous_searches, *self.searches]), provider, query_limit)
+            minimums=getattr(self,'search_minimums',{}) or {}
+            if minimums:query_limit=max(query_limit,sum(minimums.values()))
+            available = platform_queries(queries, provider, len(queries),search_minimums=minimums)
+            search_only=getattr(self,'search_only',False)
+            selected = minimum_search_queries(available,provider,[*self.previous_searches,*self.searches],minimums,query_limit,search_only=search_only,search_identity=getattr(self,'search_identity',None))
             if not selected:
                 self.searches.append({'provider':provider, 'query':'', 'language':'',
                                       'status':'query_exhausted' if available else 'no_supported_queries', 'candidates':0})
@@ -660,6 +717,9 @@ class BrowserSearcher:
                 per_query_limit = max(2, (per_provider_limit + len(selected) - 1) // max(1, len(selected)))
                 searched_languages = set()
                 for query in selected:
+                    if search_only:
+                        from .source_search.strategy import search_quota_needed
+                        if not search_quota_needed([*self.previous_searches,*self.searches],minimums,query,search_identity=getattr(self,'search_identity',None)):continue
                     current_query[0] = query
                     response_candidates.clear()
                     limited_response[0] = None
@@ -668,6 +728,8 @@ class BrowserSearcher:
                     audit = {'provider': provider, 'query': query, 'language': language(query),
                              'parser_revision':parser_revision(provider),
                              'auth': auth, 'status': 'started', 'candidates': 0}
+                    if getattr(self,'search_identity',None) is not None:
+                        audit['search_identity']=self.search_identity
                     self.searches.append(audit)
                     loaded = False
                     for attempt in range(2):
@@ -723,8 +785,7 @@ class BrowserSearcher:
                         break
                     found = self._wait_platform_results(page, provider, query, audit, response_candidates)
                     if found == [] and audit.get('status') != 'query_restricted' and not empty_results_on_page(page) and attempt == 0:
-                        if challenge_in_text(page.locator('body').inner_text()):
-                            self._block(provider, audit, 'captcha')
+                        if challenge_in_text(page.locator('body').inner_text()) and self._check_block(page,provider,audit):
                             break
                         self._retry_pause(provider)
                         response_candidates.clear()
@@ -757,8 +818,7 @@ class BrowserSearcher:
                         # A challenge can hydrate after the last polling check.
                         # Classify the actual captured body, rather than saving
                         # this known authentication wall as a parser failure.
-                        if challenge_in_text(audit.get('page_excerpt', '')):
-                            self._block(provider, audit, 'captcha')
+                        if challenge_in_text(audit.get('page_excerpt', '')) and self._check_block(page,provider,audit):
                             break
                     if audit['status']=='page_unresolved':
                         record_unresolved(self.settings.data_dir,provider,query)
@@ -766,7 +826,11 @@ class BrowserSearcher:
                         self.progress(f'{provider} · 검색 화면 판독 실패 기록 · 이후 검색어를 바꿔도 자동 재접근 중지')
                         break
                     self.progress(f'{provider} · {language(query)} · {query} → 후보 {added}개')
-                    if len(provider_urls) >= per_provider_limit and searched_languages >= planned_languages:
+                    from .source_coverage import actual_search_coverage
+                    quota=actual_search_coverage([*self.previous_searches,*self.searches],minimums,getattr(self,'search_identity',None))
+                    minima_met=all(row['ready'] for row in quota.values())
+                    if search_only and minima_met:break
+                    if len(provider_urls) >= per_provider_limit and searched_languages >= planned_languages and minima_met:
                         break
             except SearchBudgetReached:
                 raise
@@ -820,10 +884,11 @@ class BrowserSearcher:
 
 
 def browser_search(settings: Settings, frames: list[Path], queries: list[str], limit: int, debug_dir: Path,
-                   previous_searches: list[dict] | None = None, progress=None, routes=None, provider_queries=None) -> dict:
+                   previous_searches: list[dict] | None = None, progress=None, routes=None, provider_queries=None,
+                   search_minimums=None,search_only=False,search_identity=None) -> dict:
     if not settings.source_browser_search or limit <= 0:
         return {'candidates': [], 'terms': [], 'notes': [], 'searches': []}
     from .source_browser_worker import isolated_search
     with BROWSER_LOCK:
         return isolated_search(settings, frames, queries, limit, debug_dir, previous_searches, progress,
-                               routes=routes, provider_queries=provider_queries)
+                               routes=routes, provider_queries=provider_queries,search_minimums=search_minimums,search_only=search_only,search_identity=search_identity)

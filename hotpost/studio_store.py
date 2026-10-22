@@ -58,7 +58,15 @@ class StudioStore:
                 CREATE TABLE IF NOT EXISTS automatic_runs (
                   run_key TEXT PRIMARY KEY, selection TEXT NOT NULL, created REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS jobs_task_activity ON jobs(task_id,status,kind);
+                CREATE TABLE IF NOT EXISTS postproduction_outbox (
+                  task_id TEXT NOT NULL, edit_id TEXT NOT NULL, binding TEXT NOT NULL,
+                  status TEXT NOT NULL, error TEXT NOT NULL, created REAL NOT NULL,
+                  PRIMARY KEY(task_id,edit_id));
             """)
+            from .production_control import ensure as ensure_production_control
+            ensure_production_control(db)
+            from .production_records import ensure as ensure_record_outbox
+            ensure_record_outbox(db)
         # Existing daily automatic tasks adopt the shared workflow without
         # launching new work or changing manually selected studio tasks.
         with self.transaction() as db:
@@ -102,8 +110,8 @@ class StudioStore:
                          script_id=None, approved_script_id=None, voice_id=None,
                          approved_voice_id=None, edit_id=None, original_text="",
                          created=time.time(), updated=time.time())
-            from .source_policy import current_policy
-            state['source_policy'] = current_policy()
+            from .source_policy import montage_policy
+            state['source_policy'] = montage_policy()
             if initial:
                 state.update(copy.deepcopy(initial))
             if automation:
@@ -113,6 +121,10 @@ class StudioStore:
                     init_run(state)
             db.execute("INSERT INTO tasks VALUES (?,?,?,?,?)", (
                 state["id"], code, 0, json.dumps(state, ensure_ascii=False), state["updated"]))
+            from .video_agents import enroll
+            origin = ('automatic' if (automation or {}).get('selection_mode') == 'automatic'
+                      else 'self_shot' if state.get('creation_mode') == 'self_shot' else 'manual')
+            enroll(db, state, origin)
             if prepare:
                 self.enqueue(db, state["id"], "prepare", {}, "prepare:" + state["id"])
             self.event(db, state["id"], "created", {})
@@ -155,10 +167,32 @@ class StudioStore:
             return copy.deepcopy(state)
 
     def save(self, db, state):
+        previous = db.execute("SELECT json_extract(state,'$.status') FROM tasks WHERE id=?", (state['id'],)).fetchone()
         state["revision"] += 1
         state["updated"] = time.time()
         db.execute("UPDATE tasks SET state=?,revision=?,updated=? WHERE id=?", (
             json.dumps(state, ensure_ascii=False), state["revision"], state["updated"], state["id"]))
+        from .monetization_completion import record_completion
+        record_completion(db, state, previous[0] if previous else None)
+        from .production_records import queue as queue_record
+        queue_record(db,state)
+
+    def postproduction_pending(self):
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM postproduction_outbox WHERE status IN ('pending','waiting_connections','waiting_slot','dispatched') ORDER BY created LIMIT 1").fetchall()
+        return [{**dict(row), 'binding': json.loads(row['binding'])} for row in rows]
+
+    def postproduction_update(self, task_id, edit_id, status, error=''):
+        if status not in {'waiting_connections', 'waiting_slot', 'dispatched', 'done', 'error', 'superseded'}:
+            raise ValueError('올바르지 않은 후속 작업 상태')
+        with self.transaction() as db:
+            db.execute('UPDATE postproduction_outbox SET status=?,error=? WHERE task_id=? AND edit_id=?',
+                (status, error, task_id, edit_id))
+
+    def postproduction_status(self, task_id):
+        with self.connect() as db:
+            row = db.execute('SELECT status,error FROM postproduction_outbox WHERE task_id=? ORDER BY created DESC LIMIT 1', (task_id,)).fetchone()
+        return dict(row) if row else None
 
     def event(self, db, task_id, kind, detail):
         db.execute("INSERT INTO events(task_id,kind,detail,created) VALUES(?,?,?,?)", (
@@ -180,9 +214,21 @@ class StudioStore:
         return job_id
 
     def claim(self, lane=None, *, task_id=None, reservation=None, job_id=None):
+        if (self.root/'agent-maintenance.json').exists():return None
+        owner=getattr(self,'video_agents',None)
+        if owner and (not owner.healthy() or owner.restart_requested.is_set() or owner.maintenance.is_set()):return None
+        supervisor = getattr(self, 'supervisor', None)
+        if supervisor and not supervisor.healthy():
+            return None
         with self.transaction() as db:
+            if (self.root/'agent-maintenance.json').exists():return None
+            if not supervisor and db.execute("SELECT 1 FROM sqlite_master WHERE name='supervision_runtime'").fetchone():
+                return None  # A deployed store may only execute through its supervised owner.
+            if owner and (not owner.healthy() or owner.restart_requested.is_set() or owner.maintenance.is_set()):return None
             self.consume_previous_daily(db)
             self.pause_queued(db)
+            from .production_control import admit
+            admit(db, task_id or '')
             # Finish an already-prepared video's downstream stages before the
             # next slow source search, so the first review becomes ready sooner.
             lane_filter = (" AND kind IN ('collect_sources','refresh_sources')" if lane == 'sources' else
@@ -200,6 +246,19 @@ class StudioStore:
             if job_id is not None:
                 lane_filter += ' AND id=?'
                 parameters.append(job_id)
+            if supervisor:
+                lane_filter += " AND NOT EXISTS (SELECT 1 FROM supervision_jobs s WHERE s.task_id=jobs.task_id AND s.phase='held')"
+            if owner:
+                lane_filter += " AND NOT EXISTS (SELECT 1 FROM video_agents a WHERE a.task_id=jobs.task_id AND (json_extract(a.record,'$.status')='user_command' OR json_extract(a.record,'$.runtime_error') IS NOT NULL))"
+                lane_filter += " AND NOT EXISTS (SELECT 1 FROM video_agents a WHERE a.task_id=jobs.task_id AND json_extract(a.record,'$.recovery_job_id')=jobs.id)"
+            lane_filter += " AND task_id=(SELECT task_id FROM production_slot WHERE singleton=1)"
+            lane_filter += """ AND NOT EXISTS (SELECT 1 FROM tasks paused WHERE paused.id=jobs.task_id
+                AND json_extract(paused.state,'$.automation.paused_by_user')=1
+                AND NOT (COALESCE(json_extract(jobs.payload,'$.launch'),0)=1 OR
+                    (jobs.kind='refresh_sources' AND COALESCE(json_extract(jobs.payload,'$.manual_source_request'),0)=1
+                    AND COALESCE(json_extract(jobs.payload,'$.pause_token')=json_extract(paused.state,'$.automation.paused_at'),0))))"""
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='video_agents'").fetchone():
+                lane_filter += " AND NOT EXISTS (SELECT 1 FROM video_agents a WHERE a.task_id=jobs.task_id AND json_type(a.record,'$.no_progress_hold') IS NOT NULL)"
             row = db.execute("""SELECT * FROM jobs WHERE status='queued'
                 AND """ + due + """
                 AND (jobs.kind IN ('collect_sources','refresh_sources','proposal') OR NOT EXISTS (
@@ -218,6 +277,7 @@ class StudioStore:
                 return None
             checkpoint = json.loads(row['checkpoint'])
             checkpoint['_claim_token'] = uid('claim-')
+            checkpoint['_claim_started_at'] = time.time()
             db.execute("UPDATE jobs SET status='running',checkpoint=?,updated=? WHERE id=?",
                        (json.dumps(checkpoint), time.time(), row["id"]))
             state = self.get(row['task_id'], db)
@@ -240,6 +300,10 @@ class StudioStore:
             result["payload"] = json.loads(result["payload"])
             result["checkpoint"] = checkpoint
             result['claim_token'] = checkpoint['_claim_token']
+            if supervisor:
+                supervisor.register(db, result)
+            from .studio_timing import record
+            record(self, db, result, 'claimed')
             return result
 
     @staticmethod
@@ -298,12 +362,15 @@ class StudioStore:
 
     @staticmethod
     def pause_queued(db):
+        from .video_agent_planning_claim import admitted_planning_children
+        planning=sorted(admitted_planning_children(db))
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued' AND kind='collect_sources'
             AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
                 AND json_extract(tasks.state,'$.status')='completed')""")
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued' AND kind='collect_sources'
             AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=jobs.task_id
-                AND json_extract(tasks.state,'$.source_acquisition.hold') IS NOT NULL)""")
+                AND json_extract(tasks.state,'$.source_acquisition.hold') IS NOT NULL)"""
+            + (' AND id NOT IN ('+','.join('?' for _ in planning)+')' if planning else ''),planning)
         db.execute("""UPDATE jobs SET status='paused' WHERE status='queued'
             AND (kind NOT IN ('proposal','refresh_sources','suggest_edit')
                  OR (kind='refresh_sources' AND json_extract(payload,'$.daily_quality_repair')=1))
@@ -320,6 +387,10 @@ class StudioStore:
             state = self.get(job['task_id'], db)
             checkpoint = job['checkpoint']
             checkpoint['not_before'] = time.time()+seconds
+            checkpoint['deferred_wait'] = bool(waiting)
+            from .studio_timing import record
+            deferred_at=record(self, db, job, 'deferred', wait_kind=(waiting_status or 'service_wait') if waiting else 'retry_wait',
+                   not_before=checkpoint['not_before'])
             if not waiting:
                 checkpoint['auto_retries'] = checkpoint.get('auto_retries',0)+1
                 checkpoint['retry_requested'] = True
@@ -334,17 +405,37 @@ class StudioStore:
                 # once and transition at its boundary without losing the request.
                 checkpoint['not_before'] = 0
             db.execute("UPDATE jobs SET status='queued',checkpoint=?,updated=? WHERE id=?",
-                       (json.dumps(checkpoint),time.time(),job['id']))
+                       (json.dumps(checkpoint),deferred_at if deferred_at is not None else time.time(),job['id']))
             if (state.get('automation', {}).get('paused_by_user') or state.get('automation', {}).get('consumed_by_daily_policy')) and (job['kind'] not in {'proposal','refresh_sources','suggest_edit'} or job['payload'].get('daily_quality_repair')) and not job['payload'].get('launch'):
                 db.execute("UPDATE jobs SET status='paused' WHERE id=?", (job['id'],))
                 state.update(status='paused', message='자동 진행 중지 · 재개하면 중단 단계부터 이어집니다')
                 if job['kind'] == 'collect_sources': state['source_search']['status'] = 'paused'
             self.save(db,state)
 
+    def pause_claimed(self, job, message):
+        """Stop a cancelled claim once; never requeue a zero-delay pause loop."""
+        with self.transaction() as db:
+            if not self.owns(db, job):
+                return False
+            from .studio_timing import record
+            record(self, db, job, 'paused')
+            db.execute("UPDATE jobs SET status='paused',updated=? WHERE id=?", (time.time(),job['id']))
+            state = self.get(job['task_id'],db)
+            state.update(status='paused',message=message)
+            self.save(db,state)
+            self.event(db,job['task_id'],'job_paused',{'job_id':job['id'],'kind':job['kind']})
+            return True
+
     def recover(self):
         # Called only after the process-exclusive studio worker lock is held.
         with self.transaction() as db:
+            from .studio_timing import record
+            for row in db.execute("SELECT * FROM jobs WHERE status='running'").fetchall():
+                record(self, db, {**dict(row), 'checkpoint':json.loads(row['checkpoint'])}, 'interrupted_unknown_end')
             db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+            supervisor = getattr(self, 'supervisor', None)
+            if supervisor:
+                supervisor.recover(db)
             self.pause_queued(db)
 
     def jobs(self, task_id):
@@ -360,6 +451,8 @@ class StudioStore:
             apply(state, db, result)
             wait_until = result.get('_defer_until')
             if wait_until is not None:
+                from .studio_timing import record
+                record(self, db, job, 'deferred', wait_kind=state.get('status'), not_before=wait_until)
                 checkpoint = {**job['checkpoint'], 'not_before': wait_until}
                 db.execute("UPDATE jobs SET status='queued',checkpoint=?,error='',updated=? WHERE id=?",
                            (json.dumps(checkpoint), time.time(), job['id']))
@@ -372,6 +465,8 @@ class StudioStore:
                 from .quality_progress import finish_attempt
                 finish_attempt(state,job,result,failed=bool(result.get('no_render')))
             self.save(db, state)
+            from .studio_timing import record
+            record(self, db, job, 'done')
             db.execute("UPDATE jobs SET status='done',error='',updated=? WHERE id=?", (time.time(), job["id"]))
             self.event(db, state["id"], job["kind"] + "_finished", {"job_id": job["id"]})
             return True
@@ -380,7 +475,16 @@ class StudioStore:
         with self.transaction() as db:
             if not self.owns(db, job):
                 return False
+            from .studio_timing import record
+            record(self, db, job, 'failed')
             state = self.get(job["task_id"], db)
+            import traceback
+            checkpoint = dict(job.get('checkpoint') or {})
+            checkpoint.pop('video_agent_retry_admission',None)
+            checkpoint['failure_trace'] = {'type':type(error).__name__, 'stage':job['kind'],
+                'message':str(error)[:1500],
+                'frames':[{'path':f.filename,'line':f.lineno,'function':f.name}
+                          for f in traceback.extract_tb(getattr(error,'__traceback__',None))[-15:]]}
             payload = job.get("payload", {})
             if job['kind'] in {'refresh_sources','collect_sources'}:
                 state['source_search'] = {'status': 'failed', 'message': str(error)[:500], 'progress': 0}
@@ -398,7 +502,7 @@ class StudioStore:
                 if job["kind"] not in {"proposal", "register"} or (job['kind'] == 'register' and state.get('automation')):
                     state["status"] = "attention"
             self.save(db, state)
-            db.execute("UPDATE jobs SET status='failed',error=?,updated=? WHERE id=?", (
-                str(error)[:700], time.time(), job["id"]))
+            db.execute("UPDATE jobs SET status='failed',error=?,checkpoint=?,updated=? WHERE id=?", (
+                str(error)[:700], json.dumps(checkpoint,ensure_ascii=False),time.time(), job["id"]))
             self.event(db, state["id"], "failed", {"job_id": job["id"], "error": str(error)[:700]})
             return True

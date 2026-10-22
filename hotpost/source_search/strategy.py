@@ -143,6 +143,40 @@ def fresh_queries(queries, provider, history, *, scope=None):
     return result
 
 
+def minimum_search_queries(queries, provider, history, minimums, limit, *, search_only=False,search_identity=None):
+    """Spend remaining language scope before repeating queries on another site."""
+    from ..source_queries import language, platform_queries
+    from ..source_coverage import actual_search_coverage
+    from ..source_query_identity import query_identity,matches_identity
+    fresh=fresh_queries(queries,provider,history)
+    if search_identity is not None:fresh=[q for q in fresh if matches_identity(q,search_identity)]
+    if not minimums:return platform_queries(fresh,provider,limit)
+    coverage=actual_search_coverage(history,minimums,search_identity)
+    completed={q['identity'] for row in coverage.values() for q in row['queries']}
+    wanted={lang for lang,row in coverage.items() if not row['ready']}
+    priority=[q for q in fresh if language(q) in wanted and query_identity(q,search_identity) not in completed]
+    if search_only:
+        unique=[];seen=set(completed)
+        for query in priority:
+            identity=query_identity(query,search_identity)
+            if identity not in seen:unique.append(query);seen.add(identity)
+        return platform_queries(unique,provider,limit,search_minimums=minimums)
+    others=[q for q in fresh if q not in priority]
+    return [*platform_queries(priority,provider,len(priority),search_minimums=minimums),
+            *platform_queries(others,provider,len(others),search_minimums=minimums)][:max(0,limit)]
+
+
+def search_quota_needed(history,minimums,query=None,*,search_identity=None):
+    from ..source_coverage import actual_search_coverage
+    from ..source_queries import language
+    from ..source_query_identity import matches_identity
+    coverage=actual_search_coverage(history,minimums,search_identity)
+    if query is not None:
+        if not matches_identity(query,search_identity):return False
+        return not coverage.get(language(query),{'ready':True})['ready']
+    return any(not row['ready'] for row in coverage.values())
+
+
 def image_sha256(frame):
     return hashlib.sha256(Path(frame).read_bytes()).hexdigest()
 
@@ -201,6 +235,7 @@ def merge_history(*histories):
     confirmed content result; scope comparison uses consumed_scope, not mere
     ledger membership. Unattempted saved gates remain in immutable manifests.
     """
+    import copy
     import json
     records = {}
     for history in histories:
@@ -209,18 +244,22 @@ def merge_history(*histories):
             pending = search_execution(row)['pending']
             actual_wait = row.get('status') in ACCESS_WAITS and bool(row.get('requests'))
             if content or actual_wait or pending:
+                context=(row.get('run_id'),json.dumps(row.get('search_context'),sort_keys=True,ensure_ascii=False))
                 key = (('content', search_key(row)) if content else
                     ('pending' if pending else 'access', search_key(row), row.get('status'),
                         json.dumps(row.get('requests',[]), sort_keys=True, ensure_ascii=False)))
-                records[key] = {k: row[k] for k in ('provider', 'query', 'language', 'status',
+                key=(context,key)
+                records[key] = {k: copy.deepcopy(row[k]) for k in ('provider', 'query', 'language', 'status',
                     'image_sha256', 'image_signature', 'requests', 'candidates', 'error', 'strategy', 'parser_revision',
                     'http_status', 'reason', 'search_scope', 'page', 'page_number', 'cursor',
                     'continuation_token', 'offset', 'stage', 'execution', 'result_method',
-                    'error_detail', 'visible_search_controls') if k in row}
+                    'error_detail', 'visible_search_controls','run_id','search_context','search_identity','captcha_review','search_purpose') if k in row}
     return list(records.values())
 
 
 def restore_history(record):
+    from ..source_pause_receipts import resolve_settled_pre_submit
+    resolve_settled_pre_submit(record)
     if record.get('inspection_ledger_version') != 1:
         # Older acquisition receipts omitted inspected-but-undownloaded URLs.
         # Restore that evidence before another shortlist execution, preserving
@@ -235,7 +274,8 @@ def restore_history(record):
                 continue
         record['inspected_urls'] = list(dict.fromkeys(inspected))
         record['inspection_ledger_version'] = 1
-    if record.get('strategy_version') == 2:
+    if (record.get('strategy_version') == 2 and record.get('search_context_ledger_version')==1
+            and record.get('search_identity_ledger_version')==1):
         return record.get('queries', [])
     histories = [record.get('queries', [])]
     for entry in record.get('rounds', []):
@@ -243,7 +283,15 @@ def restore_history(record):
             import json
             data = json.loads(Path(entry['manifest_path']).read_text(encoding='utf-8'))
             rows = data.get('search_audit', [])
+            binding=entry.get('search_context') or data.get('search_context')
+            run_id=entry.get('run_id') or data.get('run_id')
+            conflict=any(k in entry and k in data and entry[k]!=data[k] for k in ('run_id','search_context'))
+            if not conflict and run_id and isinstance(binding,dict) and {'product','reference_sha256','reference_text_sha256'}<=set(binding):
+                from ..source_coverage import bind_search_rows
+                rows=bind_search_rows(rows,run_id,binding)
             for row in rows:
+                # Only an explicit receipt binding can restore missing tags;
+                # never assign old manifests to the current run by inference.
                 if row.get('language') == 'image' and not row.get('image_signature') and row.get('query'):
                     row['image_signature'] = image_signature(Path(entry['manifest_path']).parent/'reference_frames'/Path(row['query']).name)
             histories.append(rows)
@@ -251,6 +299,9 @@ def restore_history(record):
             continue
     record['queries'] = merge_history(*histories)
     record['strategy_version'] = 2
+    record['search_context_ledger_version']=1
+    record['search_identity_ledger_version']=1
+    resolve_settled_pre_submit(record)
     return record['queries']
 
 
@@ -260,6 +311,9 @@ def stop_diagnostics(searches, goal, outcomes=None):
     parts = []
     if blocked:
         parts.append('인증·로그인·요청 제한: ' + ', '.join(blocked))
+    pending_reviews=sorted({r.get('provider','') for r in searches if r.get('status')=='captcha_review_pending'})
+    if pending_reviews:
+        parts.append('인증 의심 화면 캡처·재검토 대기(CAPTCHA 미확정): '+', '.join(pending_reviews))
     unresolved = sorted({r.get('provider','') for r in searches if search_execution(r)['pending'] or r.get('status') in {'page_unresolved','readiness_blocked'}
                          or (r.get('status') == 'strategy_skipped' and '판독' in r.get('reason',''))})
     if unresolved:
@@ -274,6 +328,11 @@ def stop_diagnostics(searches, goal, outcomes=None):
         parts.append('이전 실패 원인에 따라 성과 없는 검색 경로 제외')
     if not goal.get('core_ready'):
         parts.append('핵심 동작을 보여주는 검증 영상 부족')
+    if goal.get('source_diversity_ready') is False:
+        parts.append(f"관련 승인 원본 {goal.get('related_parent_count',0)}/{goal.get('required_parent_sources',5)}개 · 부족분을 무관·중복 영상으로 대체하지 않음")
+    for lang,row in goal.get('search_coverage',{}).items():
+        if not row.get('ready'):
+            parts.append(f"{'영어' if lang=='en' else '중국어'} 고유 실제 검색 {row['count']}/{row['minimum']}개 · 미시도·접근 대기는 수행으로 세지 않음")
     labels = {'no_candidates':'검색 결과 없음', 'quality_rejected':'주제·화질·편집 적합성 검증 탈락',
               'metadata_rejected':'검색 결과의 영상 길이가 사용 기준과 불일치',
               'duplicate':'기존 영상과 중복', 'download_failed':'영상 다운로드 실패',

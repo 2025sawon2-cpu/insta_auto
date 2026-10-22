@@ -180,3 +180,58 @@ def test_changed_review_compares_original_defect_without_synthetic_regression(tm
     assert 'synthetic-gap' not in actual['resolved']
     assert ledger['reviews'][-2] == raw
     assert ledger['observation_corrections'][0]['previous'] == raw
+
+
+def test_initial_pre_render_scene_gap_resumes_deferred_sources_and_updates_frozen_run_inputs():
+    from hotpost.quality_progress import resume_assessment
+    from hotpost.studio_runtime.lifecycle import LifecycleMixin
+    state = {
+        'id': 'task', 'title': '몽벨 패딩', 'product': '몽벨 패딩', 'edit_id': None, 'edits': [],
+        'script_id': 's1', 'voice_id': 'v1', 'run_id': 'run-1',
+        'scripts': [{'id': 's1', 'text': 'approved'}],
+        'voices': [{'id': 'v1', 'sha256': 'vsha'}],
+        'runs': [{'id': 'run-1', 'inputs': {'source_ids': ['s-old']}}],
+        'sources': [{'id': 's-old', 'sha256': 'sha-old', 'source_quality': 'clean-source',
+                     'editing_eligible': True, 'video_meta': {'duration': 12.0},
+                     'functional_review': {'reviewed': True, 'source_sha256': 'sha-old', 'same_core_function': True}}],
+        'source_acquisition': {'rounds': [{'review_completion': {
+            'reason': 'quota_met', 'deferred_sources': 2,
+            'reviewed_source_sha256': ['sha-old'],
+            'deferred_source_sha256': ['sha-new']}}]},
+        'automation': {'active': False, 'protocol': 2},
+        'daily_quality': {
+            'policy': POLICY, 'status': 'waiting_for_sources', 'pending': 'scene_wait',
+            'preparation_failures': [{'failure_reason': [
+                {'kind': 'scene_gap', 'scope': 'cover', 'search_query': '몽벨 패딩 제품 단독'}]}],
+        },
+    }
+    assert resume_assessment(state) is True
+    assert state['daily_quality']['pending'] == 'recollect'
+    enqueued = []
+    mixin = DailyQualityMixin()
+    mixin.store = SimpleNamespace(enqueue=lambda db, tid, stage, payload, key: enqueued.append((stage, payload, key)))
+    assert mixin.advance_daily_quality(state, None, None, None, None) is True
+    assert enqueued and enqueued[0][0] == 'refresh_sources'
+    assert enqueued[0][1]['request'] == '몽벨 패딩 제품 단독'
+    assert state['daily_quality']['pending'] == 'recollecting'
+
+    class AcceptHarness(LifecycleMixin):
+        settings = SimpleNamespace(source_min_usable=10.0)
+        advanced = False
+        def advance_workflow(self, s, db):
+            self.advanced = True
+
+    harness = AcceptHarness()
+    new_source = {'id': 's-new', 'sha256': 'sha-new', 'source_quality': 'clean-source',
+                  'editing_eligible': True, 'video_meta': {'duration': 10.0},
+                  'functional_review': {'reviewed': True, 'source_sha256': 'sha-new', 'same_core_function': True}}
+    harness._accept(state, {'id': 'job-refresh', 'kind': 'refresh_sources', 'payload': {'daily_quality_repair': True}}, {
+        'sources': [new_source], 'source_search_manifest_path': 'manifest.json',
+        'searches': [], 'attempted_urls': [], 'local_deferred_review': True,
+        'review_completion': {'reviewed_source_sha256': ['sha-new']},
+    }, None)
+    assert harness.advanced is True
+    assert state['runs'][0]['inputs']['source_ids'] == ['s-old', 's-new']
+    assert 'pending' not in state['daily_quality']
+    assert state['daily_quality']['status'] == 'pending'
+    assert state['daily_quality']['resume_retry_count'] == 1

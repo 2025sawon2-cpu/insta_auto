@@ -5,8 +5,9 @@ import re
 
 from .script_rewriter import _generate
 from .studio_script_checks import refresh_local_reviews, ReviewUnavailable
+from .writing.reference_evidence import VisualEvidenceIntegrityError
 
-REVIEW_POLICY = 22
+REVIEW_POLICY = 23
 
 
 def wording_issues(reference, candidate):
@@ -89,6 +90,8 @@ def choose(settings, state, valid):
     try:
         valid = refresh_local_reviews(settings, reference, valid)
         return _choose_scored(settings, state, valid)
+    except VisualEvidenceIntegrityError:
+        raise
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
         # Ranking is optional editorial assistance, not a production gate.
         if isinstance(exc, ReviewUnavailable):
@@ -107,10 +110,23 @@ def _choose_scored(settings, state, valid):
     folder = settings.data_dir / 'studio' / state['id'] / 'top-pick'
     folder.mkdir(parents=True, exist_ok=True)
     reference = state.get('reviewed_original_text', state.get('original_text', ''))
+    from .writing.reference_evidence import visual_context, VisualEvidenceIntegrityError, VISUAL_INSTRUCTION
+    visual_payload=state.get('writing_visual_payload') or {}
+    visual,images=visual_context(visual_payload)
+    if visual:
+        from .source_quality import sha256_file
+        from pathlib import Path
+        if (visual_payload.get('reference_script')!=reference or not state.get('reference_video')
+                or sha256_file(Path(state['reference_video']))!=visual['source_sha256']):
+            raise VisualEvidenceIntegrityError('원고 선택의 실제 원본·집필 시각 근거가 일치하지 않습니다.')
     evidence = {'purpose':'script_selection', 'review_policy':REVIEW_POLICY, 'writing_provider':'codex', 'writing_contract':contract_receipt(), 'original_speech':reference,
                 'reference_kind':reference_kind(state),
                 'hook_contract':state.get('benchmark_analysis', {}).get('hook_contract', {}),
+                'original_mechanisms':state.get('benchmark_analysis',{}).get('original_mechanisms',[]),
+                'reference_visual':visual,
                 'candidates':[{'index':i,'text':v['text'], 'wording_issues':wording_issues(reference,v),
+                               'variant':{k:v.get(k) for k in ('variant_type','bias','psychological_category',
+                                   'changes','surface_changes','mechanism_application')},
                                'editorial_review':v.get('editorial_review', {}),
                                'writing_contract':v.get('writing_contract', {}),
                                'integrity_risk':integrity_risk(reference,v),
@@ -131,6 +147,7 @@ def _choose_scored(settings, state, valid):
         and v['editorial_review'].get('reference_sha256') == hashlib.sha256(reference.encode()).hexdigest()
         and v['editorial_review'].get('contract') == v.get('writing_contract')
         and v.get('writing_contract') == contract_receipt()
+        and (not v.get('variant_type') or v['editorial_review'].get('variant_type')==v['variant_type'])
         for _,v in valid)
     if reviewed:
         result = {'evaluations':[{'index':i, 'eligible':True,
@@ -142,19 +159,30 @@ def _choose_scored(settings, state, valid):
             'issues':[x['reason'] for x in v['editorial_review'].get('issues', [])] + v['editorial_review'].get('local_issues', [])}
             for i,v in valid]}
     else:
+        media=[]
+        if images:
+            from .visual_media import review_frame_data
+            for row,path in zip(visual['frames'],images):
+                media.extend([{'text':json.dumps(row,ensure_ascii=False)},
+                    {'inlineData':review_frame_data(path)}])
         result = _generate(settings,
-            'Compare Korean narration candidates using ONLY original speech and the common writing contract. '
+            'Compare Korean narration using the common writing contract, reference text and supplied actual reference frames. '
             'Ignore source availability and ease of editing; the narration takes priority. Do not rewrite any text. '
-            'Preserve the original hook effect, appeal and sequence but rephrase the opening AND body. '
+            'Apply each candidate variant_type: transformation_a/b must use different new psychological mechanisms '
+            'within the original category, redesigning conflict and sequence. Reward a successful transformation. '
+            'Only surface_substitution preserves the original mechanism and sequence with meaningful surface changes. '
+            'Do not demand the original hook or regret sequence from transformation_a/b. '
             'Use wording_issues. Allow adaptations of reference anecdotes, including first-person friend-house tasting stories. '
             'Do not penalize a borrowed setting; distinguish it from copied wording and new unsupported anecdotes or facts. '
             'Follow the shared rules on direct statements. '
             'Narration score measures direct viewer address, specific everyday payoff, curiosity and spoken rhythm; '
             'do not reward source commentary such as 방법이 소개됐어요. '
-            'Scores 0..5: hook=fidelity and rephrasing, grounding=evidence and uncertainty, narration=viewer experience. '
-            'A replaced hook mechanism must score below 3. Product-name omission and missing footage are not failures. '
+            'Scores 0..5: hook=variant-specific psychological appeal and rephrasing, grounding=text/actual visual evidence, narration=viewer experience. '
+            'Visible structure may support a product fact absent from written quotes; unseen specifications may not. '
+            'Product-name omission and missing editing footage are not failures. '
             'Return {evaluations:[{index,eligible:boolean,scores:{hook,grounding,narration},reason:string,issues:[string]}]}. '
-            'Include every candidate once. Reasons in Korean with actual wording. These are editorial scores, not virality.', evidence)
+            'Include every candidate once. Reasons in Korean with actual wording. These are editorial scores, not virality.'
+            +(VISUAL_INSTRUCTION if images else ''), evidence, **({'media':media} if media else {}))
     # Keep the actual response even when ranking must fall back without scores.
     audit_folder=folder/'reviews'
     audit_folder.mkdir(exist_ok=True)

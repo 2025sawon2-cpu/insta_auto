@@ -361,15 +361,27 @@ def cmd_serve(settings: Settings, args) -> int:
     threads = [threading.Thread(target=httpd.serve_forever, daemon=True) for httpd in httpds[1:]]
     for thread in threads:
         thread.start()
+    manager=getattr(httpds[0].RequestHandlerClass.studio_resource,'video_agents',None)
+    restart_monitor_stop=threading.Event()
+    def watch_agent_restart():
+        while not restart_monitor_stop.wait(1):
+            if manager and manager.restart_requested.is_set():
+                httpds[0].shutdown();return
+    restart_monitor=threading.Thread(target=watch_agent_restart,name='agent-service-restart',daemon=True)
+    restart_monitor.start()
     try:
         httpds[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        restart_monitor_stop.set()
         for httpd in httpds[1:]:
             httpd.shutdown()
         for httpd in httpds:
             httpd.server_close()
+    if manager and manager.restart_requested.is_set():
+        from .video_agent_runtime import restart_process
+        restart_process(['serve','--no-browser','--port',str(port),*[arg for host in hosts for arg in ('--host',host)]])
     return 0
 
 

@@ -8,7 +8,7 @@ from contextlib import ExitStack
 from urllib.parse import urlparse
 
 from .browser_profile import BROWSER_LOCK, PLATFORMS, _platform_rows, profile_cookie_status, save_platform_cookies
-from .search_access import PROVIDERS, access_record, manual_required, request_manual_recheck, challenge_on_page, login_wall_on_page
+from .search_access import PROVIDERS, access_record, manual_required, request_manual_recheck, reviewed_challenge, login_wall_on_page
 from .config import Settings
 from .login_exchange import read_session
 from .source_browser_runtime import ensure_browser, attach_browser, managed_page, browser_lease, connection_status, pace
@@ -77,7 +77,7 @@ class PlatformSessionManager:
             if platform != 'tiktok':
                 raise ValueError('검색 인증 확인은 TikTok에서만 지원합니다.')
             from .platform_verification import TikTokSearchVerification
-            verification = TikTokSearchVerification(verification_query)
+            verification = TikTokSearchVerification(verification_query,self.settings)
         with self.lock:
             if self.active:
                 if platform != self.active_platform:
@@ -115,7 +115,8 @@ class PlatformSessionManager:
         for row in rows:
             gate=access_record(self.settings.data_dir,PROVIDERS.get(row['id'],row['id']))
             if manual_required(gate):
-                row.update(connected=False,auth_status='login_required' if gate.get('reason')=='login_required' else 'verification_required')
+                row.update(connected=False,auth_status='captcha_review_pending' if gate.get('reason')=='captcha_review_pending' else
+                    'login_required' if gate.get('reason')=='login_required' else 'verification_required')
         return {"active": self.active, "active_platform": self.active_platform, "phase": self.phase, "message": self.message, "error": self.error,
                 "platforms": rows,
                 "verification_result": self.verification_result, "profile_role": self.profile_role,
@@ -123,6 +124,7 @@ class PlatformSessionManager:
                 "cookie_file_ready": self.settings.source_browser_cookie_file.is_file()}
 
     def _work(self, platform=None, verification=None) -> None:
+        if verification is not None:verification.settings=self.settings
         context = None
         browser = None
         instagram = platform == 'instagram'
@@ -233,7 +235,8 @@ class PlatformSessionManager:
                                 page=platform_pages[key]
                                 host=urlparse(page.url).hostname or ''
                                 if (not self.stop_event.is_set() or not any(host==d or host.endswith('.'+d) for d in PLATFORMS[key]['domains'])
-                                        or not page.locator('body').inner_text().strip() or challenge_on_page(page)):
+                                        or not page.locator('body').inner_text().strip()
+                                        or reviewed_challenge(self.settings,provider,page)['status']!='clear'):
                                     checks[key]='verification_required'
                                     continue
                                 if login_wall_on_page(page,provider):
@@ -247,7 +250,7 @@ class PlatformSessionManager:
                                 checks[key] = 'login_required'; continue
                             # Observe this live page; no cookie-only /login probe.
                             page = platform_pages[key]
-                            checks[key] = ('verification_required' if challenge_on_page(page) else
+                            checks[key] = ('verification_required' if reviewed_challenge(self.settings,provider,page)['status']!='clear' else
                                            'login_required' if login_wall_on_page(page, provider) else 'unverified')
                     with self.lock:
                         self._update_rows(cookies, checks, instagram)

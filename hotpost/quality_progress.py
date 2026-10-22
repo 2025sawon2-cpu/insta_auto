@@ -141,6 +141,9 @@ def cover_view(plan):
     source = spec.get('source') or {}
     actual = {k:source.get(k) for k in
         ('source_sha256', 'timestamp', 'source_timestamp', 'crop', 'frame_sha256') if k in source}
+    binding = source.get('cover_pixel_binding') or {}
+    if 'frame_sha256' not in actual and (binding.get('review_frame_sha256') or binding.get('canvas_sha256')):
+        actual['frame_sha256'] = binding.get('review_frame_sha256') or binding.get('canvas_sha256')
     crop = source.get('cover_crop_evidence') or {}
     if crop:
         actual['crop_evidence']={k:crop.get(k) for k in
@@ -182,7 +185,8 @@ def linked_finding(issue,plan,ledger):
 def projection(plan):
     return {'script': text(plan.get('script_text')),
             'voice': (plan.get('voice') or {}).get('sha256'),
-            'body': [{'text': text(b.get('text')), 'view': beat_view(plan, b)} for b in plan.get('beats', [])],
+            'body': [{'text': text(b.get('text')), 'view': beat_view(plan, b)}
+                     for b in (plan.get('visual_cuts') or plan.get('beats', []))],
             'cover': cover_view(plan), 'audio_repair':plan.get('quality_audio_repair'),
             'caption_timeline': [{'text':text(c.get('text')),
                 'start':c.get('start'), 'end':c.get('end')}
@@ -532,14 +536,82 @@ def queue_method(state, db, stage):
 def resume_assessment(state):
     """Explicit resume may propose new evidence, preserving the former stop."""
     ledger=ensure(state)
+    from .scene_requirements import coverage_current, clear_cached_review_errors, input_signature
+    cleared=any(clear_cached_review_errors(s) for s in state.get('sources',[]))
+    quality=state['daily_quality']
+    failed_kind=quality.get('failed_job_kind')
+    unreviewed_edit=bool(state.get('edit_id') and quality.get('reviewed_edit_id')!=state.get('edit_id')
+                         and failed_kind in {None,'','edit','quality_review'})
+    if quality.get('pending')=='failed' and ((not state.get('edit_id') and not unresolved(state)) or unreviewed_edit):
+        quality.setdefault('stop_history',[]).append({'pending':quality.get('pending'),
+            'status':quality.get('status'),'repair_round':quality.get('repair_round',0),
+            'error':quality.get('error',''),'failed_job_kind':failed_kind,'at':time.time()})
+        quality.pop('pending',None)
+        quality.pop('error',None)
+        quality.pop('failed_job_kind',None)
+        quality.pop('failed_job_id',None)
+        quality['resume_retry_count']=int(quality.get('resume_retry_count',0) or 0)+1
+        quality['status']='pending'
+        decide(state,'continue','실행 오류 복구 후 명시 재개',
+               method_key=f"technical-retry:{quality['resume_retry_count']}")
+        return True
     method=hypothesis(state,'reedit')
-    from .scene_requirements import coverage_current
     valid=(method['grounded'] and coverage_current(state)
            and not any(a['key']==method['key'] or same_method(a,method) for a in ledger['attempts']))
+    if not valid and (quality.get('pending')=='scene_wait'
+                      or (quality.get('pending')=='failed' and failed_kind=='refresh_sources')):
+        from .source_overlay_review import needs_overlay_review
+        from .source_functional import needs_function_review
+        from .source_presentation import needs_presentation_review
+        from .source_quality import editing_ready
+        from .studio_workflow import current_run
+        run=current_run(state)
+        old_ids=set((run or {}).get('inputs',{}).get('source_ids') or [])
+        ready_ids=[s['id'] for s in state.get('sources',[]) if editing_ready(s) and s.get('id')]
+        if not state.get('edit_id') and old_ids and set(ready_ids)-old_ids:
+            if run is not None:
+                run.setdefault('inputs',{})['source_ids']=ready_ids
+            quality.setdefault('stop_history',[]).append({'pending':quality.get('pending'),
+                'status':quality.get('status'),'repair_round':quality.get('repair_round',0),'at':time.time()})
+            quality.pop('pending',None)
+            quality.pop('error',None)
+            quality['status']='pending'
+            quality['resume_retry_count']=int(quality.get('resume_retry_count',0) or 0)+1
+            decide(state,'continue','새 승인 소스를 반영하여 초기 편집 재개',
+                   method_key=f"initial-source-retry:{quality['resume_retry_count']}")
+            return True
+        sig=input_signature(state)
+        saved_sig=(quality.get('scene_requirements') or {}).get('signature')
+        pending_local=any(
+            Path(s.get('path') or '').is_file()
+            and (needs_overlay_review(s) or needs_function_review(s) or needs_presentation_review(s))
+            for s in state.get('sources',[])
+        )
+        acq=state.get('source_acquisition',{})
+        reviewed_shas={s.get('sha256') for s in state.get('sources',[]) if s.get('sha256')}
+        for r in [*acq.get('rounds',[]),*acq.get('local_source_reviews',[])]:
+            reviewed_shas.update((r.get('review_completion') or {}).get('reviewed_source_sha256',[]))
+        has_deferred=bool(acq.get('interrupted_attempts') or any(
+            (r.get('review_completion') or {}).get('deferred_sources',0)
+            and (not (r.get('review_completion') or {}).get('deferred_source_sha256')
+                 or set((r.get('review_completion') or {}).get('deferred_source_sha256',[]))-reviewed_shas)
+            for r in acq.get('rounds',[])
+        ))
+        if cleared or pending_local or has_deferred or (saved_sig and sig!=saved_sig) or failed_kind=='refresh_sources':
+            quality.setdefault('stop_history',[]).append({'pending':quality.get('pending'),
+                'status':quality.get('status'),'repair_round':quality.get('repair_round',0),'at':time.time()})
+            quality.pop('collection_queue_hold',None)
+            quality.pop('error',None)
+            quality.pop('failed_job_kind',None)
+            quality.pop('failed_job_id',None)
+            quality['local_review_resume_count']=int(quality.get('local_review_resume_count',0) or 0)+1
+            quality.update(pending='recollect',status='repair')
+            decide(state,'continue','새 로컬 검토·승인 구간 근거를 반영하여 장면 재평가 재개',
+                   method_key=f'local-recollect:{sig[:16]}')
+            return True
     if not valid:
         decide(state,'wait','과거 중단 유지 · 잔존 결함을 해결할 새로운 실제 근거 없음')
         return False
-    quality=state['daily_quality']
     quality.setdefault('stop_history',[]).append({'pending':quality.get('pending'),
         'status':quality.get('status'),'repair_round':quality.get('repair_round',0),'at':time.time()})
     quality.update(pending='reedit',status='repair')
@@ -603,5 +675,8 @@ def valid_cover_evidence(state, receipt):
         if selected.get('crop'):
             from .cover_product_crop import validate_crop_selection
             validate_crop_selection(plan,selected)
-        return selected.get('frame_sha256')==receipt['image_sha256']
+        frame_sha=(selected['frame_sha256'] if 'frame_sha256' in selected else
+                   (selected.get('cover_pixel_binding') or {}).get('review_frame_sha256')
+                   or (selected.get('cover_pixel_binding') or {}).get('canvas_sha256'))
+        return frame_sha==receipt['image_sha256']
     except (OSError,ValueError,KeyError,TypeError):return False

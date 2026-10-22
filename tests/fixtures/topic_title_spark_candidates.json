@@ -1,0 +1,156 @@
+{
+  "provenance": "Exact titles and reviewed identity from the twelve Bilibili candidates captured during the authorized natural-topic trial",
+  "source_manifest_sha256": "27dab4b128dbcd3c2e771f5646a565b0f310fcfc4734aa499f4aaa4e03c1ec86",
+  "product_evidence": {
+    "source_policy": {
+      "core_product_priority": {
+        "version": "core-product-first-v1",
+        "target_parent_sources": 5
+      }
+    },
+    "search_identity": {
+      "version": "reviewed-topic-discovery-v1",
+      "kind": "category",
+      "product_terms": {
+        "en": [
+          "handheld spark fountain",
+          "handheld spark machine"
+        ],
+        "zh": [
+          "手持喷花机",
+          "手持火花机"
+        ],
+        "ko": [
+          "휴대용 스파크 분출기",
+          "핸드헬드 스파크 머신"
+        ]
+      },
+      "required_terms": [
+        {
+          "kind": "feature",
+          "terms": {
+            "en": [
+              "handheld"
+            ],
+            "zh": [
+              "手持"
+            ],
+            "ko": [
+              "손에 들고 사용하는"
+            ]
+          }
+        },
+        {
+          "kind": "feature",
+          "terms": {
+            "en": [
+              "spark fountain"
+            ],
+            "zh": [
+              "喷花"
+            ],
+            "ko": [
+              "스파크 분출"
+            ]
+          }
+        }
+      ],
+      "topic_reference_sha256": "417422989a9c240017bd87355b374ffa657921e640d35ae8c228a6f94ced2402",
+      "topic_text_sha256": "c7b9d907ce961337fd9d5428e7dee615a0c2cfd92245ce1005df94f6a4c71a70",
+      "approved_queries": [
+        {
+          "query": "handheld spark machine",
+          "language": "en",
+          "semantic_key": "handheld_spark_machine"
+        },
+        {
+          "query": "camping spark fountain",
+          "language": "en",
+          "semantic_key": "camping_spark_fountain"
+        },
+        {
+          "query": "birthday spark fountain",
+          "language": "en",
+          "semantic_key": "birthday_spark_fountain"
+        },
+        {
+          "query": "anniversary spark fountain",
+          "language": "en",
+          "semantic_key": "anniversary_spark_fountain"
+        },
+        {
+          "query": "concert spark machine",
+          "language": "en",
+          "semantic_key": "concert_spark_machine"
+        },
+        {
+          "query": "手持喷花机",
+          "language": "zh",
+          "semantic_key": "handheld_spark_machine"
+        },
+        {
+          "query": "露营 喷花机",
+          "language": "zh",
+          "semantic_key": "camping_spark_fountain"
+        },
+        {
+          "query": "生日 喷花机",
+          "language": "zh",
+          "semantic_key": "birthday_spark_fountain"
+        },
+        {
+          "query": "纪念日 喷花机",
+          "language": "zh",
+          "semantic_key": "anniversary_spark_fountain"
+        },
+        {
+          "query": "演唱会 喷花机",
+          "language": "zh",
+          "semantic_key": "concert_spark_machine"
+        }
+      ]
+    },
+    "visual_query_evidence": {
+      "policy": "natural-topic-search-v1"
+    },
+    "products": []
+  },
+  "candidates": [
+    {
+      "title": "电子喷花机 适合舞台、婚礼、酒吧、开业典礼等场合！#启动道具#创意启动仪式#电子喷花机#活动策划"
+    },
+    {
+      "title": "500W喷花机"
+    },
+    {
+      "title": "手持喷墨打印机mbrush的介绍"
+    },
+    {
+      "title": "#求婚仪式 #草坪婚礼 #电子喷花机 #泡泡机#河南九上创意启动道具出租"
+    },
+    {
+      "title": "20220901-ZQ16001EU-上喷款电子喷花机3"
+    },
+    {
+      "title": "河南创意启动道具推杆流金沙 电子喷花机 彩虹机出租"
+    },
+    {
+      "title": "喷花机电池充电款操作视频"
+    },
+    {
+      "title": "生日快乐，moxing……安息吧……"
+    },
+    {
+      "title": "餐厅过生日粉白色系瀑布桌花详细制作教程。"
+    },
+    {
+      "title": "【终末地1.6】重要任务·纪念日 支线任务全流程"
+    },
+    {
+      "title": "异环品牌纪念日异像委托胶卷怪位置攻略教程"
+    },
+    {
+      "title": "烈士纪念日特别报道 | 只要记得，他们就不曾离开"
+    }
+  ]
+}

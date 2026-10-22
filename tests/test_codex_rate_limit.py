@@ -76,6 +76,15 @@ def test_completed_response_is_reused_despite_intermediate_429(tmp_path,monkeypa
     with model_service.database(tmp_path) as db:assert db.execute('select failures from capacity').fetchone()[0]==0
 
 
+def test_terminal_failure_rejects_earlier_complete_and_leftover_output(tmp_path,monkeypatch):
+    monkeypatch.setattr(codex_writer,'executable',lambda:sys.executable)
+    monkeypatch.setattr(codex_writer,'command',process_command([{'type':'turn.completed'},
+        {'type':'turn.failed','error':{'message':'internal failure'}}],success=True))
+    state={'directory':tmp_path,'calls':[]}
+    with pytest.raises(RuntimeError,match='완료되지'):codex_writer.chat('rules','data',None,lambda:None,state)
+    assert state['calls'][0]['status']=='failed'
+
+
 
 def test_api_specific_retry_field_has_no_assumed_units():
     result=codex_writer.classify_service_failure([{'type':'turn.failed','error':{'status_code':429,'retry_after':120000,'retryAfter':120000}}],now=100)

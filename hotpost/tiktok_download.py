@@ -178,12 +178,21 @@ def record_access_observation(stats,audit=None,response=None,*,observed=True,bas
     status=(audit or {}).get('status') or (audit or {}).get('reason')
     http_status=getattr(response,'status',None)
     kinds={'captcha':'captcha','verification_required':'captcha','login_required':'login_required',
-           'rate_limited':'rate_limited','cooldown':'rate_limited','access_denied':'access_denied'}
+           'rate_limited':'rate_limited','cooldown':'rate_limited','access_denied':'access_denied',
+           'readiness_blocked':'readiness_blocked','captcha_review_pending':'captcha_review_pending'}
     kind=kinds.get(status) or ('rate_limited' if http_status==429 else 'access_denied' if http_status==403 else None)
     if kind:
         stats['access_status']=kind
         stats['access_observation']={'kind':kind,'observed':bool(observed),'basis':basis,
                                      'http_status':http_status}
+
+
+def record_cooling_observation(stats, searcher, provider):
+    """Report the decision that stopped this request, not an obsolete gate reason."""
+    audit = next((row for row in reversed(searcher.searches) if row.get('provider') == provider), {})
+    check = audit.get('captcha_check') or {}
+    record_access_observation(stats, audit, observed=check.get('status') in {'captcha', 'login_required'},
+                              basis='current_request_gate')
 
 
 def resolve_download_page(context,settings,stats):
@@ -209,14 +218,15 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
         raise RuntimeError('기존 수집용 Chrome이 연결되지 않았습니다. 새 브라우저로 대체하지 않습니다.')
     searcher = BrowserSearcher(replace(settings, source_browser_captcha_wait=0), Path(target).parent)
     gate=access_record(settings.data_dir,'tiktok')
-    if not (gate.get('reason')=='captcha' and manual_required(gate)) and searcher._cooling_down('tiktok'):
-        record_access_observation(stats,gate,observed=False,basis='saved_gate')
+    if not (gate.get('reason') in {'captcha','captcha_review_pending'} and manual_required(gate)) and searcher._cooling_down('tiktok'):
+        record_cooling_observation(stats,searcher,'tiktok')
         raise RuntimeError('TikTok 접근 중지 또는 휴식 상태입니다. 영상 페이지를 열지 않습니다.')
     if not re.fullmatch(r'https://(?:www\.)?tiktok\.com/@[^/?]+/video/\d+', url):
         raise ValueError('검색에서 확인한 TikTok 영상 상세 URL이 필요합니다.')
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     from .operation_progress import ProgressWatch, watch_browser_transfer
+    from .source_transfer_trace import event
     watch = ProgressWatch(settings.source_download_idle_timeout, 'TikTok 영상 수신')
     stats.update(media_responses=0, partial_responses=0, body_errors=0, metadata_urls=0, max_visible_players=0,
                  assembled_files=0, explicit_media_requests=0)
@@ -226,10 +236,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
         page = resolve_download_page(context,settings,stats)
         stats['tab_resolution']='selected_existing_target'
         if searcher._cooling_down('tiktok',page=page):
-            current=access_record(settings.data_dir,'tiktok')
-            observation=current.get('last_captcha_check',{})
-            record_access_observation(stats,current,observed=observation.get('status') in {'captcha','login_required'},
-                                      basis='current_page' if observation else 'saved_gate')
+            record_cooling_observation(stats,searcher,'tiktok')
             raise RuntimeError('TikTok 현재 화면의 인증 또는 요청 제한 때문에 영상 페이지를 열지 않습니다.')
         playback = {}
         assemblies = {}
@@ -255,6 +262,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
             if mime not in ('video/mp4', 'application/mp4'):
                 return
             stats['media_responses'] += 1
+            stats.setdefault('first_response_at',time.time())
             stats['partial_responses'] += int(response.status == 206)
             if response.status not in (200, 206):
                 if response.status==429 or response.url in selected_media or response.url in bound_urls:
@@ -266,11 +274,13 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
             try:
                 if int(headers.get('content-length', 0)) > max_bytes:
                     return
+                event(stats,'reading_response_body')
                 body = response.body()
                 if response.url not in assemblies and len(assemblies) >= 4:
                     return
                 assembly = assemblies.setdefault(response.url, MediaAssembly(max_bytes))
                 assembly.add(response.status, headers, body)
+                event(stats,'awaiting_media')
             except ValueError as exc:
                 fatal.append(str(exc))
             except Exception:
@@ -288,6 +298,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
             watch.reset()
             timeout = settings.source_browser_navigation_timeout * 1000
             stats.update(attempted=True, navigation_started=True)
+            event(stats,'navigation')
             if page.url.split('?', 1)[0] == url:
                 response = page.reload(wait_until='domcontentloaded', timeout=timeout)
             else:
@@ -298,6 +309,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
             if response is not None and response.status==403:
                 record_access_observation(stats,response=response,basis='navigation_response')
                 raise RuntimeError('TikTok access_denied HTTP 403 · current target preserved')
+            event(stats,'awaiting_media')
             # TikTok may replace its document once after DOMContentLoaded.
             # Keep the same navigation and received bytes; retry only the DOM
             # read, under the existing URL/auth/progress checks below.
@@ -344,6 +356,9 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
                                 readyState:e.readyState, networkState:e.networkState,
                                 buffered:Array.from({length:e.buffered.length},(_,i)=>[e.buffered.start(i),e.buffered.end(i)])}))'''))
                         last_playback_sample = time.monotonic()
+                        event(stats,'awaiting_media',last_progress_at=time.time()-max(0,time.monotonic()-watch.last_progress),
+                              covered_bytes=sum(sum(b-a for a,b in item.ranges) for src,item in assemblies.items()
+                                                if src in selected_media or src in bound_urls))
                     if not playback.get('ready'):
                         playback = start_visible_playback(page)
                         stats['playback_started'] = playback.get('playing', False)
@@ -378,6 +393,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None):
             close_transfer()
             stats['received_streams'] = [{'total_bytes': a.total, 'covered_bytes': sum(b-a0 for a0,b in a.ranges),
                 'bound_to_item': src in bound_urls} for src,a in assemblies.items()]
+            event(stats)
             page.remove_listener('requestfinished', receive)
             if playback.get('playing') and page.url.split('?', 1)[0] == url:
                 try:

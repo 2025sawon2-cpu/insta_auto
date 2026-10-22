@@ -4,6 +4,8 @@ from __future__ import annotations
 from ..studio_store import change_claimed
 
 import time
+import sqlite3
+import logging
 from pathlib import Path
 
 from ..studio_store import Conflict
@@ -56,7 +58,23 @@ class LifecycleMixin:
 
     def _worker(self, lane=None):
         while not self.stop.is_set():
-            job = self.store.claim(lane)
+            from ..production_records import flush as flush_records
+            try:flush_records(self.store)
+            except (OSError,sqlite3.Error):
+                logging.getLogger(__name__).exception('Production record projection remains pending')
+            from ..studio_supervision import SupervisionHold
+            try:
+                job = self.store.claim(lane)
+            except SupervisionHold:
+                self.stop.wait(.6); continue
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, 'sqlite_errorcode', None)
+                locked = ((code is not None and (code & 255) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED))
+                          or (code is None and str(exc) in {'database is locked', 'database table is locked'}))
+                if not locked:
+                    raise
+                logging.getLogger(__name__).exception('Studio claim temporarily locked: %s', lane)
+                self.stop.wait(.6); continue
             if not job:
                 self.stop.wait(.6); continue
             try:
@@ -137,7 +155,10 @@ class LifecycleMixin:
                     allowed=claimed_quality_permit(self.store,job,'rewrite')
                     if not allowed:raise QualityProgressHold('동일 사실 보완 방법 차단 · 새 근거 대기')
                     state=self.store.get(state['id'])
-                result = getattr(self, "_" + job["kind"])(state, job)
+                from contextlib import nullcontext
+                supervisor = getattr(self, 'supervisor', None)
+                with supervisor.scope(job) if supervisor else nullcontext():
+                    result = getattr(self, "_" + job["kind"])(state, job)
                 if job['kind']=='quality_reedit' or payload.get('quality_repair'):
                     result['repair_input_signature']=payload['repair_input_signature']
                     result['repair_signature_policy']=REPAIR_SIGNATURE_POLICY
@@ -146,13 +167,28 @@ class LifecycleMixin:
                 self.store.finish(job, result, lambda s, db, r: self._accept(s, job, r, db))
             except Exception as exc:
                 from ..studio_pause import StudioPaused
+                from ..operation_progress import NoProgressTimeout
+                if isinstance(exc, (SupervisionHold, NoProgressTimeout)):
+                    supervisor = getattr(self, 'supervisor', None)
+                    if supervisor:
+                        supervisor.hold(job, str(exc))
+                    self.store.pause_claimed(job, '실행 진전·감시 확인 필요 · '+str(exc)[:500])
+                    continue
                 if isinstance(exc, StudioPaused):
-                    self.store.defer(job, str(exc), 0, waiting=True)
+                    self.store.pause_claimed(job, str(exc))
                     continue
                 from ..source_access_preflight import SourceAccessWaiting
                 if isinstance(exc,SourceAccessWaiting):
-                    self.store.defer(job,str(exc),max(1,exc.retry_at-time.time()),
-                                     waiting=True,waiting_status='source_wait')
+                    from ..source_pause_receipts import SourceReceiptWaiting
+                    from ..source_preparation import PreparationEvidenceWaiting
+                    if isinstance(exc,(SourceReceiptWaiting,PreparationEvidenceWaiting)):
+                        import traceback
+                        job['checkpoint']['internal_evidence_wait']=True
+                        job['checkpoint']['failure_trace']={'type':type(exc).__name__,'stage':job['kind'],
+                            'message':str(exc),'frames':[{'path':f.filename,'line':f.lineno,'function':f.name}
+                                for f in traceback.extract_tb(exc.__traceback__)]}
+                    from ..source_wait_dispatch import defer_source_wait
+                    defer_source_wait(self.store,job,exc,time.time())
                     continue
                 from ..studio_store import StaleClaim
                 if isinstance(exc, StaleClaim):
@@ -167,7 +203,10 @@ class LifecycleMixin:
                 from ..source_browser_runtime import BrowserBusy
                 from ..scene_narration_prepare import NarrationContextHold
                 from ..quality_progress import QualityProgressHold, hold, finish_attempt
-                if isinstance(exc,QualityProgressHold):
+                from ..source_diversity import SourceDiversityRequired
+                if isinstance(exc,SourceDiversityRequired):
+                    self.handle_source_diversity_gap(job,exc)
+                elif isinstance(exc,QualityProgressHold):
                     if exc.waiting or self.store.get(job['task_id']).get('automation',{}).get('paused_by_user'):
                         self.store.defer(job,str(exc),0,waiting=True)
                         continue
@@ -197,8 +236,10 @@ class LifecycleMixin:
                                      30, waiting=True, waiting_status='retry_wait')
                 elif job['kind'] == 'collect_sources':
                     self.handle_source_error(job, exc)
-                elif enabled(self.store.get(job['task_id'])) and transient(exc) and job['checkpoint'].get('auto_retries', 0) < 2:
-                    self.store.defer(job, str(exc), 15 * (job['checkpoint'].get('auto_retries', 0)+1))
+                elif enabled(self.store.get(job['task_id'])) and self._reserve_failure_retry(job, exc):
+                    from ..retry_policy import classify_failure
+                    decision = classify_failure(exc, stage=job['kind'])
+                    self.store.defer(job, str(exc), max(15, decision['retry_after_seconds'] or 0))
                 else:
                     if self.store.fail(job, exc) is False:
                         continue
@@ -207,6 +248,35 @@ class LifecycleMixin:
                         self.fail_daily_quality(job,exc)
                     if enabled(state) and state.get('pending_reproduction'):
                         change_claimed(self.store, job, lambda s, db: self.activate_reproduction(s, db))
+
+    def _reserve_failure_retry(self, job, exc):
+        from ..retry_policy import classify_failure
+        from ..retry_budget import reserve
+        decision = classify_failure(exc, stage=job['kind'])
+        job['checkpoint']['failure_classification'] = decision
+        return reserve(self.store, job, decision, self.store.get(job['task_id']))
+
+    def handle_source_diversity_gap(self,job,error):
+        """Acquire new relevant footage instead of rerendering the same failed plan."""
+        import copy
+        def save(state,db,result):
+            from ..source_diversity import inventory_signature, inventory_material, parent_groups
+            from ..source_coverage import reviewed_related
+            related=[s for s in state.get('sources',[]) if reviewed_related(s)]
+            detail={'job_id':job['id'], 'at':time.time(), 'reason':str(error),
+                    'inventory_signature':inventory_signature(state),
+                    'baseline_material':inventory_material(state),
+                    'baseline_parent_count':len(set(parent_groups(related).values())),
+                    'diagnostics':copy.deepcopy(error.diagnostics), 'no_render':True}
+            state.setdefault('source_diversity_history',[]).append(detail)
+            state['source_diversity_gap']=detail
+            state.setdefault('automation',{}).update(stage='source_diversity')
+            quality=state.get('daily_quality')
+            if quality is not None:quality.update(status='pending',pending='source_diversity_collect')
+            state.update(status='source_wait',error='',message=str(error)+' · 적합한 다른 원본을 추가 확보한 뒤 자동 재배치',progress=0)
+            self.store.event(db,state['id'],'source_diversity_required',detail)
+            self.ensure_source_collection(state,db,finishing=job['id'])
+        self.store.finish(job,{'no_render':True,'source_diversity_required':error.diagnostics},save)
 
     def handle_narration_context_hold(self,job,error):
         """An ambiguous old/new narration mapping is not another source search."""
@@ -217,7 +287,9 @@ class LifecycleMixin:
             quality.update(status='needs_attention',pending='scene_wait',
                 narration_context_hold={'job_id':job['id'],'reason':str(error)[:700],
                     'issues':getattr(error,'issues',[]),'at':time.time()})
-            state.setdefault('automation',{}).update(active=False,stage='quality_review')
+            auto=state.setdefault('automation',{})
+            if auto.get('protocol')!=2:auto['active']=False
+            auto['stage']='quality_review'
             state.update(status='attention',error=str(error)[:700],
                 message='새 대본과 이전 시각 문제의 대응 불명확 · 결과 보존, 자동 수집·편집 보류')
             state['source_search']={'status':'done','progress':100,'scene_wait':True,
@@ -259,7 +331,10 @@ class LifecycleMixin:
             from ..source_search.strategy import merge_history, restore_history
             record = state.setdefault('source_acquisition', {})
             restore_history(record)
-            record['queries'] = merge_history(record.get('queries', []), result.get('searches', []))
+            from ..source_coverage import search_scope_for_state
+            searches=[{**row,**({'run_id':state.get('run_id'),'search_context':search_scope_for_state(state)}
+                if 'run_id' not in row and 'search_context' not in row else {})} for row in result.get('searches',[])]
+            record['queries'] = merge_history(record.get('queries', []), searches)
             record['urls'] = list(dict.fromkeys([*record.get('urls', []), *result.get('attempted_urls', [])]))
             record['inspected_urls'] = list(dict.fromkeys([*record.get('inspected_urls', []), *result.get('inspected_urls', [])]))
             # Append assets; existing renders and source references stay playable.
@@ -268,7 +343,8 @@ class LifecycleMixin:
             added = [s for s in result['sources'] if s['sha256'] not in hashes and s.get('origin_url') not in urls]
             from ..scene_requirements import merge_sources
             state['sources']=merge_sources(state['sources'],result['sources'])
-            from ..studio_sources import source_goal
+            from ..studio_sources import source_goal, resolve_diversity_recovery
+            resolve_diversity_recovery(state)
             state['source_goal']=source_goal(state,self.settings.source_min_usable)
             state['source_search_manifest_path'] = result['source_search_manifest_path']
             local_context=result.get('local_narration_preparation') is True
@@ -299,15 +375,34 @@ class LifecycleMixin:
             if p.get('daily_quality_repair'):
                 quality=state['daily_quality']
                 if result.get('cover_repair_evidence'):quality['cover_repair_evidence']=result['cover_repair_evidence']
+                from ..source_quality import editing_ready
+                from ..quality_progress import relevant_coverage_gain, decide
+                run=current_run(state)
+                old_ids=set((run or {}).get('inputs',{}).get('source_ids') or [])
+                ready_ids=[s['id'] for s in state.get('sources',[]) if editing_ready(s) and s.get('id')]
+                if not state.get('edit_id') and set(ready_ids)-old_ids:
+                    if run is not None:
+                        run.setdefault('inputs',{})['source_ids']=list(state['source_goal'].get('source_ids') or ready_ids)
+                    attempt_key=('local_context_attempt' if local_context else
+                                 'local_review_attempt' if local_review else 'collection_attempt')
+                    quality.setdefault('accepted_source_jobs',[]).append(job.get('id'))
+                    quality[attempt_key]=quality.get(attempt_key,0)+1
+                    quality['scene_no_progress']=0
+                    quality.pop('pending',None)
+                    quality['status']='pending'
+                    quality['resume_retry_count']=int(quality.get('resume_retry_count',0) or 0)+1
+                    decide(state,'continue','초기 편집 전 미검토 수신 소스 승인 완료 · 초기 편집 재개',
+                           method_key=f"initial-source-recovery:{quality['resume_retry_count']}")
+                    self.advance_workflow(state,db)
+                    return
                 previous=quality.get('scene_requirements',{})
                 coverage=result.get('scene_requirements') or {'ready':False}
                 quality['scene_requirements']=coverage
                 # New inventory alone cannot solve a named defect. Compare the
                 # relevant actual replacement facts with completed methods.
-                from ..quality_progress import relevant_coverage_gain, decide
                 improved=relevant_coverage_gain(state,previous)
-                if local_context and coverage.get('ready') and not improved:
-                    # Narration preparation commits coverage before returning;
+                if (local_context or result.get('local_scene_preparation')) and coverage.get('ready') and not improved:
+                    # Local scene/narration preparation commits coverage before returning;
                     # comparing it with itself cannot measure this first unused,
                     # defect-bound method. Render preflight still checks output.
                     from ..quality_progress import permit

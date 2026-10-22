@@ -13,8 +13,9 @@ from PIL import Image, ImageFilter, ImageOps
 from .editing_adapter import _atomic_json
 from .operation_progress import run_progress_command
 from .source_quality import sha256_file
+from .thumbnail_copy import INSTRUCTION as THUMBNAIL_INSTRUCTION
 
-POLICY='actual-used-product-cover-crop-v1'
+POLICY='actual-used-product-cover-crop-v2-viewer-interest'
 PROPOSAL_INSTRUCTION=(
     'Propose product-only crops of supplied actual USED video frames after full-frame cover rejection. '
     'Return {crops:[{frame_id:string,crop:[left,top,right,bottom],reason:string}]}. '
@@ -22,9 +23,9 @@ PROPOSAL_INSTRUCTION=(
     'per frame, only where an actually visible meaningful garment/product/use detail remains. Exclude '
     'ALL human faces including partial profiles, reflections and photographs. Hands and face-free wearing '
     'details may remain. Do not use face blur, invent pixels/features, or propose an empty/background/logo '
-    'crop. Preserve a concrete product question with the supplied two-line copy; changing framing cannot '
+    'crop. Preserve a concrete viewer benefit, desire or discovery with the supplied two-line copy; changing framing cannot '
     'prove unseen features. A proposal is not approval: the actual cropped image will be independently '
-    'reviewed for product meaning, faces, hook, and transformed text/mask geometry.'
+    'reviewed for product meaning, faces, hook, and transformed text/mask geometry. '+THUMBNAIL_INSTRUCTION
 )
 
 

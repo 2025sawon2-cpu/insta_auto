@@ -56,6 +56,28 @@ def fixture(tmp_path,monkeypatch):
 def cache_path(editor):return editor.root/'edit'/'semantic-plan.json'
 
 
+def test_interval_policy_switch_is_an_output_not_a_concurrent_input_change(tmp_path,monkeypatch):
+    editor,state,job,calls,original_describe=fixture(tmp_path,monkeypatch)
+    original_process=editor._process
+    def analyze(*args,**kwargs):
+        result=original_process(*args,**kwargs)
+        result['plan'].update(daily_quality_policy='test',footage_selection_policy='diverse-sequential-v2-semantic-first')
+        return result
+    def describe(*args,**kwargs):
+        observations,choices=original_describe(*args,**kwargs)
+        from hotpost.shot_presentation import interval_receipt
+        observations['shot']['shot_presentation']=interval_receipt(args[1][0],dict(
+            product_visible=True,frame_product_visibility=[True],product_role='promoted_product',
+            visible_information=['spray'],visual_cluster='spray-front',composition=.8,clarity=.8,
+            product_coverage=.5,mask_product_overlap=0,uncertainty='Provided frame only'))
+        return observations,choices
+    editor._process=analyze
+    monkeypatch.setattr('hotpost.studio_ai.describe_shots',describe)
+    first=editor._edit(state,job)['plan']
+    assert first['footage_selection_policy']=='product-story-global-v3'
+    assert editor._edit(state,job)['plan']==first and len(calls)==1
+
+
 def test_same_contract_and_actual_inputs_reuse_verified_semantics(tmp_path,monkeypatch):
     editor,state,job,calls,_=fixture(tmp_path,monkeypatch);before=copy.deepcopy(state)
     editor._edit(state,job);first=cache_path(editor).read_bytes()

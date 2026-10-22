@@ -44,6 +44,7 @@ class Studio:
         self.settings=Settings(data_dir=tmp_path)
         self.store=self
     def folder(self,identity):return self.root
+    def get(self,identity):return self.state
     def change(self,identity,callback):callback(self.state,None)
     def _source_records(self,paths,manifest,records):return copy.deepcopy(records)
     def _process(self,state,job,action,payload):
@@ -178,6 +179,42 @@ def test_refresh_fresh_context_reuses_existing_approved_scene_without_external_s
     assert studio.calls==['analyze'] and state['daily_quality']['repair_round']==2
 
 
+@pytest.mark.parametrize('covered',[True,False])
+def test_refresh_unchanged_watermark_checks_actual_local_evidence_before_search(tmp_path,monkeypatch,covered):
+    from hotpost.studio_runtime.generation import GenerationMixin
+    from hotpost import script_rewriter,source_finder
+    from test_scene_requirement_intervals import coverage
+    state=approved(tmp_path);state['id']='work'
+    state['daily_quality'].update(repair_round=0,status='repair')
+    state['daily_quality']['feedback']=[{'kind':'watermark','beat_id':'b1','reason':'Right edge credit exposed'}]
+    original=copy.deepcopy(state['daily_quality']['feedback'])
+    class LocalAssessmentFinished(Exception):pass
+    class RefreshStudio(GenerationMixin,Studio):
+        def _restore_source_attempt_history(self,*args):
+            assert self.state['daily_quality']['scene_requirements']['ready'] is False
+            raise LocalAssessmentFinished
+    studio=RefreshStudio(tmp_path,state,{})
+    calls=[]
+    def generate(settings,instruction,evidence,**kwargs):
+        calls.append(evidence)
+        assert 'For watermark use only existing approved mask regions or clean footage' in instruction
+        assert kwargs.get('media') and evidence['requirements'][0]['kind']=='watermark'
+        return coverage(state['sources'][0]) if covered else {'requirements':[{'index':0,'covered':False,'reason':'Credit remains visible'}]}
+    monkeypatch.setattr(script_rewriter,'_generate',generate)
+    monkeypatch.setattr(source_finder,'find_sources',lambda *a,**k:pytest.fail('Local assessment must run first'))
+    # Avoid UI progress methods; the denial branch is intercepted before discovery.
+    monkeypatch.setattr('hotpost.studio_runtime.generation.change_claimed',lambda *a,**k:None)
+    if covered:
+        result=studio._refresh_source_attempt(state,job())
+        assert result['local_scene_preparation'] and not result['local_narration_preparation']
+        assert result['sources']==result['searches']==result['attempted_urls']==[]
+    else:
+        with pytest.raises(LocalAssessmentFinished):studio._refresh_source_attempt(state,job())
+    assert len(calls)==1 and studio.calls==[]
+    assert state['daily_quality']['feedback']==original and state['daily_quality']['repair_round']==0
+    assert state['daily_quality']['status']=='repair'
+
+
 def test_edit_resumes_capacity_during_source_preflight_without_repeating_local_analysis(tmp_path,monkeypatch):
     from hotpost.studio_runtime.editing import EditingMixin
     from hotpost import script_rewriter
@@ -257,12 +294,18 @@ def test_actual_worker_lane_holds_ambiguous_remap_without_new_qa_or_collection_l
     assert not saved.get('source_acquisition',{}).get('rounds')
 
 
-def test_local_preparation_acceptance_preserves_external_rounds_and_render_counter(tmp_path,monkeypatch):
+@pytest.mark.parametrize('changed_narration',[True,False])
+def test_local_preparation_acceptance_preserves_external_rounds_and_render_counter(tmp_path,monkeypatch,changed_narration):
     from hotpost.studio_runtime.generation import GenerationMixin
     from hotpost.studio_runtime.lifecycle import LifecycleMixin
     from hotpost import script_rewriter
     from test_scene_requirement_intervals import coverage
     state,plan=mixed(tmp_path);state['source_acquisition']={'rounds':[{'job_id':'old-external'}], 'bounded_rounds':2}
+    if not changed_narration:
+        state=approved(tmp_path);state.update(id='work',automation={'active':True})
+        state['daily_quality'].update(repair_round=2,max_repairs=3)
+        state['daily_quality']['feedback'][0].update(kind='watermark',reason='Exposed right edge credit')
+        state['source_acquisition']={'rounds':[{'job_id':'old-external'}], 'bounded_rounds':2}
     state['daily_quality']['collection_attempt']=4
     advanced=[]
     class LocalStudio(GenerationMixin,LifecycleMixin,Studio):
@@ -276,9 +319,12 @@ def test_local_preparation_acceptance_preserves_external_rounds_and_render_count
     studio._accept(state,task,result)
     assert state['source_acquisition']['rounds']==[{'job_id':'old-external'}]
     assert state['source_acquisition']['bounded_rounds']==2
-    assert state['source_acquisition']['local_narration_preparations'][0]['external_search_attempted'] is False
-    assert state['daily_quality']['collection_attempt']==4 and state['daily_quality']['local_context_attempt']==1
+    history_key='local_narration_preparations' if changed_narration else 'local_source_reviews'
+    attempt_key='local_context_attempt' if changed_narration else 'local_review_attempt'
+    assert state['source_acquisition'][history_key][0]['external_search_attempted'] is False
+    assert state['daily_quality']['collection_attempt']==4 and state['daily_quality'][attempt_key]==1
     assert state['daily_quality']['repair_round']==2 and advanced==['advance']
+    assert state['daily_quality']['pending']=='reedit'
 
 
 def test_parent_plan_file_changed_during_remap_is_held_using_pre_call_identity(tmp_path):

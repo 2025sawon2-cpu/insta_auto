@@ -34,6 +34,8 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
         self._lease = None
         self._threads = []
         self._close_lock = threading.Lock()
+        self.supervisor = None
+        self.video_agents = None
         if workers:
             self._lease = (self.store.root / "worker.lock").open("a+b")
             try:
@@ -48,6 +50,20 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
                 self._lease.close(); self._lease = None
             if self._lease:
                 try:
+                    from .studio_supervision import StudioSupervisor
+                    self.supervisor = StudioSupervisor(self)
+                    self.store.supervisor = self.supervisor
+                    self._start_owned_thread(self.supervisor.run, (), 'studio-supervision')
+                    if not self.supervisor.ready.wait(10) or not self.supervisor.healthy():
+                        raise RuntimeError('제작 감시 시작 실패 · 작업을 실행하지 않습니다.')
+                    from .video_agents import VideoAgentManager
+                    from .video_agent_runtime import configure
+                    self.video_agents=VideoAgentManager(self)
+                    configure(self,self.video_agents)
+                    self.store.video_agents=self.video_agents
+                    self._start_owned_thread(self.video_agents.run,(), 'studio-video-agents')
+                    if not self.video_agents.ready.wait(10) or not self.video_agents.healthy():
+                        raise RuntimeError('영상 담당 에이전트 시작 실패 · 작업을 실행하지 않습니다.')
                     self.store.recover()
                 # Codex writing uses the CLI, while local media/model work
                 # remains serial. A task has at most one production job at
@@ -75,11 +91,19 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
     def close(self):
         """Drain claimed work before releasing the exclusive worker lease."""
         self.stop.set()
+        if self.video_agents:self.video_agents.stop.set()
         if threading.current_thread() in self._threads:
             raise RuntimeError('Studio.close는 소유 worker 밖에서 호출해야 합니다. 실행 소유권은 유지합니다.')
         with self._close_lock:
             for thread in self._threads:
+                if thread.name == 'studio-supervision':
+                    continue
                 if thread.ident is not None:
+                    thread.join()
+            if self.supervisor:
+                self.supervisor.stop.set()
+            for thread in self._threads:
+                if thread.name == 'studio-supervision' and thread.ident is not None:
                     thread.join()
             if self._lease is not None:
                 self._lease.close()
@@ -101,8 +125,7 @@ class Studio(SelfShotMixin, CommandsMixin, MediaMixin, LifecycleMixin, Generatio
         finally:
             db.close()
         initial = {"collected_at": row["first_seen"]}
-        if (automation and automation.get('selection_mode')=='automatic' and
-                automation.get('protocol')==2 and self.settings.studio_daily_quality_enabled):
+        if self.settings.studio_daily_quality_enabled:
             from .daily_quality import POLICY
             initial['daily_quality']={'policy':POLICY,'max_repairs':max(0,self.settings.studio_daily_quality_max_repairs),
                 'repair_round':0,'status':'pending','reviews':[]}

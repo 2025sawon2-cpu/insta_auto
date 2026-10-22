@@ -28,7 +28,17 @@ def finder_fixture(tmp_path,monkeypatch):
         def __init__(self,*a):pass
         def discover_product_queries(self):calls['visual_queries']+=1;return []
     def plan(*args):
-        calls['plan']+=1;return {'products':[],'query_details':[{'query':'silver mirror','language':'en','intent':'subject'}]}
+        calls['plan']+=1;return {'products':[],
+            'query_evidence':{'caption':'은색 거울','speech':'거울을 엽니다','screen_text':'거울'},
+            'query_details':[{'query':'silver mirror','language':'en','intent':'subject'}]}
+    from hotpost.source_visual_queries import cached_visual_queries, binding, digest
+    def visual(settings,reference,frames,caption,transcript):
+        evidence=binding(reference,frames,caption,transcript)
+        proposal={'observations':[],'queries':[]}
+        review={'input_sha256':digest(evidence),'proposal_sha256':digest(proposal),'checks':[]}
+        return cached_visual_queries(settings,reference,frames,caption,transcript,
+            lambda s,instruction,data,**kw: review if 'proposal_sha256' in data else proposal)
+    monkeypatch.setattr('hotpost.source_visual_queries.cached_visual_queries',visual)
     monkeypatch.setattr(finder,'_download_reference',download);monkeypatch.setattr(finder,'extract_frames',frames)
     monkeypatch.setattr(finder,'create_contact_sheet',sheet);monkeypatch.setattr(finder,'OpenClipVerifier',Verifier)
     monkeypatch.setattr(finder,'search_google_vision',lambda *a:([],[]));monkeypatch.setattr(finder,'product_query_plan',plan)

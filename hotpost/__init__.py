@@ -5,3 +5,7 @@ influencer_list.txt 에 적힌 인플루언서들의 최근 게시물을 수집�
 """
 
 __version__ = "0.1.0"
+
+# Verify the bytes actually executed, even when timestamp-valid pyc is stale.
+from .source_loader import install as _install_source_loader
+_install_source_loader()

@@ -6,6 +6,9 @@ from hotpost.studio_workflow import current_run,init_run
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--code');p.add_argument('--kind');p.add_argument('--resume-inputs',action='store_true');a=p.parse_args()
+    p.error('독립 복구 실행은 감시 없는 제작을 막기 위해 비활성화되었습니다. '
+            '정상 서버를 실행한 뒤 제작실의 재시도 또는 자동 진행 재개 API로 같은 작업을 큐에 넣으세요. '
+            '이 도구는 설정·DB·작업 상태를 변경하지 않았습니다.')
     studio=Studio(load_settings(),workers=False)
     task=next(t for t in studio.store.list() if t['shortcode']==a.code)
     from hotpost.photo_reference import assert_creation_enabled

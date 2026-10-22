@@ -61,16 +61,17 @@ def validate_plan(settings, plan, changes=()):
     sources = {source['id']: apply_withdrawals(settings, source) for source in plan['sources']}
     shots = {shot['id']: shot for shot in plan['shots']}
     replacements = {change['beat_id']: change['shot_id'] for change in changes if 'shot_id' in change}
-    for beat in plan['beats']:
-        chosen = replacements.get(beat.get('id')) or beat.get('selected_shot_id') or (beat.get('options') or [{}])[0].get('shot_id')
+    for beat in [*plan['beats'],*plan.get('visual_cuts',[])]:
+        edit_key=beat.get('parent_beat_id',beat.get('id'))
+        chosen = replacements.get(beat.get('id')) or replacements.get(edit_key) or beat.get('selected_shot_id') or (beat.get('options') or [{}])[0].get('shot_id')
         shot = shots.get(chosen)
         if shot is None:
             continue  # The renderer validates ordinary missing-shot contracts.
         source = sources.get(shot['source_id'])
         if source is None or not source.get('source_interval_withdrawal'):
             continue
-        start = shot['start'] if beat.get('id') in replacements else beat.get('source_start', shot['start'])
-        end = shot['end'] if beat.get('id') in replacements else beat.get('source_end', shot['end'])
+        start = shot['start'] if beat.get('id') in replacements or edit_key in replacements else beat.get('source_start', shot['start'])
+        end = shot['end'] if beat.get('id') in replacements or edit_key in replacements else beat.get('source_end', shot['end'])
         if not any(span['source_start'] <= start < end <= span['source_end']
                    for span in source.get('reviewed_intervals', [])):
             raise ValueError('출력 검토에서 제외한 소스 구간이 선택되어 있습니다. 다른 장면으로 교체하세요.')

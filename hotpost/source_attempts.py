@@ -10,11 +10,11 @@ import unicodedata
 import copy
 
 SEARCH_ACCESS_WAITS = {
-    'captcha', 'verification_required', 'login_required', 'rate_limited',
+    'captcha', 'captcha_review_pending', 'verification_required', 'login_required', 'rate_limited',
     'cooldown', 'browser_busy', 'model_wait', 'service_wait', 'waiting',
     'connection_failed', 'access_denied', 'current_browser_error',
     'tab_missing', 'tab_ambiguous', 'tab_unavailable', 'browser_error_page',
-    'window_unavailable',
+    'window_unavailable', 'readiness_blocked',
 }
 SEARCH_SKIPS = {
     'not_attempted', 'no_supported_queries', 'query_exhausted',
@@ -138,6 +138,8 @@ def candidate_execution(row):
             status = 'tab_unavailable'
         elif '429' in error or 'rate_limited' in error:
             status = 'rate_limited'
+        elif 'captcha_review_pending' in error:
+            status = 'captcha_review_pending'
         elif 'captcha' in error or 'verification_required' in error:
             status = 'captcha'
         elif '403' in error:
@@ -166,11 +168,41 @@ def unresolved_search_scope(row, current_parser_revision=None):
     return not previous or not current_parser_revision or previous == current_parser_revision
 
 
+def _transfer_text(value):
+    import re
+    value=re.sub(r'https?://[^\s\"\'<>]+','[redacted-url]',value)
+    value=re.sub(r'(?i)(authorization|(?:set-)?cookie)\s*[:=][^\r\n]+',r'\1: [redacted]',value)
+    return re.sub(r'(?i)\bBearer\s+[^\s]+','Bearer [redacted]',value)[:500]
+
+
 def transfer_diagnostics(stats):
     """Keep typed transfer provenance across the candidate/manifest boundary."""
     keys = {'attempted', 'navigation_started', 'access_status', 'tab_resolution',
             'access_resolution_error', 'access_observation'}
     result = {key: copy.deepcopy(stats[key]) for key in keys if key in stats}
+    import math
+    import re
+    for key in ('started_at','ended_at','direct_ended_at','first_response_at','last_progress_at',
+                'media_responses','partial_responses','body_errors','metadata_urls',
+                'max_visible_players','assembled_files','saved_bytes','covered_bytes'):
+        value=stats.get(key)
+        if type(value) in (int,float) and math.isfinite(value) and value>=0:
+            result[key]=value
+    for key in ('stage','failure_stage','error_type','error','direct_error','method','source_kind',
+                'blocked_provider','blocked_reason'):
+        if isinstance(stats.get(key),str):
+            result[key]=_transfer_text(stats[key])
+    for key in ('complete','submitted','response_blocked','playback_started'):
+        if type(stats.get(key)) is bool:result[key]=stats[key]
+    result['stage_events']=[{'stage':_transfer_text(str(r.get('stage','')))[:60],'at':r['at']}
+        for r in (stats.get('stage_events') or [])[:40]
+        if isinstance(r,dict) and type(r.get('at')) in (int,float) and math.isfinite(r['at'])]
+    # Preserve numeric summaries, never media URLs, headers or response bodies.
+    if isinstance(stats.get('received_streams'),list):
+        result['received_streams']=[{k:v for k,v in row.items() if
+            (k in {'total_bytes','covered_bytes'} and type(v) is int and v>=0)
+            or (k=='bound_to_item' and type(v) is bool)}
+            for row in stats['received_streams'][:4] if isinstance(row,dict)]
     if isinstance(stats.get('fallback'), dict):
         result['fallback'] = transfer_diagnostics(stats['fallback'])
     return result

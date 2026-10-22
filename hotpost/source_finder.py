@@ -37,7 +37,7 @@ from .source_search.budget import charge_platform_probe
 from .request_pacing import request_pause, ytdlp_pacing_args
 from .storage import Storage
 from .source_urls import video_url, canonical_video_key
-from .source_queries import tiktok_product_queries, product_query_plan, platform_queries, clean_terms, language
+from .source_queries import tiktok_product_queries, product_query_plan, platform_queries, clean_terms, language, within_query_word_limit
 from .source_quality import (platform_of, sha256_file,
                              relevance_reasons, reuse_reasons, select_valid_candidates, media_format_reasons,
                              title_query_agreement)
@@ -174,6 +174,9 @@ def _download_reference(settings: Settings, post, out: Path) -> Path:
                 finally:
                     temporary.unlink(missing_ok=True)
                 return out
+    from .ego_source_backend import configured as ego_configured, waiting as ego_waiting
+    if ego_configured(settings):
+        ego_waiting('기존 원본 없음 · Instagram ego 참조 수신 연결 필요')
     if settings.collection_source == 'browser':
         from .instagram_video import browser_video_url
         source_url = browser_video_url(settings, post.shortcode)
@@ -483,22 +486,16 @@ def search_web(queries: list[str], limit: int, audit: list | None = None) -> lis
         return []
     out: list[Candidate] = []
     headers = {"User-Agent": "Mozilla/5.0 (compatible; hotpost-source-finder/1.0)"}
-    selected_queries = list(dict.fromkeys(q.strip() for q in queries if q.strip()))[:max(0, limit)]
+    selected_queries = list(dict.fromkeys(q.strip() for q in queries if within_query_word_limit(q)))[:max(0, limit)]
     for query_index, query in enumerate(selected_queries):
         remaining_queries = len(selected_queries) - query_index
         query_limit = max(1, (limit - len(out) + remaining_queries - 1) // remaining_queries)
         record = {'provider': 'duckduckgo', 'query': query, 'language': language(query), 'status': 'started', 'candidates': 0}
         if audit is not None: audit.append(record)
         from .source_collection_access import collection_disabled
-        domains = [('tiktok','tiktok.com'), ('douyin','douyin.com'),
-                   ('xiaohongshu','xiaohongshu.com'), ('youtube','youtube.com/shorts'),
-                   ('bilibili','bilibili.com'), ('vendor','lazada.com.ph/videodetail'),
-                   ('vendor','lazada.com.my/videodetail')]
-        scopes = ' OR '.join('site:'+host for platform, host in domains if not collection_disabled(platform))
-        scoped = f'{query} ({scopes})'
         try:
             request_pause()
-            r = requests.get("https://html.duckduckgo.com/html/", params={"q": scoped}, headers=headers, timeout=20)
+            r = requests.get("https://html.duckduckgo.com/html/", params={"q": query}, headers=headers, timeout=20)
             record.update(http_status=r.status_code, requests=[{'operation':'indexed_search','at':time.time()}])
             gate = indexed_gate('duckduckgo', r)
             if gate:
@@ -511,7 +508,7 @@ def search_web(queries: list[str], limit: int, audit: list | None = None) -> lis
         record['status'] = 'no_results'
         for href, title in re.findall(r'class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, re.S):
             url = _unwrap_ddg(html.unescape(href))
-            if not video_url(url):
+            if not video_url(url) or collection_disabled(platform_of(urlparse(url).netloc, url)):
                 continue
             out.append(Candidate(url=url, provider=urlparse(url).netloc, title=re.sub("<.*?>", "", html.unescape(title)), query=query))
             record.update(status='results', candidates=record['candidates'] + 1)
@@ -532,7 +529,7 @@ def search_bing(queries: list[str], limit: int, audit: list | None = None) -> li
         return []
     out: list[Candidate] = []
     headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150 Safari/537.36"}
-    selected_queries = list(dict.fromkeys(q.strip() for q in queries if q.strip()))[:max(0, limit)]
+    selected_queries = list(dict.fromkeys(q.strip() for q in queries if within_query_word_limit(q)))[:max(0, limit)]
     for query_index, query in enumerate(selected_queries):
         remaining_queries = len(selected_queries) - query_index
         query_limit = max(1, (limit - len(out) + remaining_queries - 1) // remaining_queries)
@@ -540,7 +537,7 @@ def search_bing(queries: list[str], limit: int, audit: list | None = None) -> li
         if audit is not None: audit.append(record)
         try:
             request_pause()
-            r = requests.get("https://www.bing.com/search", params={"q": f'{query} video'}, headers=headers, timeout=20)
+            r = requests.get("https://www.bing.com/search", params={"q": query}, headers=headers, timeout=20)
             record.update(http_status=r.status_code, requests=[{'operation':'indexed_search','at':time.time()}])
             gate = indexed_gate('bing', r)
             if gate:
@@ -739,6 +736,13 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
         candidate.error = "429 쿨다운 중인 플랫폼"
         candidate.download_attempted = False
         return None
+    from .ego_source_backend import _OWNER, configured as ego_configured, download as ego_download, waiting as ego_waiting
+    from .config import load_settings
+    active_owner = _OWNER.get()
+    backend_settings = active_owner[0] if active_owner else load_settings()
+    if ego_configured(backend_settings):
+        if not active_owner:ego_waiting('영상 수신 담당자 결속 없음')
+        return ego_download(candidate, out_dir / f'{stem}_{video_id}.mp4', max_mb * 1024 * 1024)
     candidate.acquisition = 'network'
     if candidate.platform == 'youtube':
         from .config import load_settings
@@ -757,12 +761,16 @@ def download_candidate(candidate: Candidate, out_dir: Path, index: int, max_mb: 
             return None
         finally:
             candidate.download_attempted = bool(diagnostics.get('attempted'))
+            if diagnostics.get('format_rejection_reasons'):
+                candidate.rejection_reasons = list(diagnostics['format_rejection_reasons'])
             from .source_attempts import transfer_diagnostics
             candidate.download_diagnostics = transfer_diagnostics(diagnostics)
     if candidate.platform == 'tiktok':
         from .config import load_settings
         from .tikvideo_download import with_fallback as download
         diagnostics = {'attempted':False, 'navigation_started':False}
+        from .source_transfer_trace import attach
+        attach(diagnostics,out_dir/f'{stem}_{video_id}-transfer.json')
         try:
             path = download(load_settings(), candidate.url,
                             out_dir / f'{stem}_{video_id}.mp4', max_mb * 1024 * 1024, diagnostics=diagnostics)
@@ -889,18 +897,23 @@ def create_contact_sheet(frames: list[Path], out: Path) -> None:
     sheet.save(out, quality=88)
 
 
+from .ego_source_backend import owner_bound as ego_owner_bound
+
+@ego_owner_bound
 def find_sources(settings: Settings, shortcode: str, progress: Progress | None = None, *, search_request: str = '',
                  search_round: int = 0, previous_searches: list | None = None, exclude_urls: list | None = None,
-                 search_context: dict | None = None) -> dict:
+                 search_context: dict | None = None, review_batch=None) -> dict:
     from .source_policy import current_policy
     from .source_outcomes import platform_outcomes, failure_reason
     from .editing_adapter import _atomic_json
     if not re.fullmatch(r'[A-Za-z0-9_-]+', shortcode):
         raise ValueError('올바르지 않은 게시물 ID입니다.')
-    policy = current_policy(settings)
+    policy = copy.deepcopy((search_context or {}).get('source_policy') or current_policy(settings))
+    attempt_binding={k:copy.deepcopy(search_context[k]) for k in ('run_id','search_context')
+                     if k in (search_context or {})}
     root = settings.source_dir / f"{shortcode}-{time.time_ns()}"
     root.mkdir(parents=True)
-    receipt = {'job_id':root.name, 'created_at':int(time.time()), 'shortcode':shortcode,
+    receipt = {**attempt_binding,'job_id':root.name, 'created_at':int(time.time()), 'shortcode':shortcode,
                'status':'running', 'source_policy':policy, 'source_target':policy['minimum_total'],
                'audit_checkpoint':'preparation', 'execution_audit_available':True,
                'search_audit':[], 'candidates':[], 'platform_outcomes':platform_outcomes([], [], policy['platform_minimums'])}
@@ -915,12 +928,14 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
         if progress:
             progress(message, pct)
     from .studio_pause import bind_progress, pause_scope, StudioPaused
+    from .studio_supervision import SupervisionHold
     bind_progress(report, progress)
+    report.visual_query_input = getattr(progress, 'visual_query_input', None)
     try:
         with pause_scope(report):
             return _find_sources(settings, shortcode, report, search_request=search_request,
                 search_round=search_round, previous_searches=previous_searches, exclude_urls=exclude_urls,
-                search_context=search_context, root=root, policy=policy)
+                search_context=search_context, root=root, policy=policy, review_batch=review_batch)
     except Exception as exc:
         # Preserve the attempt even when reference/model preparation fails
         # before a platform is contacted. Never invent per-platform CAPTCHA.
@@ -928,9 +943,13 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
             receipt = json.loads((root/'manifest.json').read_text(encoding='utf-8'))
         except (OSError, ValueError):
             pass
+        if review_batch is not None and hasattr(review_batch,'receipt'):
+            receipt['batch_review_checkpoint']=review_batch.receipt()
         receipt.update(status='paused' if isinstance(exc, StudioPaused) else 'failed',
                        failure={'stage':phase, 'type':type(exc).__name__,
-                       'reason':'user_stopped' if isinstance(exc, StudioPaused) else failure_reason(str(exc), default='pipeline_failed')})
+                       'reason':('supervision_hold' if isinstance(exc, SupervisionHold) else
+                                 'user_stopped' if isinstance(exc, StudioPaused) else
+                                 failure_reason(str(exc), default='pipeline_failed'))})
         if phase == 'discovery' and receipt.get('audit_checkpoint') in {'preparation','planned'}:
             # A provider may have been contacted before discovery returned.
             # Missing intermediate evidence means unknown, not unattempted.
@@ -940,7 +959,7 @@ def find_sources(settings: Settings, shortcode: str, progress: Progress | None =
 
 
 def _find_sources(settings, shortcode, progress, *, search_request, search_round, previous_searches,
-                  exclude_urls, root, policy, search_context=None):
+                  exclude_urls, root, policy, search_context=None, review_batch=None):
     from .studio_pause import bind_progress
     from .source_targets import candidate_batch, select_sources, tiktok_count, tiktok_coverage
     from .source_outcomes import platform_outcomes
@@ -954,9 +973,35 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     job_id = root.name
     frames_dir = root / "reference_frames"; candidates_dir = root / "videos"; compare_dir = root / "compare"
     candidates_dir.mkdir(parents=True); compare_dir.mkdir(parents=True)
-    from .source_preparation import prior_bundle, save_bundle, query_policy, bundle_paths
+    from .source_preparation import prior_bundle, save_bundle, query_policy, bundle_paths,load_bundle,verify_acceptance
     raw_transcript = _transcript_evidence(settings, shortcode)
-    prepared,bundle_path = prior_bundle(settings,shortcode,post.caption,raw_transcript,search_context)
+    from .source_preparation import acquisition_bundle_path
+    acquisition_bundle=acquisition_bundle_path(settings,shortcode,post.caption,raw_transcript,policy,
+        (search_context or {}).get('search_context',{}).get('product',''))
+    selected=(search_context or {}).get('planning_preparation')
+    if selected is not None:
+        from .source_preparation import digest, PreparationEvidenceWaiting
+        wanted={k:(search_context or {}).get(k) for k in
+                ('task_id','job_id','run_id','search_context','source_policy')}
+        if (not isinstance(selected,dict) or not all(wanted.values())
+                or any(selected.get(k)!=v for k,v in wanted.items())
+                or wanted['source_policy']!=policy):
+            raise PreparationEvidenceWaiting('검색 재계획 번들의 작업·실행 결속이 다릅니다.')
+        try:
+            selected_path=Path(selected['path']).resolve()
+            if (acquisition_bundle is None
+                    or selected_path.parent!=acquisition_bundle.parent.resolve()
+                    or digest(selected_path)!=selected['sha256']):
+                raise PreparationEvidenceWaiting('검색 재계획 번들의 소유 경로·SHA가 다릅니다.')
+        except (OSError,KeyError,TypeError,ValueError) as exc:
+            raise PreparationEvidenceWaiting('검색 재계획 번들의 실제 근거 확인 대기') from exc
+        acquisition_bundle=selected_path
+    if acquisition_bundle and acquisition_bundle.is_file():
+        prepared=load_bundle(acquisition_bundle,post.caption,raw_transcript)
+        verify_acceptance(prepared,acquisition_bundle,search_context,
+                          (search_context or {}).get('expected_reference_sha256'))
+        bundle_path=acquisition_bundle
+    else:prepared,bundle_path = prior_bundle(settings,shortcode,post.caption,raw_transcript,search_context)
     if prepared:
         progress('저장된 기준 영상·프레임 SHA 검증 완료 · 준비 자료 재사용',20)
         reference=Path(prepared['reference']);frames=[Path(f) for f in prepared['frames']]
@@ -1002,7 +1047,12 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         transcript=copy.deepcopy(prepared.get('transcript',transcript))
     elif transcript.get('reference_kind') not in {'screen_text', 'mixed'}:
         transcript['screen_text'] = ' '.join([transcript.get('screen_text', ''), overlay_detector.reference_text(frames)])
-    reuse_plan=bool(prepared and prepared.get('query_policy')==query_policy())
+    reuse_plan=bool(prepared and prepared.get('query_policy')==query_policy()
+        and (not policy.get('search_minimums') or prepared.get('query_plan',{}).get('source_policy')==policy))
+    if reuse_plan and policy.get('search_minimums'):
+        from .source_preparation import reusable_query_contract
+        hint=(search_context or {}).get('search_context',{}).get('product','')
+        reuse_plan=reusable_query_contract(prepared['query_plan'],policy,hint,search_context or {})
     query_plan = copy.deepcopy(prepared['query_plan']) if reuse_plan else product_query_plan(post.caption, visual_queries, vision_terms, transcript, build_queries(post.caption))
     if not prepared:
         # A query-model capacity wait must retain completed media preparation.
@@ -1015,23 +1065,111 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     if settings.source_query_model_enabled and not reuse_plan:
         from .source_planning import cached_enrich_plan
         query_plan = cached_enrich_plan(settings, query_plan, post.caption, transcript,
-                                        reference_sha256=sha256_file(reference))
+                                        reference_sha256=sha256_file(reference),
+                                        **({'acquisition_policy':policy} if policy.get('search_minimums') else {}))
+        from .source_visual_queries import cached_visual_queries, apply_visual_queries
+        if policy.get('search_minimums'):
+            from .source_topic_replanning import acquire_topic_queries as cached_visual_queries
+        progress('실제 제품 구조를 검색 명사에 연결하고 독립 검토하는 중', 26)
+        visual_owner={}
+        capture=getattr(progress,'visual_query_input',None)
+        if capture:
+            from .source_visual_queries import binding as visual_binding, digest as visual_digest
+            if policy.get('search_minimums'):
+                from .source_topic_queries import binding as visual_binding
+            visual_input=visual_binding(reference,frames,post.caption,transcript,
+                **({'search_minimums':policy['search_minimums'],
+                    'owner_binding':{k:(search_context or {}).get(k) for k in ('task_id','job_id','run_id')},
+                    'subject_hint':(search_context or {}).get('search_context',{}).get('product')
+                        or (query_plan.get('primary_subject') or {}).get('name','')}
+                   if policy.get('search_minimums') else {}))
+            visual_owner=capture(visual_digest(visual_input))
+        if policy.get('search_minimums'):
+            expected_owner={k:(search_context or {}).get(k) for k in ('task_id','job_id','run_id')}
+            if visual_owner!=expected_owner:
+                from .source_preparation import PreparationEvidenceWaiting
+                raise PreparationEvidenceWaiting('자연어 검색의 실제 작업·실행 소유권 확인 대기')
+        visual_receipt = cached_visual_queries(settings, reference, frames, post.caption, transcript,
+            **({'owner_binding':visual_owner} if capture else {}),
+            **({'search_minimums':policy['search_minimums'],
+                'subject_hint':(search_context or {}).get('search_context',{}).get('product')
+                    or (query_plan.get('primary_subject') or {}).get('name','')}
+               if policy.get('search_minimums') else {}))
+        if policy.get('search_minimums'):
+            query_plan.update(search_minimums=copy.deepcopy(policy['search_minimums']))
+        query_plan = apply_visual_queries(query_plan, visual_receipt, reference_sha256=sha256_file(reference))
+    if policy.get('search_minimums'):
+        query_plan.update(source_policy=copy.deepcopy(policy),search_minimums=copy.deepcopy(policy['search_minimums']))
+    attempt_binding={k:copy.deepcopy(search_context[k]) for k in ('run_id','search_context')
+                     if k in (search_context or {})}
+    query_plan.update(attempt_binding)
+    if (settings.source_query_model_enabled and not reuse_plan
+            and policy.get('search_minimums')
+            and query_plan.get('visual_query_evidence')
+            and query_plan['visual_query_evidence'].get('policy')!='natural-topic-search-v1'
+            and not query_plan.get('minimum_query_plan_ready')):
+        from .source_preparation import PreparationEvidenceWaiting
+        text_owner={k:(search_context or {}).get(k) for k in ('task_id','job_id','run_id')}
+        if (not all(isinstance(v,str) and v for v in text_owner.values())
+                or (search_context or {}).get('source_policy')!=policy
+                or not capture
+                or visual_owner!=text_owner
+                or visual_receipt.get('input_sha256')!=visual_digest(visual_input)
+                or visual_receipt.get('evidence')!=visual_input
+                or not query_plan.get('search_context')
+                or query_plan['search_context'].get('reference_sha256')!=sha256_file(reference)):
+            raise PreparationEvidenceWaiting('텍스트 검색 준비의 현재 작업·실행 결속이 다릅니다.')
+        from .source_text_query_receipts import cached_text_receipt, apply_text_queries
+        progress('원문 기반 검색 가설을 별도로 제안하고 독립 검토하는 중', 27)
+        text_receipt=cached_text_receipt(settings,query_plan['visual_query_evidence'],text_owner)
+        query_plan=apply_text_queries(query_plan,text_receipt,owner=text_owner)
     from .source_search.planner import grounded_actions, choose_strategy, round_queries, annotate_audit
     if not reuse_plan:
         literal_actions = grounded_actions(query_plan, {'caption':post.caption, 'speech':transcript.get('speech',''),
                                                       'screen_text':transcript.get('screen_text','')})
-        query_plan['query_details'] = [*literal_actions, *query_plan['query_details']]
+        if query_plan.get('query_selection_policy')!='natural-topic-search-v1':
+            query_plan['query_details'] = [*literal_actions, *query_plan['query_details']]
         # Policy upgrades receive a separate immutable preparation receipt.
         _,bundle_path=bundle_paths(settings,shortcode,post.caption,raw_transcript)
+        if policy.get('search_minimums'):
+            bundle_path=acquisition_bundle
+            if bundle_path.is_file():
+                from .source_preparation import replanning_bundle_path
+                bundle_path=replanning_bundle_path(bundle_path,query_plan)
         save_bundle(bundle_path,post.caption,raw_transcript,reference,frames,contact_sheet,
                     transcript=transcript,query_plan=query_plan,visual_product_queries=visual_queries,
                     google_vision_terms=vision_terms,openclip_product_evidence=verifier.product_evidence,
                     subject_reference_indices=verifier.subject_reference_indices)
+    if (search_context or {}).get('preparation_only'):
+        from .source_preparation import reusable_query_contract, digest, PreparationEvidenceWaiting
+        verified=load_bundle(bundle_path,post.caption,raw_transcript)
+        verify_acceptance(verified,bundle_path,search_context,
+                          (search_context or {}).get('expected_reference_sha256'))
+        verified_plan=verified.get('query_plan') or {}
+        hint=(search_context or {}).get('search_context',{}).get('product','')
+        if (not policy.get('search_minimums') or
+                not reusable_query_contract(verified_plan,policy,hint,search_context or {})):
+            raise PreparationEvidenceWaiting('계획 복구의 독립 검토 검색 근거가 충분하지 않습니다.')
+        preparation_manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+        preparation_manifest.update(status='prepared',audit_checkpoint='preparation_complete',
+            preparation_only=True,execution_audit_available=True,
+            preparation_bundle_path=str(Path(bundle_path).resolve()),
+            preparation_bundle_sha256=digest(bundle_path))
+        _atomic_json(root/'manifest.json',preparation_manifest)
+        return {'preparation_only':True,
+                'preparation_bundle_path':str(Path(bundle_path).resolve()),
+                'preparation_bundle_sha256':digest(bundle_path),
+                'query_plan':copy.deepcopy(verified_plan),
+                'frames':copy.deepcopy(verified['frames']),
+                **attempt_binding}
     from .search_access import access_record, manual_required
     from .source_search.readiness import readiness_blocked, readiness_record
     context = {**(search_context or {}), 'blocked_routes':[p for p in ('tiktok','douyin','xiaohongshu','bilibili','google-lens','yandex-images')
                                                         if manual_required(access_record(settings.data_dir,p)) or readiness_blocked(settings.data_dir,p)],
                'rechecked_routes':[p for p in ('tiktok','douyin','xiaohongshu','bilibili') if readiness_record(settings.data_dir,p).get('recheck_requested')]}
+    if (search_context or {}).get('support_search'):
+        from .source_core_priority import support_plan
+        query_plan=support_plan(query_plan)
     strategy = choose_strategy(query_plan, context, previous_searches)
     from .source_collection_access import disabled_platforms
     disabled = disabled_platforms(settings)
@@ -1068,6 +1206,21 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     planned.update(audit_checkpoint='planned', queries=queries, query_details=query_details,
                    search_strategy=strategy, product_evidence={k:v for k,v in query_plan.items() if k != 'query_details'})
     _atomic_json(root/'manifest.json', planned)
+    from .production_records import write_attempt as write_search_attempt
+    write_search_attempt(settings,root/'manifest.json')
+    from .source_batches import snapshot as batch_snapshot,TaskBatchReviewer
+    query_only=False
+    if ((search_context or {}).get('query_only') and isinstance(review_batch,TaskBatchReviewer)
+            and policy.get('search_minimums') and not search_request.strip() and settings.source_browser_search):
+        from .source_coverage import search_scope_for_state,query_receipts_only
+        owner=review_batch.studio.store.get(review_batch.job['task_id'])
+        eligible=(owner.get('run_id')==(search_context or {}).get('run_id')
+            and search_scope_for_state(owner)==(search_context or {}).get('search_context'))
+        if eligible:
+            initial=review_batch(batch_snapshot(root,[],0))
+            inventory=(initial or {}).get('goal') or {}
+            query_only=query_receipts_only(owner,review_batch.job,inventory)
+        query_plan['search_only']=query_only
     from .source_search.discovery import discover
     from .source_search.triage import deferred_candidates, rank_candidates, discovery_duration_reasons
     pending = deferred_candidates(search_context,exclude_urls,settings.source_max_candidates)
@@ -1076,16 +1229,29 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         previous_searches, exclude_urls, progress, services=sys.modules[__name__], deferred=pending)
     search_audit[:0] = vision_audit
     annotate_audit(search_audit, strategy)
+    def bound_audit():
+        from .source_coverage import bind_search_rows
+        rows=copy.deepcopy(search_audit)
+        if query_plan.get('search_purpose')=='support':
+            for row in rows:row['search_purpose']='support'
+        if query_plan.get('search_identity') is not None:
+            for row in rows:
+                if row.get('query') and row.get('language')!='image':
+                    if row.get('search_identity',query_plan['search_identity'])!=query_plan['search_identity']:
+                        raise ValueError('실제 검색 영수증의 핵심 제품 계약이 다릅니다.')
+                    row['search_identity']=copy.deepcopy(query_plan['search_identity'])
+        return bind_search_rows(rows,attempt_binding.get('run_id'),attempt_binding.get('search_context'))
     def save_attempts(status='running'):
-        _atomic_json(root/'manifest.json', {'job_id':job_id, 'created_at':int(time.time()), 'shortcode':shortcode,
+        _atomic_json(root/'manifest.json', {**attempt_binding,'job_id':job_id, 'created_at':int(time.time()), 'shortcode':shortcode,
             'status':status, 'source_policy':policy, 'source_target':policy['minimum_total'],
             'audit_checkpoint':'discovered', 'execution_audit_available':True,
             'queries':queries, 'query_details':query_details,
             'search_strategy':strategy,
             'product_evidence':{k:v for k,v in query_plan.items() if k != 'query_details'},
             'verification_notes':verification_notes,
-            'search_audit':search_audit, 'candidates':[asdict(c) for c in candidates],
+            'search_audit':bound_audit(), 'candidates':[asdict(c) for c in candidates],
             'platform_outcomes':platform_outcomes(candidates, search_audit, policy['platform_minimums'])})
+        write_search_attempt(settings,root/'manifest.json')
     save_attempts()
     candidates = _dedupe(candidates)
     already_checked = {canonical_video_key(url) for url in exclude_urls or [] if url}
@@ -1094,7 +1260,8 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     for candidate in invalid_candidates:
         candidate.rejection_reasons = ['not_video_url']
     ranked = rank_candidates([c for c in candidates if video_url(c.url)],query_plan)
-    candidates = candidate_batch(ranked, settings.source_max_candidates, tiktok_preference)
+    candidates = candidate_batch(ranked, settings.source_max_candidates, tiktok_preference,
+        **({'core_priority':True} if policy.get('version')==6 else {}))
     progress(f"후보 {len(candidates)}개를 확인하는 중", 50)
     probed = 0
     attempted = 0
@@ -1104,7 +1271,22 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
     refined = False
     platform_seconds = {}
     probe_progress = 50
-    for i, candidate in enumerate(candidates, 1):
+    from .source_batches import BATCH_SIZE, snapshot as batch_snapshot
+    batch_enabled = policy.get('completion_mode') == 'scene_duration' and review_batch is not None
+    batch_received = set()
+    last_batch_index = 0
+    batch_number = 0
+    batch_result = None
+    if query_only:
+        batch_number=1
+        batch_result=review_batch(batch_snapshot(root,[],batch_number))
+        inventory=(batch_result or {}).get('goal') or {}
+        query_only=bool(inventory.get('source_diversity_ready') and inventory.get('core_ready')
+                        and not inventory.get('selection_recovery_required'))
+        if query_only:
+            budget_stop='search_receipts_only_existing_reviewed_inventory'
+            for candidate in candidates:candidate.download_attempted=False
+    for i, candidate in enumerate([] if query_only else candidates, 1):
         from .source_collection_access import collection_disabled
         if collection_disabled(candidate.platform, settings):
             candidate.download_attempted = False
@@ -1217,11 +1399,23 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         save_attempts()
         probe_progress = max(probe_progress, min(88, 50 + int(i / max(1, len(candidates)) * 38)))
         progress(f"후보 다운로드/검증 {i}/{len(candidates)}", probe_progress)
+        if batch_enabled:
+            received = {c.downloaded_file for c in candidates if c.downloaded_file and not c.rejection_reasons}
+            if received - batch_received and (i-last_batch_index >= BATCH_SIZE or i == len(candidates)):
+                batch_number += 1
+                batch_result = review_batch(batch_snapshot(root, candidates, batch_number))
+                if not isinstance(batch_result, dict) or type(batch_result.get('ready')) is not bool:
+                    raise ValueError('Task-scoped batch review did not return a readiness decision')
+                batch_received = received
+                last_batch_index = i
+                if batch_result['ready']:
+                    break
         # 부족한 경우 플랫폼별 미사용 검색어와 검증된 제목 근거로 한 차례 확장한다.
         usable = len(select_valid_candidates(copy.deepcopy([c for c in candidates
                      if editing_ready(asdict(c))]), settings.source_max_downloads))
-        if ((i == len(candidates) or i == min(20, len(candidates))) and not refined
-                and (sum(bool(c.downloaded_file) and not c.rejection_reasons for c in candidates) < settings.source_max_downloads
+        if ((i == len(candidates) or (not batch_enabled and i == min(20, len(candidates)))) and not refined
+                and ((bool(batch_result) and not batch_result['ready'])
+                     or not any(c.downloaded_file and not c.rejection_reasons for c in candidates)
                      if policy.get('completion_mode') == 'scene_duration' else
                      usable < policy['minimum_total'] or tiktok_count(candidates, settings.source_max_downloads) < tiktok_target)
                 and settings.source_refine_max_candidates > 0
@@ -1236,7 +1430,7 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                 extra_queries = list(dict.fromkeys(d['query'] for d in refinement_details))
                 if extra_queries:
                     probe_progress = max(probe_progress, 80)
-                    progress((f'후보 확보 {sum(bool(c.downloaded_file) and not c.rejection_reasons for c in candidates)}개 · 장면 검토 대기 · 추가 검색 중'
+                    progress((f'후보 확보 {sum(bool(c.downloaded_file) and not c.rejection_reasons for c in candidates)}개 · 사용 가능 분량 부족 · 추가 검색 중'
                               if policy.get('completion_mode') == 'scene_duration' else
                               f'유효 소스 {usable}개 · TikTok {tiktok_count(candidates, settings.source_max_downloads)}/{tiktok_target}개 · 추가 검색 중'), 80)
                     search_started = time.monotonic()
@@ -1262,25 +1456,37 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                     novel = [c for c in _dedupe(extra) if video_url(c.url) and canonical_video_key(c.url) not in seen]
                     # Probe fresh search intents before reusing the remaining candidate slots.
                     candidates[i:i] = candidate_batch(rank_candidates(novel,query_plan), max(0, min(settings.source_refine_max_candidates,
-                                                                         settings.source_max_attempts - attempted)), tiktok_target)
-    candidates.sort(key=lambda c: (c.downloaded_file != "", c.source_score or 0, c.similarity or 0), reverse=True)
+                                                                         settings.source_max_attempts - attempted)), tiktok_target,
+                                                     **({'core_priority':True} if policy.get('version')==6 else {}))
+    if batch_enabled:
+        received = {c.downloaded_file for c in candidates if c.downloaded_file and not c.rejection_reasons}
+        if received - batch_received:
+            batch_number += 1
+            batch_result = review_batch(batch_snapshot(root,candidates,batch_number))
+            if not isinstance(batch_result,dict) or type(batch_result.get('ready')) is not bool:
+                raise ValueError('Task-scoped batch review did not return a readiness decision')
+    candidates.sort(key=lambda c: (c.downloaded_file != "", not bool(c.similarity_warnings), c.source_score or 0, c.similarity or 0), reverse=True)
     candidates.extend(invalid_candidates)
     selected = select_sources(candidates, settings.source_max_downloads, tiktok_target,
-                              required=bool(policy.get('platform_minimums')))
+                              required=bool(policy.get('platform_minimums')),
+                              **({'core_priority':True} if policy.get('version')==6 else {}))
     coverage = tiktok_coverage(candidates, search_audit, tiktok_target, budget_stop)
     downloaded = len(selected)
     quality_counts = {key: sum(c.selected_for_zip and c.source_quality == key for c in candidates)
                       for key in ("clean-source", "light-overlay", "edited-with-text", "unknown")}
     manifest = {
+        **attempt_binding,
         "job_id": job_id, "created_at": int(time.time()), "shortcode": shortcode, "reference_url": post.url,
         "status":"completed", "source_policy":policy,
         "audit_checkpoint":"completed", "execution_audit_available":True,
         "caption": post.caption, "queries": queries, "query_details": query_details,
         "product_evidence": {key: value for key, value in query_plan.items() if key != 'query_details'},
         "match_mode": settings.source_match_mode, "budget_stop": budget_stop,
+        "batch_review": batch_result,
+        "batch_review_checkpoint":review_batch.receipt() if review_batch is not None and hasattr(review_batch,'receipt') else None,
         "refinement_query_details": refinement_details,
         "search_strategy": strategy,
-        "search_audit": search_audit, "search_policy_version": 6,
+        "search_audit": bound_audit(), "search_policy_version": 6,
         "source_target": policy['minimum_total'],
         "platform_targets": {"tiktok": coverage} if policy.get('platform_minimums') else {},
         "platform_preferences": {"tiktok": {**coverage, 'required': False}} if tiktok_target else {},
@@ -1307,6 +1513,7 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
         "rights_notice": "각 파일의 저작권과 상업적 이용 허가를 원 출처에서 확인한 뒤 사용하세요. Pexels 항목만 Pexels 라이선스로 표시됩니다.",
     }
     _atomic_json(root / "manifest.json", manifest)
+    write_search_attempt(settings,root/'manifest.json')
     # 기준 릴스는 분석용일 뿐 소스 ZIP에는 넣지 않는다.
     zip_path = root / f"sources_{shortcode}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -1319,7 +1526,8 @@ def _find_sources(settings, shortcode, progress, *, search_request, search_round
                 z.write(root / c.downloaded_file, f"{folder}/{Path(c.downloaded_file).name}")
             if c.selected_for_zip and c.preview_file:
                 z.write(root / c.preview_file, c.preview_file)
-    progress(f"후보 확보 완료 · {len(selected)}개 · 장면·사용 가능 길이 검토 대기 · TikTok 선호 {tiktok_target}개", 100)
+    review_status = '검토한 사용 가능 분량 충족' if (batch_result or {}).get('ready') else '장면·사용 가능 길이 추가 검토'
+    progress(f"후보 확보 완료 · {len(selected)}개 · {review_status} · TikTok 선호 {tiktok_target}개", 100)
     manifest["zip_path"] = str(zip_path)
     return manifest
 

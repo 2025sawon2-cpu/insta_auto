@@ -26,10 +26,16 @@ def read_bound_json(path):
 
 def binding(state, job):
     reference=Path(state.get('reference_video') or '')
-    return {'task_id': state['id'], 'studio_job_id': job['id'],
+    result={'task_id': state['id'], 'studio_job_id': job['id'],
             'run_id': job.get('payload', {}).get('run_id', state.get('run_id')),
             'shortcode': state['shortcode'], 'source_request':job.get('payload',{}).get('request',''),
             'reference_sha256':sha(reference) if reference.is_file() else None}
+    from .source_policy import run_policy
+    from .source_coverage import diversity_required, search_scope_for_state
+    policy=run_policy(state)
+    if diversity_required(policy):
+        result.update(source_policy=policy,search_context=search_scope_for_state(state))
+    return result
 
 
 def validate_root(source_dir, descriptor, state, job):
@@ -65,6 +71,9 @@ def snapshot(source_dir, descriptor, state, job):
         data, manifest_sha = read_bound_json(manifest)
         if data.get('shortcode') != state['shortcode'] or data.get('job_id') != manifest.parent.name:
             raise SourceReceiptWaiting('수집 중단 원본 영수증 식별 확인 대기')
+        scope=binding(state,job)
+        if scope.get('search_context') and any(k in data and data[k]!=scope[k] for k in ('run_id','search_context')):
+            raise SourceReceiptWaiting('수집 중단 manifest의 실행·제품 범위 결속 확인 대기')
         searches = copy.deepcopy(data.get('search_audit', []))
         if data.get('execution_audit_available') is False and not descriptor.get('workers'):
             raise SourceReceiptWaiting('실제 검색 실행 기록 미확정 · 자동 재검색 보류')
@@ -80,7 +89,10 @@ def snapshot(source_dir, descriptor, state, job):
             for row in saved.get('candidates', []):
                 if row.get('url'):
                     candidates.setdefault(row['url'], copy.deepcopy(row))
-        return {**binding(state, job), 'manifest_path': str(manifest),
+        if scope.get('search_context'):
+            from .source_coverage import bind_search_rows
+            searches=bind_search_rows(searches,scope['run_id'],scope['search_context'])
+        return {**scope, 'manifest_path': str(manifest),
                 'manifest_sha256': manifest_sha, 'worker_checkpoints': checkpoints,
                 'searches': searches, 'candidates': list(candidates.values())}
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -115,10 +127,70 @@ def verified_receipt(source_dir, descriptor, state, job):
 
 def merge_receipt(record, receipt):
     """Execution ledgers only: no rounds, failure counters or source approval."""
-    record['queries'] = merge_history(record.get('queries', []), receipt.get('searches', []))
+    from .source_coverage import bind_search_rows
+    searches=bind_search_rows(receipt.get('searches',[]),receipt.get('run_id'),receipt.get('search_context'))
+    record['queries'] = merge_history(record.get('queries', []), searches)
     ledgers = candidate_ledgers(receipt.get('candidates', []))
     for field, incoming in [('urls', 'attempted_urls'), ('inspected_urls', 'inspected_urls')]:
         record[field] = list(dict.fromkeys([*record.get(field, []), *ledgers[incoming]]))
     saved = record.setdefault('interrupted_attempts', [])
     if not any(r.get('receipt_sha256') == receipt.get('receipt_sha256') for r in saved):
         saved.append(copy.deepcopy(receipt))
+
+
+def resolve_settled_pre_submit(record):
+    """Release only a host-accepted, byte-verified interruption before typing.
+
+    The immutable receipt is created only after all registered children settle.
+    A bare ``started`` row, elapsed time or parser change cannot authorize replay.
+    Submitted/submit-intent and actual UI failures remain unresolved.
+    Native search checkpoints a search_input request synchronously BEFORE typing;
+    accepting only rows without that marker also excludes killed-after-Enter gaps.
+    """
+    for accepted in record.get('interrupted_attempts', []):
+        try:
+            path = Path(accepted['receipt_path']).resolve()
+            manifest = Path(accepted['manifest_path']).resolve()
+            if path != manifest.parent/'interrupted-execution-receipt.json':
+                continue
+            receipt, digest = read_bound_json(path)
+            if digest != accepted['receipt_sha256']:
+                continue
+            if receipt != {k:v for k,v in accepted.items() if k not in {'receipt_path','receipt_sha256'}}:
+                continue
+            if sha(manifest) != receipt['manifest_sha256']:
+                continue
+            workers = receipt.get('worker_checkpoints') or []
+            if not workers:
+                continue
+            from .source_coverage import bind_search_rows
+            actual_rows = []
+            for worker in workers:
+                child = validate_child(manifest, worker['path'])
+                data, actual_sha = read_bound_json(child)
+                if actual_sha != worker['sha256']:
+                    raise ValueError('changed child')
+                actual_rows.extend(bind_search_rows(data.get('searches', []),
+                    receipt.get('run_id'), receipt.get('search_context')))
+            for row in record.get('queries', []):
+                execution = row.get('execution') or {}
+                if (row.get('status') != 'started' or row.get('language') == 'image'
+                        or row.get('stage') not in {'locate_search_input','open_search_panel'}
+                        or execution.get('query_submitted') is not False
+                        or execution.get('query_url_matched') is not False
+                        or execution.get('submit_intent') or execution.get('submitted_at')
+                        or execution.get('input_value') or execution.get('actual_input_value')
+                        or row.get('requests') or execution.get('resolution')):
+                    continue
+                if not any(all(observed.get(k) == v for k,v in row.items())
+                           for observed in actual_rows):
+                    continue
+                before = copy.deepcopy(row)
+                execution.update(resolution='confirmed_not_submitted',
+                                 resolution_receipt_sha256=digest)
+                record.setdefault('search_resolutions', []).append({
+                    'basis':'settled_worker_interrupted_before_input',
+                    'receipt_sha256':digest, 'previous':before})
+        except (OSError, ValueError, KeyError, TypeError, SourceReceiptWaiting):
+            # Keep uncertainty blocked; never repair a damaged receipt by guessing.
+            continue

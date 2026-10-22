@@ -163,3 +163,39 @@ def test_many_ranked_candidates_are_not_prorated_by_platform_elapsed_time(probe_
 def test_time_allocator_has_been_removed():
     from hotpost.source_search import budget
     assert not hasattr(budget,'candidate_probe_seconds')
+
+
+@pytest.mark.parametrize('ready_at,expected_downloads',[(1,3),(2,6),(3,7)])
+def test_download_batches_wait_for_real_review_and_stop_when_ready(probe_run,monkeypatch,ready_at,expected_downloads):
+    from hotpost import source_finder as sf
+    monkeypatch.setattr(sf,'search_local_hints',lambda *_:[
+        Candidate(f'https://youtube.com/watch?v=batch-{i}','youtube') for i in range(7)])
+    probe_run.settings.source_max_probe_downloads=20
+    snapshots=[]
+    def review(path):
+        before=path.read_bytes();value=json.loads(before)
+        assert value['status']=='review_pending'
+        assert len(probe_run.attempts)==len(value['candidates'])
+        snapshots.append((path,before))
+        return {'ready':len(snapshots)==ready_at}
+    result=sf.find_sources(probe_run.settings,'ref',review_batch=review)
+    assert len(probe_run.attempts)==expected_downloads
+    assert all(path.read_bytes()==raw for path,raw in snapshots)
+    assert result['batch_review']['ready'] is True
+    assert not result['quota_ready']  # Finder cannot manufacture an approval.
+
+
+def test_review_pause_stops_before_next_download_and_keeps_batch(probe_run,monkeypatch):
+    from hotpost import source_finder as sf
+    from hotpost.studio_pause import StudioPaused
+    monkeypatch.setattr(sf,'search_local_hints',lambda *_:[
+        Candidate(f'https://youtube.com/watch?v=pause-{i}','youtube') for i in range(8)])
+    probe_run.settings.source_max_probe_downloads=20
+    def pause(path):
+        assert path.is_file()
+        raise StudioPaused('preserve this review input')
+    with pytest.raises(StudioPaused):sf.find_sources(probe_run.settings,'ref',review_batch=pause)
+    assert len(probe_run.attempts)==3
+    manifest=next(probe_run.settings.source_dir.glob('ref-*/manifest.json'))
+    assert json.loads(manifest.read_text('utf8'))['status']=='paused'
+    assert manifest.with_name('batch-0001.json').is_file()

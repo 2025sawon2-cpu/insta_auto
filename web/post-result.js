@@ -58,6 +58,7 @@
     }).join('');
   }
   function sourceSummary(m){
+    if(m.goal.duration_requirement==='preference')return `사용 가능 ${m.goal.usable_seconds}초 · 권장 ${m.goal.required_seconds}초 · ${m.goal.count}개`;
     return m.goal.required_seconds!=null
       ? `사용 가능 ${m.goal.usable_seconds}/${m.goal.required_seconds}초 · ${m.goal.count}개`
       : `${m.goal.count}${m.active?.video_url?'':'/'+m.goal.target}개 확보`;
@@ -67,7 +68,7 @@
     const go=(tab,text)=>`<a class="pr-text-link" href="${esc(href(t,tab))}">${text} →</a>`;
     if(key==='sources'){
       const rows={...m.goal.platforms},issues={},names={tiktok:'틱톡',douyin:'더우인',xiaohongshu:'샤오홍슈',instagram:'인스타그램',youtube:'유튜브',bilibili:'빌리빌리','google-lens':'Google 검색','yandex-images':'Yandex 검색'};
-      const notes={captcha:'인증 대기',verification_required:'인증 확인 필요',login_required:'로그인 필요',rate_limited:'요청 제한',cooldown:'재시도 대기',timeout:'응답 지연',error:'검색 오류',page_unresolved:'검색 화면 확인 실패',no_supported_queries:'검색어 보완 중'};
+      const notes={captcha:'인증 대기',captcha_review_pending:'인증 의심 화면 재검토 대기',verification_required:'인증 확인 필요',login_required:'로그인 필요',rate_limited:'요청 제한',cooldown:'재시도 대기',timeout:'응답 지연',error:'검색 오류',page_unresolved:'검색 화면 확인 실패',no_supported_queries:'검색어 보완 중'};
       for(const r of t.source_audit?.searches||[]){const name=names[r.provider];if(name){issues[name]=notes[r.status]||'';if(issues[name]&&!(name in rows))rows[name]=0;}}
       const liveNote=t.source_search?.status==='running'?String(t.source_search.message||''):'';
       const livePlatform=Object.keys(names).find(p=>liveNote.toLowerCase().startsWith(p));
@@ -98,7 +99,8 @@
     const item=(control,feedback)=>`<div class="pr-action-item">${control}${feedback?`<small>${esc(feedback)}</small>`:''}</div>`;
     return item(`<button type="button" class="pr-secondary" data-view-result ${!ready?'disabled':''}>완성 영상 보기</button>`,ready?'':reason)
       +item(download?`<a class="pr-primary" href="${esc(download)}" download>↓ 영상 다운로드</a>`:'<button type="button" class="pr-primary" disabled>↓ 영상 다운로드</button>',download?'':ready?'다운로드 파일이 준비되지 않았어요.':reason)
-      +item(t.id?`<a class="pr-secondary" href="${esc(href(t,historical?'results':'edit',run?.id))}">${historical?'이 영상의 제작 자료 보기':'제작실에서 수정'}</a>`:'<button type="button" class="pr-secondary" disabled>제작실에서 수정</button>',t.id?'':'제작 작업 등록 후 사용할 수 있어요.');
+      +item(t.id?`<a class="pr-secondary" href="${esc(href(t,historical?'results':'edit',run?.id))}">${historical?'이 영상의 제작 자료 보기':'제작실에서 수정'}</a>`:'<button type="button" class="pr-secondary" disabled>제작실에서 수정</button>',t.id?'':'제작 작업 등록 후 사용할 수 있어요.')
+      +(ready&&t.status==='completed'?item(`<a class="pr-secondary" href="monetization.html?task=${encodeURIComponent(t.id)}">게시글·상품 링크·자동 DM 준비</a>`,''):'');
   }
   function mountEmpty(root,reason='제작 작업이 아직 등록되지 않았어요.') {
     delete root._postId;root.onclick=null;

@@ -17,6 +17,7 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
     pools = [('deferred-candidates', deferred or []),
              ('operator-shortlist', services.search_local_hints(settings, shortcode)),
              ('local-cache', cached), ('source-library', library)]
+    from ..search_access import access_record, manual_required
     shortlist, shortlist_audit, seen = [], [], set(used)
     for provider, candidates in pools:
         added = 0
@@ -24,13 +25,20 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
             identity = canonical_video_key(candidate.url)
             if identity in seen or candidate.platform in disabled:
                 continue
+            if provider == 'deferred-candidates' and manual_required(access_record(settings.data_dir, candidate.platform)):
+                continue
             shortlist.append(candidate)
             seen.add(identity)
             added += 1
         if added:
             shortlist_audit.append({'provider':provider, 'query':'', 'status':'results', 'candidates':added})
     tiktok_preference = max(0, settings.source_tiktok_min_usable)
-    if shortlist:
+    minimums=query_plan.get('search_minimums') or {}
+    from ..source_coverage import actual_search_coverage
+    coverage=actual_search_coverage(previous_searches or [],minimums,query_plan.get('search_identity'))
+    pending=bool(minimums) and not all(r['ready'] for r in coverage.values())
+    search_only=bool(query_plan.get('search_only'))
+    if not pending and (shortlist or search_only):
         label = '저장된 소스·공개' if any(row['provider'] in {'local-cache','source-library'} for row in shortlist_audit) else '시간 부족으로 미검증한' if deferred else '확보한 공개'
         progress(f"{label} 후보 {len(shortlist)}개부터 검증하는 중", 42)
         browser = {"candidates": [], "terms": [], "notes": []}
@@ -38,7 +46,7 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
     browser_result = {"candidates": [], "terms": [], "notes": []}
     strategy = query_plan.get('search_strategy')
     allowed = strategy['routes'] if strategy else None
-    search_audit = []
+    search_audit = list(shortlist_audit)
     def enabled(provider):
         return allowed is None or provider in allowed
     def run_browser():
@@ -47,6 +55,9 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
             from ..browser_search import browser_search
             options = {'routes':allowed} if strategy else {}
             options['provider_queries'] = {'tiktok': tiktok_product_queries(query_plan, queries)}
+            if minimums:options['search_minimums']=minimums
+            if query_plan.get('search_identity') is not None:options['search_identity']=query_plan['search_identity']
+            if search_only:options['search_only']=True
             from ..studio_pause import bind_progress
             browser_result = browser_search(settings, frames, queries, settings.source_max_candidates, root / "browser_debug",
                                             previous_searches=[*(previous_searches or []), *search_audit],
@@ -64,7 +75,7 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
         # silently invoke yt-dlp search or a separate indexed HTTP search.
         run_browser()
         queries = list(dict.fromkeys(q for q in queries if q.strip()))
-        candidates = [*vision_candidates,
+        candidates = [*shortlist,*vision_candidates,
                       *(services.Candidate(**item) for item in browser_result['candidates'])]
         candidates = [c for c in candidates if c.platform not in disabled]
         return candidates, queries, browser_result, search_audit, tiktok_preference
@@ -74,14 +85,14 @@ def discover(settings, shortcode, frames, queries, query_plan, vision_candidates
     # Keep the grounded pool even after all routes exhaust it. Image labels
     # must not silently replace the actual subject with background objects.
     queries = list(dict.fromkeys(q for q in queries if q.strip()))
-    candidates = list(vision_candidates)
+    candidates = [*shortlist,*vision_candidates]
     if not defer_browser:
         candidates += [services.Candidate(**item) for item in browser_result["candidates"]]
     def available(pool, provider, maximum, language_provider=None):
         selected = fresh_queries(pool, provider, [*(previous_searches or []), *search_audit])
         if not selected:
             search_audit.append({'provider':provider, 'query':'', 'status':'query_exhausted' if pool else 'no_supported_queries', 'candidates':0})
-        return platform_queries(selected, language_provider or provider, maximum)
+        return platform_queries(selected, language_provider or provider, maximum,search_minimums=minimums)
     progress("공개 웹 검색 결과를 합치는 중", 42)
     per_platform = max(4, settings.source_max_candidates // 5)
     # Ordinary indexed public TikTok links supplement low-yield in-site search.

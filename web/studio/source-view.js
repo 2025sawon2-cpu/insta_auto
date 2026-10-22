@@ -34,11 +34,15 @@
     const {busy,failed,missing}=sourceSearchState(t),search=t.source_search||{};
     if(t.creation_mode==='self_shot')return `<p class="pf-help">내 촬영 영상 ${t.sources.length}/20개 · 사용할 영상을 선택하세요.</p>`;
     if(t.source_goal){
-      const g=t.source_goal,summary=g.required_seconds!=null?`사용 가능 ${esc(g.usable_seconds)}/${esc(g.required_seconds)}초 · ${esc(g.count)}개`:`${esc(g.count)}/${esc(g.target)}개`,labels=Object.entries(g.platforms||{}).map(([p,n])=>`${esc(p)} ${n}개`).join(' · ');
+      const g=t.source_goal,summary=g.duration_requirement==='preference'?`사용 가능 ${esc(g.usable_seconds)}초 · 권장 ${esc(g.required_seconds)}초 · ${esc(g.count)}개`:g.required_seconds!=null?`사용 가능 ${esc(g.usable_seconds)}/${esc(g.required_seconds)}초 · ${esc(g.count)}개`:`${esc(g.count)}/${esc(g.target)}개`,labels=Object.entries(g.platforms||{}).map(([p,n])=>`${esc(p)} ${n}개`).join(' · ');
       const quota=Object.entries(g.platform_targets||{}).map(([p,c])=>`${esc(p==='tiktok'?'틱톡':p)} ${c.usable}/${c.target}개`).join(' · ');
       const preferenceLine=Object.entries(g.platform_preferences||{}).map(([p,q])=>`<p>선호 목표 · ${esc(p==='tiktok'?'틱톡':p)} ${esc(q.usable)}/${esc(q.target)}개 · 완료 필수조건 아님</p>`).join('');
-      const durationLine=g.required_seconds!=null?`<p>핵심 장면 ${esc(g.core_seconds)}/${esc(g.core_required_seconds)}초 · ${g.duration_basis==='voice'?'음성 길이':g.duration_basis==='reference'?'원본 길이':'임시 길이'} ${esc(g.output_seconds)}초 기준</p>`:'';
-      const quotaLine=(quota?`<p><strong>필수 확보 기준 · ${quota}</strong></p>`:'')+(search.strategy_message?`<p class="pf-help" data-search-strategy>${esc(search.strategy_message)}</p>`:'');
+      const durationLine=g.required_seconds!=null?`<p>핵심 장면 ${esc(g.core_seconds)}초${g.core_duration_requirement==='preference'?` · 권장 ${esc(g.core_required_seconds)}초`:`/${esc(g.core_required_seconds)}초`} · ${g.duration_basis==='voice'?'음성 길이':g.duration_basis==='reference'?'원본 길이':'임시 길이'} ${esc(g.output_seconds)}초 기준</p>`:'';
+      const coverage=g.search_coverage;
+      const minimumLine=coverage?`<p data-source-minimums>관련 원본 ${esc(g.related_parent_count)}/${esc(g.required_parent_sources)}개 · 실제 영어 검색 ${esc(coverage.en.count)}/${esc(coverage.en.minimum)}개 · 중국어 검색 ${esc(coverage.zh.count)}/${esc(coverage.zh.minimum)}개</p>`:'';
+      const usage=item(t,'edits',t.edit_id)?.source_usage;
+      const bodyLine=usage?`<p data-body-source-usage>현재 본문 사용 원본 ${esc(usage.used_parent_sources)}개${usage.enforced?` · 최소 ${esc(usage.minimum_parent_sources)}개`:''}</p>`:'';
+      const quotaLine=minimumLine+bodyLine+(quota?`<p><strong>필수 확보 기준 · ${quota}</strong></p>`:'')+(search.strategy_message?`<p class="pf-help" data-search-strategy>${esc(search.strategy_message)}</p>`:'');
       const hold=t.source_acquisition?.hold||search.hold;
       if(!busy&&!g.ready&&hold)return `<div class="pf-search-notice is-error" role="status"><strong>소스 자동 수집 중지 · ${summary}</strong><p>${esc(search.message||t.message)}</p>${quotaLine}${preferenceLine}${durationLine}<small>확보한 영상·대본·음성은 보존됩니다. 검색 내역의 인증·로그인 문제를 해결하거나 아래에서 새로운 검색 조건을 입력하세요. 이미 수행한 검색은 자동 반복하지 않습니다.</small></div>`;
       const failedJob=(t.jobs||[]).find(j=>j.kind==='collect_sources'&&j.status==='failed');
@@ -54,7 +58,7 @@
   }
   function sourceSearchPanel(t){
     const {busy,failed,missing}=sourceSearchState(t);
-    return `<section class="pf-source-search">${!busy&&!failed&&!missing?'<div class="pf-search-record">'+sourceSearchStatus(t)+'</div>':''}<details class="pf-advanced" data-search-options ${!t.sources?.length&&!busy?'open':''}><summary>조건을 바꿔 추가 검색</summary><p class="pf-help">원하는 장면이 부족할 때 제품명·동작·촬영 장면을 구체적으로 입력하세요. 처음 소스 찾기와 같은 검색을 새 조건으로 다시 실행하며, 기존 영상은 유지합니다.</p><label>추가로 필요한 장면<textarea data-field="search" maxlength="1000" placeholder="예: 캠핑 수납 가방을 펼쳐 내부 칸막이를 보여주는 장면" aria-describedby="source-search-help"></textarea></label><p class="pf-help" id="source-search-help">새 영상이 발견되지 않을 수도 있습니다. 기존 결과의 다음 페이지를 가져오는 기능은 아닙니다.</p><button data-pf="search" ${busy?'disabled':''}>입력한 조건으로 추가 검색</button><p data-search-validation role="status"></p>${audit(t.source_audit)}</details></section>`;
+    return `<section class="pf-source-search"><div class="pf-search-record" data-search-status>${sourceSearchStatus(t)}</div><details class="pf-advanced" data-search-options ${!t.sources?.length&&!busy?'open':''}><summary>조건을 바꿔 추가 검색</summary><p class="pf-help">원하는 장면이 부족할 때 제품명·동작·촬영 장면을 구체적으로 입력하세요. 처음 소스 찾기와 같은 검색을 새 조건으로 다시 실행하며, 기존 영상은 유지합니다.</p><label>추가로 필요한 장면<textarea data-field="search" maxlength="1000" placeholder="예: 캠핑 수납 가방을 펼쳐 내부 칸막이를 보여주는 장면" aria-describedby="source-search-help"></textarea></label><p class="pf-help" id="source-search-help">새 영상이 발견되지 않을 수도 있습니다. 기존 결과의 다음 페이지를 가져오는 기능은 아닙니다.</p><button data-pf="search" ${busy?'disabled':''}>입력한 조건으로 추가 검색</button><p data-search-validation role="status"></p>${audit(t.source_audit)}</details></section>`;
   }
   function updateSourceSearch(root,t){
     const box=root.querySelector('[data-search-status]');
@@ -68,9 +72,9 @@
     const formatLabels={low_resolution:'원본 해상도 주의',not_crop_friendly:'넓은 가로 구도',portrait_crop_required:'세로 크롭 필요',low_portrait_resolution:'세로 크롭 후 해상도 주의'};
     const portraitInfo=c=>`${c.format_warnings?.length?`<br>참고 경고 · ${c.format_warnings.map(w=>esc(formatLabels[w]||w)).join(' · ')} · 자동 탈락 조건 아님`:''}${c.portrait_geometry?`<br>세로 크롭 유효 해상도 ${esc(c.portrait_geometry.effective_width)}×${esc(c.portrait_geometry.effective_height)}`:''}${c.presentation_review?.usable!=null?`<br>세로 화면 검토 · ${c.presentation_review.usable?'사용 가능':'사용 어려움'}${c.presentation_review.reason?' · '+esc(c.presentation_review.reason):''}`:''}`;
     const reasons={download_failed:'다운로드 실패',invalid_duration:'영상 길이 확인 필요',heavy_text_overlay:'자막이 많은 영상',low_product_or_scene_similarity:'주제·장면 불일치',title_query_mismatch:'검색어 불일치',low_resolution:'해상도 부족',not_probed:'영상 확인 대기',verification_failed:'영상 검증 실패',platform_budget_exhausted:'검색 시간 종료',download_budget_deferred:'남은 시간 부족으로 다음 검사에 이월',platform_cooldown:'검색 서비스 휴식 중'};
-    const statuses={timeout:'시간 초과',results:'후보 발견',no_results:'결과 없음',login_required:'로그인 필요',captcha:'사람 확인 필요',verification_required:'이전 인증 차단으로 검색 건너뜀',rate_limited:'요청 제한',cooldown:'재시도 대기',error:'검색 실패',http_error:'응답 오류',started:'검색 시작',no_supported_queries:'지원 언어 검색어 없음',query_exhausted:'이 경로의 미사용 검색어 소진',image_exhausted:'미사용 장면 이미지 소진',strategy_skipped:'이전 실패에 따라 다른 경로로 전환',page_unresolved:'검색 화면에서 결과를 판독하지 못함',readiness_blocked:'페이지 판독 실패로 재검색 중지'};
+    const statuses={timeout:'시간 초과',results:'후보 발견',no_results:'결과 없음',login_required:'로그인 필요',captcha:'사람 확인 필요',captcha_review_pending:'인증 의심 화면 재검토 대기',verification_required:'이전 인증 차단으로 검색 건너뜀',rate_limited:'요청 제한',cooldown:'재시도 대기',error:'검색 실패',http_error:'응답 오류',started:'검색 시작',no_supported_queries:'지원 언어 검색어 없음',query_exhausted:'이 경로의 미사용 검색어 소진',image_exhausted:'미사용 장면 이미지 소진',strategy_skipped:'이전 실패에 따라 다른 경로로 전환',page_unresolved:'검색 화면에서 결과를 판독하지 못함',readiness_blocked:'페이지 판독 실패로 재검색 중지'};
     const platforms={tiktok:'틱톡',douyin:'더우인',xiaohongshu:'샤오홍슈',instagram:'인스타그램',youtube:'유튜브',bilibili:'빌리빌리',stock:'기타 영상 서비스',other:'기타'};
-    const outcomes={not_attempted:'실제 시도 없음',captcha:'인증 화면 확인',auth_required:'로그인 필요',access_denied:'접근 거부',access_restricted:'공개 접근 불가',rate_limited:'요청 제한',download_failed:'다운로드 실패',search_failed:'검색 실패',no_candidates:'후보 없음',review_pending:'사용할 장면 검토 중',quality_rejected:'영상 검증 탈락',metadata_rejected:'검색 결과의 영상 길이 불일치',duplicate:'중복 영상',budget_exhausted:'이번 수집 시간·횟수 한도',cooldown:'재시도 대기'};
+    const outcomes={captcha_review_pending:'인증 의심 화면 재검토 대기',not_attempted:'실제 시도 없음',captcha:'인증 화면 확인',auth_required:'로그인 필요',access_denied:'접근 거부',access_restricted:'공개 접근 불가',rate_limited:'요청 제한',download_failed:'다운로드 실패',search_failed:'검색 실패',no_candidates:'후보 없음',review_pending:'사용할 장면 검토 중',review_response_error:'검토 응답 형식 오류',review_unconfirmed:'실제 검토 근거 확인 필요',review_service_wait:'검토 서비스 대기',no_approved_intervals:'검토 완료 · 승인 구간 없음',quality_rejected:'영상 검증 탈락',metadata_rejected:'검색 결과의 영상 길이 불일치',duplicate:'중복 영상',budget_exhausted:'이번 수집 시간·횟수 한도',cooldown:'재시도 대기'};
     const outcomeRows=Object.entries(a.platform_outcomes||{}).map(([p,n])=>`<p><strong>${esc(platforms[p]||p)}</strong> · 실제 검색 ${n.search_attempts||0}회 · 다운로드 시도 ${n.download_attempts||0}회<br>${Object.entries(n.reasons||{}).map(([r,c])=>`${esc(outcomes[r]||r)} ${c}`).join(' · ')}${n.skipped_searches?`<br>검색 건너뜀 ${n.skipped_searches}회 · ${Object.entries(n.skipped_reasons||{}).map(([r,c])=>`${esc(statuses[r]||outcomes[r]||r)} ${c}`).join(' · ')}`:''}</p>`).join('');
     const strategy=a.strategy;
     const strategyHtml=strategy?`<div data-search-strategy><strong>검색 전략 · ${esc(strategy.label)}</strong><p>${(strategy.reasons||[]).map(esc).join(' · ')}</p>${Object.entries(strategy.skipped_routes||{}).map(([p,r])=>`<p>${esc(p)}: ${esc(r)}</p>`).join('')}<p>${strategy.vendor_search?'제품 시연 판매처도 검색':'확인한 주제에 맞는 영상 경로만 검색'}</p></div>`:'';
@@ -104,7 +108,10 @@
     const delivered=t.pipeline?.find(r=>r.id===t.latest_completed_run_id);
     // Saved selections are for a future edit, not evidence of a completed video's sources.
     const baseline=delivered||run;
-    const usedIds=baseline?.artifacts?.sources?.map(v=>v.id)??baseline?.inputs?.source_ids??[];
+    const edit=item(t,'edits',baseline?.artifacts?.edit_id||t.edit_id);
+    const picture=edit?.plan;
+    const usedIds=edit?.source_usage?.used_source_ids??(picture?[...new Set((picture.visual_cuts||picture.beats||[])
+      .map(b=>picture.shots.find(s=>s.id===b.selected_shot_id)?.source_id).filter(Boolean))]:baseline?.inputs?.source_ids??[]);
     const selected=t.feedback?.source_ids??run?.inputs?.source_ids??(usedIds.length?usedIds:t.sources.map(v=>v.id));
     return {delivered,usedIds,selected};
   }

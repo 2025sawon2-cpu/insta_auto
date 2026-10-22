@@ -13,12 +13,12 @@ def base_plan():
 
 def test_same_grounded_query_pool_survives_restart_and_code_callable_changes(tmp_path,monkeypatch):
     settings=Settings(data_dir=tmp_path);calls=[]
-    def enrich(*args):
+    def enrich(*args,**kwargs):
         calls.append(True)
         return {**copy.deepcopy(args[1]),'query_details':[{'query':'silver mirror product','language':'en'}]}
     monkeypatch.setattr(planning,'enrich_plan',enrich)
     original=planning.cached_enrich_plan(settings,base_plan(),'은색 거울',{'speech':'거울을 엽니다','screen_text':'제품'})
-    monkeypatch.setattr(planning,'enrich_plan',lambda *args: (_ for _ in ()).throw(AssertionError('No model replay')))
+    monkeypatch.setattr(planning,'enrich_plan',lambda *args,**kwargs: (_ for _ in ()).throw(AssertionError('No model replay')))
     restarted=planning.cached_enrich_plan(Settings(data_dir=tmp_path),base_plan(),'은색 거울',
                                         {'speech':'거울을 엽니다','screen_text':'제품','job_id':'new','model_revision':'new-code'})
     assert original==restarted and calls==[True]
@@ -26,7 +26,7 @@ def test_same_grounded_query_pool_survives_restart_and_code_callable_changes(tmp
 
 def test_round_policy_and_planning_prose_cannot_create_a_new_query_pool(tmp_path,monkeypatch):
     settings=Settings(data_dir=tmp_path);calls=[]
-    def enrich(*args):
+    def enrich(*args,**kwargs):
         calls.append(True)
         return copy.deepcopy(args[1])
     monkeypatch.setattr(planning,'enrich_plan',enrich)
@@ -40,7 +40,7 @@ def test_round_policy_and_planning_prose_cannot_create_a_new_query_pool(tmp_path
 
 def test_new_visual_query_wording_without_new_observation_does_not_reopen_pool(tmp_path,monkeypatch):
     settings=Settings(data_dir=tmp_path);calls=[]
-    def enrich(*args):
+    def enrich(*args,**kwargs):
         calls.append(True)
         return copy.deepcopy(args[1])
     monkeypatch.setattr(planning,'enrich_plan',enrich)
@@ -54,7 +54,7 @@ def test_new_visual_query_wording_without_new_observation_does_not_reopen_pool(t
 
 def test_changed_actual_reference_text_creates_a_new_grounded_pool(tmp_path,monkeypatch):
     settings=Settings(data_dir=tmp_path);calls=[]
-    def enrich(*args):
+    def enrich(*args,**kwargs):
         calls.append(args[2])
         return copy.deepcopy(args[1])
     monkeypatch.setattr(planning,'enrich_plan',enrich)
@@ -65,7 +65,7 @@ def test_changed_actual_reference_text_creates_a_new_grounded_pool(tmp_path,monk
 
 def test_actual_reference_sha_changes_pool_and_same_sha_preserves_it(tmp_path,monkeypatch):
     settings=Settings(data_dir=tmp_path);calls=[]
-    def enrich(*args):
+    def enrich(*args,**kwargs):
         calls.append(True)
         return copy.deepcopy(args[1])
     monkeypatch.setattr(planning,'enrich_plan',enrich)

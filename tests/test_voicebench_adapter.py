@@ -339,3 +339,28 @@ def test_uncertain_submit_requires_server_idempotency_key_before_automatic_retry
     assert not isinstance(unsafe.value, ModelServiceUnavailable)
     with pytest.raises(ModelServiceUnavailable):
         adapter.synthesize('실제 대본', target, generation_key='stable-job-script')
+
+
+def test_invalid_generation_key_is_rejected_before_any_external_request(tmp_path):
+    class NoRequests:
+        def post(self, *_args, **_kwargs): raise AssertionError('must not submit')
+        def get(self, *_args, **_kwargs): raise AssertionError('must not request')
+    adapter = VoiceBenchAdapter(_settings(tmp_path), session=NoRequests())
+    for key in ('a'*101, 'unsafe/key', 123):
+        with pytest.raises(ValueError, match='generation_key'):
+            adapter.synthesize('실제 대본', _settings(tmp_path).data_dir/'voice.wav', generation_key=key)
+
+
+def test_http_rejection_is_not_reported_as_unreachable_server(tmp_path):
+    import requests
+    class Rejected(Session):
+        def post(self, _url, **_kwargs):
+            self.posts += 1
+            response = requests.Response(); response.status_code = 400
+            response._content = b'{"error":"invalid request"}'
+            return response
+    session = Rejected(valid_wav())
+    with pytest.raises(RuntimeError, match='HTTP 400') as failure:
+        VoiceBenchAdapter(_settings(tmp_path), session=session).synthesize(
+            '실제 대본', _settings(tmp_path).data_dir/'voice.wav')
+    assert 'not reachable' not in str(failure.value) and session.posts == 1

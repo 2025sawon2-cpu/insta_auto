@@ -3,9 +3,10 @@ import json
 
 from . import codex_writer
 from .contract import receipt
-from .reference_evidence import COMMENT_KEYWORD
+from .reference_evidence import COMMENT_KEYWORD, VISUAL_INSTRUCTION, visual_context
 from .script_integrity import digest
 from .mechanisms import mechanism_keys
+from ..thumbnail_copy import INSTRUCTION as THUMBNAIL_INSTRUCTION, review_copy
 
 
 def obj(properties):
@@ -51,7 +52,13 @@ def generate_three(payload, directory, check, progress, *, evaluate):
     evidence = {'reference':reference, 'reference_kind':payload.get('reference_kind','provided_text'),
         'reference_caption':payload.get('reference_caption',''), 'comment_keyword':keyword,
         'request':payload.get('notes','')}
+    visual, images = visual_context(payload)
+    if visual:
+        evidence['reference_visual'] = visual
+    visual_instruction = VISUAL_INSTRUCTION if images else ''
     state = {'directory':directory,'calls':[]}
+    if visual:
+        state['reference_visual'] = visual
     progress(.1,'원작 심리 후킹을 분석하고 대본 1·2·3안을 함께 작성하는 중')
     value = codex_writer.chat(
         '원작의 심리 후킹을 분석한 뒤 항상 세 안을 한 번에 작성하세요. '
@@ -72,7 +79,8 @@ def generate_three(payload, directory, check, progress, *, evaluate):
         '현재 최저가·재고·AS·원작의 특징적인 보증 묶음을 사실로 단정하지 마세요. '
         '짧고 간결하게 한 갈등을 전개하고 같은 기능·이득을 뒤에서 요약해 반복하지 마세요. 제품 기능을 반복하거나 '
         '기준·방법·추상적인 교훈을 알려주는 내용으로 끝내지 마세요. 보유 장면 수로 집필을 제한하지 마세요.\n\n'
-        +contract['prompt'], json.dumps(evidence,ensure_ascii=False), SCHEMA, check, state)
+        +contract['prompt']+'\n\n'+THUMBNAIL_INSTRUCTION+visual_instruction,
+        json.dumps(evidence,ensure_ascii=False), SCHEMA, check, state, **({'images':images} if images else {}))
     contract_attempts = []
     try:
         validate_triplet(value)
@@ -90,9 +98,9 @@ def generate_three(payload, directory, check, progress, *, evaluate):
             '실제로 작동하도록 해당 안의 도입·갈등·정보 순서·마무리와 썸네일을 재설계하세요. '
             '문제 없는 안의 원고는 보존하세요. 1·2안은 각각 하나의 주된 효과 이름만 bias에 적습니다. '
             '같은 주 카테고리 유지, 3안의 의미 있는 표면 치환 2~3곳, 제품 사실 유지·원문 복사 금지 '
-            '계약도 지키세요. 보유 소스 수는 집필에 넣지 않습니다.\n\n'+contract['prompt'],
+            '계약도 지키세요. 보유 소스 수는 집필에 넣지 않습니다.\n\n'+contract['prompt']+'\n\n'+THUMBNAIL_INSTRUCTION+visual_instruction,
             json.dumps({'evidence':evidence,'failed_triplet':initial},ensure_ascii=False),
-            SCHEMA,check,state)
+            SCHEMA,check,state, **({'images':visual_context(payload)[1]} if images else {}))
         validate_triplet(value)
         contract_attempts.append({'value':value,'status':'repaired'})
     generation_calls = list(state['calls'])
@@ -112,12 +120,15 @@ def generate_three(payload, directory, check, progress, *, evaluate):
             variant_number=variant['number'], variant_type=variant['variant_type'], bias=variant['bias'],
             psychological_category=variant['category'], changes=variant['changes'],
             surface_changes=variant['surface_changes'], mechanism_application=variant['mechanism_application'],
-            thumbnail_lines=variant['thumbnail_lines'], thumbnail_mechanism=variant['thumbnail_mechanism'])
+            thumbnail_lines=candidate.get('thumbnail_lines',variant['thumbnail_lines']), thumbnail_mechanism=variant['thumbnail_mechanism'],
+            thumbnail_copy_review=candidate.get('thumbnail_copy_review',review_copy(variant['thumbnail_lines'])))
         scripts.append(candidate)
         audit = json.loads((target/'writing-audit.json').read_text('utf-8'))
         audits.append({'number':variant['number'], **audit})
         warnings.extend(result['warnings'])
         state['calls'].extend(result['generation_inference']['calls'])
+    if images:
+        visual_context(payload)
     audit = {'flow':'three-variants-v1','initial_variants':value,'generation_calls':generation_calls,
         'variant_reviews':audits,'calls':state['calls'], 'warnings':warnings,
         'contract_attempts':contract_attempts,

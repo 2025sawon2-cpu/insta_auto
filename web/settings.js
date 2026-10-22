@@ -131,4 +131,5 @@ $('#settings-save').onclick=async()=>{
  finally{button.disabled=false;}
 };
 }catch(e){$('#settings-status').textContent='설정 확인 실패: '+e.message;}
+if(location.hash==='#coupang-partners')$('#coupang-partners').scrollIntoView({block:'start'});
 })();

@@ -11,7 +11,7 @@
   "sleep_after_error_max": 45.0,
   "voicebench_url": "http://127.0.0.1:8765",
   "production_enabled": false,
-  "studio_auto_top_enabled": true,
+  "studio_auto_top_enabled": false,
   "studio_auto_top_limit": 3,
   "studio_url": "http://127.0.0.1:18767",
   "source_ytdlp_js_runtime": "",

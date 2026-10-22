@@ -42,6 +42,23 @@ def bundle_paths(settings,shortcode,caption,transcript):
     return directory/(key+'.json'),directory/(key+'-'+stamp+'.json')
 
 
+def acquisition_bundle_path(settings,shortcode,caption,transcript,policy,subject_hint=''):
+    if not policy.get('search_minimums'):return None
+    from .source_visual_queries import search_contract
+    _,current=bundle_paths(settings,shortcode,caption,transcript)
+    suffix=hashlib.sha256(json.dumps({'source_policy':policy,
+        'visual_contract':search_contract(policy['search_minimums']),
+        'subject_hint':subject_hint},sort_keys=True).encode()).hexdigest()[:10]
+    return current.with_name(current.stem+'-acq-'+suffix+'.json')
+
+
+def replanning_bundle_path(path, plan):
+    """Keep an accepted acquisition receipt unchanged during replanning."""
+    path=Path(path)
+    stamp=payload_key({'query_plan':plan})[:16]
+    return path.with_name(path.stem+'-replan-'+stamp+'.json')
+
+
 def verify_acceptance(value,path,context=None,expected_reference=None):
     if expected_reference and digest(value['reference']) != expected_reference:
         raise PreparationEvidenceWaiting('저장된 준비 원본이 현재 작업의 기준 영상과 다릅니다.')
@@ -148,13 +165,59 @@ def preflight_preparation(settings, state, job=None):
     if authoritative and not Path(authoritative).is_file():
         raise PreparationEvidenceWaiting('현재 작업 기준 영상이 소실되었습니다.')
     expected=digest(authoritative) if authoritative else None
+    from .source_policy import run_policy
+    from .source_diversity import acquisition_policy
+    from .source_visual_queries import search_contract
+    policy=acquisition_policy(state,run_policy(state))
+    hint=state.get('product','')
+    acquisition=acquisition_bundle_path(settings,state['shortcode'],post.caption,transcript,policy,hint)
+    selected=(job or {}).get('checkpoint',{}).get('planning_preparation')
+    if selected is not None:
+        from .source_coverage import search_scope_for_state
+        wanted={'task_id':state['id'],'job_id':(job or {}).get('id'),
+                'run_id':state.get('run_id'),'search_context':search_scope_for_state(state),
+                'source_policy':policy}
+        if (not isinstance(selected,dict) or not all(wanted.get(k) for k in ('task_id','job_id','run_id'))
+                or (job or {}).get('task_id')!=state['id']
+                or (job or {}).get('payload',{}).get('run_id')!=state.get('run_id')
+                or any(selected.get(k)!=v for k,v in wanted.items())):
+            raise PreparationEvidenceWaiting('재계획 준비 번들의 작업·실행 결속이 다릅니다.')
+        try:
+            selected_path=Path(selected['path']).resolve()
+            if selected_path.parent!=base.parent.resolve() or digest(selected_path)!=selected['sha256']:
+                raise PreparationEvidenceWaiting('재계획 준비 번들의 소유 경로·SHA가 다릅니다.')
+            value=load_bundle(selected_path,post.caption,transcript)
+            verify_acceptance(value,selected_path,context,expected)
+        except (OSError,KeyError,TypeError) as exc:
+            raise PreparationEvidenceWaiting('재계획 준비 번들의 실제 근거 확인 대기') from exc
+        plan=value.get('query_plan')
+        if (value.get('query_policy')!=query_policy() or not isinstance(plan,dict)
+                or not reusable_query_contract(plan,policy,hint,wanted)):
+            # Ownership, receipt and media integrity were checked above.
+            # Reuse only those frames, just as for an unselected obsolete pool;
+            # the normal preparation entry must obtain a fresh reviewed plan.
+            # Keep the selected checkpoint and immutable bundle unchanged.
+            return None,[Path(f) for f in value['frames']]
+        return plan,[Path(f) for f in value['frames']]
     older=sorted(base.parent.glob(base.stem+'-*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
-    for path in dict.fromkeys([current,base,*older,base.with_suffix('.media.json')]):
+    for path in dict.fromkeys([*([acquisition] if acquisition else []),current,base,*older,base.with_suffix('.media.json')]):
         if path.is_file():
             value=load_bundle(path,post.caption,transcript)
             verify_acceptance(value,path,context,expected)
-            return (value.get('query_plan') if value.get('query_policy')==query_policy() else None,
-                    [Path(f) for f in value['frames']])
+            plan=value.get('query_plan') if value.get('query_policy')==query_policy() else None
+            if plan is not None and policy.get('search_minimums'):
+                contract=search_contract(policy['search_minimums'])
+                evidence=(plan.get('visual_query_evidence') or {}).get('evidence') or {}
+                from .source_coverage import search_scope_for_state
+                if not reusable_query_contract(plan,policy,hint,
+                        {'task_id':state['id'],
+                         'job_id':(job or {}).get('id') if (job or {}).get('task_id')==state['id']
+                             and (job or {}).get('payload',{}).get('run_id')==state.get('run_id') else None,
+                         'run_id':state.get('run_id'),'search_context':search_scope_for_state(state)}):
+                    # Media can be reused, but an obsolete query pool cannot
+                    # establish exhaustion for a new policy/topic contract.
+                    plan=None
+            return plan,[Path(f) for f in value['frames']]
     # Legacy media can be checked before access, without writing an adoption receipt.
     for row in reversed(rounds):
         manifest=Path(row.get('manifest_path') or '__missing__')
@@ -169,3 +232,67 @@ def preflight_preparation(settings, state, job=None):
             raise PreparationEvidenceWaiting('이전 소스 준비 원본이 현재 작업의 기준 영상 SHA와 다릅니다.')
         return None,frames
     return None,[]
+
+
+def reusable_query_contract(plan, policy, hint, context, *, verify_files=True):
+    """Retain an intact active v4/v5 plan across query-prompt clarifications.
+
+    This is not a new approval: the original receipt is validated unchanged.
+    New runs and changed media/topic/policy must use the current prompt.
+    """
+    from .source_visual_queries import search_contract,plan_queries,query_pool_report
+    expected=search_contract(policy['search_minimums'])
+    evidence=(plan.get('visual_query_evidence') or {}).get('evidence') or {}
+    if plan.get('source_policy')!=policy or evidence.get('subject_hint')!=hint:
+        return False
+    from .source_topic_queries import POLICY as TOPIC_POLICY,plan_queries as topic_queries
+    if (plan.get('visual_query_evidence') or {}).get('policy')==TOPIC_POLICY:
+        owner={k:context.get(k) for k in ('task_id','job_id','run_id')}
+        if (plan.get('query_owner')!=owner or plan.get('search_context')!=context.get('search_context')
+                or plan.get('run_id')!=context.get('run_id')):
+            return False
+        try:
+            rows=topic_queries(plan,verify_files=verify_files)
+            # A grounded partial pool can start real discovery and learn from
+            # results. Actual EN/ZH completion still requires submitted receipts.
+            return bool(rows)
+        except (ValueError,KeyError,TypeError,OSError):return False
+    if plan.get('text_query_evidence'):
+        from .source_text_query_receipts import plan_text_queries, pool_report
+        owner={k:context.get(k) for k in ('task_id','job_id','run_id')}
+        if (not all(isinstance(v,str) and v for v in owner.values())
+                or not context.get('search_context')
+                or plan.get('search_context')!=context['search_context']
+                or plan.get('run_id')!=owner['run_id']
+                or not context['search_context'].get('reference_sha256')
+                or plan.get('query_reference_sha256')!=context['search_context']['reference_sha256']
+                or any(evidence.get(k)!=v for k,v in expected.items())):
+            return False
+        try:
+            rows=plan_text_queries(plan,owner=owner,verify_files=verify_files)
+            return pool_report(rows,policy['search_minimums'],plan.get('search_identity'))['ready']
+        except (ValueError,KeyError,TypeError,OSError):
+            return False
+    if all(evidence.get(k)==v for k,v in expected.items()):
+        try:
+            rows=plan_queries(plan) if verify_files else plan_queries(plan,verify_files=False)
+            return query_pool_report(rows,policy['search_minimums'],
+                plan.get('search_identity'))['ready']
+        except (ValueError, KeyError, TypeError, OSError):
+            return False
+    revision='identity_prompt_revision'
+    if (evidence.get(revision) not in {'reference-topic-and-scene-intent-v4',
+                                      'reference-topic-and-scene-intent-v5'}
+            or expected.get(revision)!='reference-topic-and-scene-intent-v6'
+            or any(evidence.get(k)!=v for k,v in expected.items() if k!=revision)
+            or not context.get('run_id') or plan.get('run_id')!=context['run_id']
+            or not context.get('search_context') or plan.get('search_context')!=context['search_context']
+            or not context['search_context'].get('reference_sha256')
+            or plan.get('query_reference_sha256')!=context['search_context']['reference_sha256']):
+        return False
+    try:
+        rows=plan_queries(plan) if verify_files else plan_queries(plan,verify_files=False)
+        return query_pool_report(rows,policy['search_minimums'],
+            plan.get('search_identity'))['ready']
+    except (ValueError,KeyError,TypeError):
+        return False

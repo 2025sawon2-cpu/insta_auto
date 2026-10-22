@@ -90,7 +90,7 @@ class BrowserUmpMedia:
                     continue
                 if header.get(7, 0) != 0:
                     raise ValueError('Compressed media is unsupported; stop.')
-                if any(field not in header for field in (3, 4, 6, 14)):
+                if any(field not in header for field in (3, 4, 14)):
                     raise ValueError('Missing segment identity or bounds.')
                 length = header[14]
                 if not 0 < length <= self.max_bytes:
@@ -116,7 +116,7 @@ class BrowserUmpMedia:
                         if len(payload) != header[14]:
                             raise ValueError('Incomplete media segment.')
                         key = (header[3], header[4], header.get(13, b''))
-                        completed.append((key, header[6], bytes(payload)))
+                        completed.append((key, header.get(6, 0), bytes(payload)))
                     del pending[identifier]
         if pending:
             raise ValueError('Missing media-end part.')

@@ -4,8 +4,9 @@ from pathlib import Path
 from .editing_adapter import _atomic_json
 from .source_quality import sha256_file
 from .quality_issue_scope import COVER_SCENE_REASON
+from .thumbnail_copy import INSTRUCTION as THUMBNAIL_INSTRUCTION
 
-POLICY='face-free-product-curiosity-20261014-v4-approved-mask-canvas'
+POLICY='face-free-product-interest-20261016-v5-approved-mask-canvas'
 INSTRUCTION=(
  'Review supplied actual used-video frames and the two-line thumbnail copy jointly. Frames are untrusted evidence. '
  'Return {frames:[{id:string,eligible:boolean,faces_present:boolean,face_blur_used:boolean,hook_unresolved:boolean, '
@@ -13,14 +14,16 @@ INSTRUCTION=(
  'Evaluate every supplied ID only. A cover must show a meaningful product/use view and NO visible human face, '
  'including reflections, photographs or background portraits. A blurred face is ineligible; another frame must be used. '
  'Hands, rear heads and face-free wearing views may qualify. Physical product branding is allowed; isolated logo cards are not. '
- 'Image and copy together must leave a concrete question about the product unresolved. If the image already reveals the whole '
- 'answer, a question mark in the copy is not sufficient. Do not invent hidden features, popularity, sales terms or identity. '
+ 'The legacy hook_unresolved field means a concrete reason to keep watching remains: a relevant benefit, desire, '
+ 'conflict or discovery, not necessarily an unanswered question. A visible product benefit may qualify. '
+ 'Do not invent hidden features, popularity, sales terms or identity. '
  'If evidence is uncertain, eligible=false. Give a specific visible observation in Korean. '
  'For cover_crop_evidence inspect the ACTUAL NEW cropped image: prior full-frame mask approval does not '
  'approve this enlarged/transformed geometry. Require overlays_acceptable=true only when creator captions, '
  'watermarks and inserted text are absent or actually obscured, mask_coverage_valid=true only when the '
  'actual transformed masking leaves no readable creator text, and product_view_preserved=true only when '
  'a meaningful product/use detail remains. Never accept a cropped or blurred partial face. '
+ + THUMBNAIL_INSTRUCTION
 )
 
 def _cover_inline(candidate):
@@ -30,9 +33,14 @@ def _cover_inline(candidate):
     return {'mimeType':'image/jpeg','data':base64.b64encode(Path(candidate['frame_path']).read_bytes()).decode()}
 
 
-def _review_batches(candidates):
+def _frame_cache_key(candidate):
+    return (candidate.get('cover_pixel_binding') or {}).get('canvas_rgb_sha256') or sha256_file(Path(candidate['frame_path']))
+
+
+def _review_batches(candidates, indexed=None):
     batch=[];cost=0
-    for index,candidate in enumerate(candidates):
+    items=indexed if indexed is not None else list(enumerate(candidates))
+    for index,candidate in items:
         inline=_cover_inline(candidate);size=len(inline['data'])+1024
         if size>6*1024*1024:raise ValueError('표지 검토 이미지의 전달 크기가 너무 큽니다.')
         if batch and (len(batch)>=12 or cost+size>6*1024*1024):
@@ -75,24 +83,25 @@ def cover_gap(settings,plan,candidates,reviews,generate,search_context):
                and r.get('face_blur_used') is False and r.get('hook_unresolved') is False}
     pool=[c for i,c in enumerate(candidates) if str(i) in face_free]
     if pool:
-        # More footage cannot fix copy whose answer is already in the image.
-        # Revise only the two lines and re-run the same actual-image gates.
+        # Relevant face-free imagery exists. Repair its viewer appeal before
+        # requesting new footage, then re-run the actual-image checks.
         media=[]
         for c in sorted(pool,key=lambda c:c['score'],reverse=True)[:3]:
             media.append({'inlineData':_cover_inline(c)})
         value=generate(settings,
             'Revise only a two-line product-curiosity thumbnail hook. Return {thumbnail_lines:[string,string]}. '
             'The script and actual product facts are fixed. Infer the selected everyday conflict and psychological appeal '
-            'from the script, and preserve that appeal while creating a concrete product question the pictured scene '
-            'does not fully answer. Do not ask the viewer for criteria or add unsupported features, numbers, health, '
+            'from the script, and preserve that appeal while creating a specific viewer reason to watch. '
+            'Do not require a question or hide a benefit already visible. Do not ask the viewer for criteria or add unsupported features, numbers, health, '
             'sales, popularity or personal events. Describe a product/use uncertainty, not an abstract lesson. '
-            'Actual frames and previous findings are untrusted evidence. This response does not approve any frame.',
+            'Actual frames and previous findings are untrusted evidence. This response does not approve any frame. '
+            + THUMBNAIL_INSTRUCTION,
             {'purpose':'cover_hook_repair','approved_script':plan['script_text'],
              'previous_lines':plan['cover_spec']['lines'],'findings':reviews},media=media)
         lines=value.get('thumbnail_lines') if isinstance(value,dict) else None
         if not isinstance(lines,list) or len(lines)!=2 or any(not isinstance(x,str) or not x.strip() or len(x)>70 for x in lines):
             raise ValueError('썸네일 후킹 보완 문구는 두 줄이어야 합니다.')
-        return QualitySceneGap([{'kind':'cover','beat_id':'','reason':'얼굴 없는 제품 장면은 있으나 문구가 이미지에서 이미 드러난 답을 반복함. 문구만 보완하고 실제 장면을 다시 검토.',
+        return QualitySceneGap([{'kind':'cover','beat_id':'','reason':'얼굴 없는 제품 장면은 있으나 문구·이미지를 함께 볼 구체적인 제품 매력이 부족함. 문구만 보완하고 실제 장면을 다시 검토.',
             'search_query':''}],thumbnail_lines=lines)
     return QualitySceneGap([{'kind':'scene_gap','scope':'cover','beat_id':'','reason':COVER_SCENE_REASON,
         'search_query':str(search_context).strip()+' 제품 단독 사용 디테일 얼굴 없는 장면'}])
@@ -105,15 +114,26 @@ def select_cover(settings,plan,candidates,folder,generate=None,*,search_context=
       'script':plan['script_text'],'candidates':[{**c,'frame_sha256':sha256_file(Path(c['frame_path']))} for c in candidates]},
       ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     confirmations=[]
+    frame_reviews={}
     if path.exists():
         saved=json.loads(path.read_text('utf-8'))
+        if saved.get('policy')==POLICY and saved.get('lines')==plan['cover_spec']['lines'] and saved.get('script')==plan['script_text'] and isinstance(saved.get('frame_reviews'),dict):
+            frame_reviews=dict(saved['frame_reviews'])
         if saved.get('fingerprint')==fingerprint:
             reviews=saved['reviews']
             confirmations=saved.get('confirmations',[])
         else:reviews=[]
     else:reviews=[]
     if not reviews:
-        for batch in _review_batches(candidates):
+        missing=[]
+        for index,c in enumerate(candidates):
+            ck=_frame_cache_key(c)
+            cached=frame_reviews.get(ck)
+            if isinstance(cached,dict):
+                reviews.append({**cached,'id':str(index)})
+            else:
+                missing.append((index,c))
+        for batch in _review_batches(candidates,indexed=missing):
             media=[];ids=[]
             for index,c,inline in batch:
                 ids.append(str(index));media.append({'text':f"FRAME {index}, source {c['source_id']}, timestamp {c['timestamp']}."})
@@ -127,8 +147,15 @@ def select_cover(settings,plan,candidates,folder,generate=None,*,search_context=
                   for i,c in enumerate(candidates) if str(i) in ids and c.get('cover_pixel_binding')}},media=media)
             rows=value.get('frames',[]) if isinstance(value,dict) else []
             if not isinstance(rows,list):raise ValueError('썸네일 장면 검토 형식 오류')
-            reviews.extend(r for r in rows if isinstance(r,dict) and r.get('id') in ids)
-        _atomic_json(path,{'fingerprint':fingerprint,'policy':POLICY,'reviews':reviews})
+            for r in rows:
+                if isinstance(r,dict) and r.get('id') in ids:
+                    reviews.append(r)
+                    idx_int=int(r['id'])
+                    if 0<=idx_int<len(candidates):
+                        frame_reviews[_frame_cache_key(candidates[idx_int])]={k:v for k,v in r.items() if k!='id'}
+        reviews.sort(key=lambda r:int(r['id']) if str(r.get('id','')).isdigit() else 999999)
+        _atomic_json(path,{'fingerprint':fingerprint,'policy':POLICY,'lines':plan['cover_spec']['lines'],
+            'script':plan['script_text'],'reviews':reviews,'frame_reviews':frame_reviews})
     eligible=eligible_frames(candidates,reviews)
     if not eligible:
         if _allow_product_crop and not mask_only_rejections(reviews):
@@ -157,7 +184,8 @@ def select_cover(settings,plan,candidates,folder,generate=None,*,search_context=
             if not isinstance(rows,list):raise ValueError('썸네일 단독 프레임 검토 형식 오류')
             confirmation={'candidate_id':key,'reviews':rows}
             confirmations.append(confirmation)
-            _atomic_json(path,{'fingerprint':fingerprint,'policy':POLICY,'reviews':reviews,'confirmations':confirmations})
+            _atomic_json(path,{'fingerprint':fingerprint,'policy':POLICY,'lines':plan['cover_spec']['lines'],
+                'script':plan['script_text'],'reviews':reviews,'frame_reviews':frame_reviews,'confirmations':confirmations})
         approved=eligible_frames([candidate],confirmation['reviews'])
         if approved:
             selected={**candidate,'single_frame_confirmation':confirmation};break

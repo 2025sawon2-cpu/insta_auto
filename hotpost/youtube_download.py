@@ -17,7 +17,7 @@ import time
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 from .source_browser_runtime import attach_browser, browser_lease, endpoint, pace
-from .tiktok_download import MediaAssembly, publish_video, start_visible_playback
+from .tiktok_download import MediaAssembly, publish_video, record_access_observation, start_visible_playback
 from .youtube_ump import BrowserUmpMedia
 from .operation_progress import run_progress_command, NoProgressTimeout
 
@@ -81,9 +81,13 @@ def transfer_matches_selected_player(url, player_response, selected_id, *, page_
 
 def read_selected_player_context(page):
     return page.evaluate('''() => {
-        const players = [...document.querySelectorAll('.html5-video-player')].filter(
-            e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length));
-        if (players.length !== 1) return {ad:true, response:null};
+        const isVisible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+        let players = [...document.querySelectorAll('.html5-video-player')].filter(isVisible);
+        if (players.length > 1 && location.pathname.startsWith('/shorts/')) {
+            const sp = players.filter(e => e.id === 'shorts-player' || e.closest('ytd-reel-video-renderer[is-active]'));
+            if (sp.length === 1) players = sp;
+        }
+        if (players.length !== 1) return {ad:true, response:window.ytInitialPlayerResponse || null};
         const p = players[0];
         let response = null;
         try { response = typeof p.getPlayerResponse === 'function' ? p.getPlayerResponse() : null; } catch (_) {}
@@ -153,7 +157,8 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
     searcher = BrowserSearcher(replace(settings, source_browser_captcha_wait=0), target.parent)
     from .search_access import access_record, manual_required
     gate=access_record(settings.data_dir,'youtube')
-    if not (gate.get('reason')=='captcha' and manual_required(gate)) and searcher._cooling_down('youtube'):
+    if not (gate.get('reason') in {'captcha','captcha_review_pending'} and manual_required(gate)) and searcher._cooling_down('youtube'):
+        record_access_observation(stats, access_record(settings.data_dir, 'youtube'), observed=False, basis='saved_access_gate')
         raise RuntimeError('YouTube 접근 중지 또는 휴식 상태입니다.')
     if not endpoint(settings):
         raise RuntimeError('기존 수집용 Chrome이 연결되지 않았습니다. 새 브라우저로 대체하지 않습니다.')
@@ -179,6 +184,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
         close_transfer = watch_browser_transfer(context, page, watch, selected_transfer,max_bytes=max_bytes,
             transfer_identity=lambda src:player_media_identity(src) or stream_key(src))
         if searcher._cooling_down('youtube',page=page):
+            record_access_observation(stats, access_record(settings.data_dir, 'youtube'), observed=False, basis='saved_access_gate')
             raise RuntimeError('YouTube 현재 화면의 인증 또는 요청 제한 때문에 영상 페이지를 열지 않습니다.')
 
         def receive(request):
@@ -190,6 +196,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
                 return
             if response.status == 429:
                 searcher._block('youtube', audit, 'rate_limited', response)
+                record_access_observation(stats, audit, response, observed=True, basis='current_page')
                 fatal.append('YouTube 요청 제한이 확인됐습니다.')
                 return
             mime = response.headers.get('content-type', '').split(';')[0].lower()
@@ -218,7 +225,10 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
 
         page.on('requestfinished', receive)
         try:
+            if hasattr(page, 'bring_to_front'):
+                page.bring_to_front()
             if searcher._check_block(page, 'youtube', audit):
+                record_access_observation(stats, audit, observed=True, basis='current_page')
                 raise RuntimeError('현재 YouTube 페이지의 로그인·인증 확인이 필요합니다.')
             pace(settings, 'youtube')
             watch.reset()
@@ -237,6 +247,7 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
                 response = (page.reload(wait_until='domcontentloaded', timeout=timeout) if video_id(page.url) == selected_id
                     else page.goto(url, wait_until='domcontentloaded', timeout=timeout))
             if searcher._check_block(page, 'youtube', audit, response):
+                record_access_observation(stats, audit, response, observed=True, basis='current_page')
                 raise RuntimeError('YouTube 영상 페이지에서 인증 또는 요청 제한이 확인됐습니다.')
             while True:
                 # Bind the FIRST still-in-flight UMP response through the exact
@@ -244,16 +255,27 @@ def download(settings, url, target, max_bytes, deadline=None, diagnostics=None, 
                 # requestfinished is available. Ads and older players cannot
                 # renew its watch.
                 player_context.update(read_selected_player_context(page))
+                resp_meta = player_context.get('response')
+                if isinstance(resp_meta, dict) and (resp_meta.get('playabilityStatus') or {}).get('status') == 'LOGIN_REQUIRED':
+                    searcher._block('youtube', audit, 'login_required')
+                    record_access_observation(stats, audit, response, observed=True, basis='current_page')
+                    raise RuntimeError('YouTube 영상 페이지에서 로그인·인증 확인이 필요합니다.')
                 watch.check()
                 if fatal:
                     raise RuntimeError(fatal[0])
                 if video_id(page.url) != selected_id or searcher._check_block(page, 'youtube', audit):
+                    if audit.get('status'):
+                        record_access_observation(stats, audit, response, observed=True, basis='current_page')
                     raise RuntimeError('선택 영상 이탈 또는 인증 대기 상태입니다.')
                 playback_errors = page.locator('.ytp-error[role="alert"]:visible').all_text_contents()
                 if any(text.strip() for text in playback_errors):
                     stats['player_error'] = playback_errors[0].strip()[:300]
                     raise RuntimeError('YouTube 플레이어 재생 오류: ' + stats['player_error'])
                 visible = page.locator('video').evaluate_all('els=>els.filter(e=>!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length)).map(e=>({src:e.currentSrc||e.src,duration:Number.isFinite(e.duration)?e.duration:null,width:e.videoWidth,height:e.videoHeight,ready:e.readyState,time:e.currentTime,paused:e.paused,ended:e.ended,ad:!!e.closest(".html5-video-player")?.classList.contains("ad-showing"),buffered_end:e.buffered.length?e.buffered.end(e.buffered.length-1):0}))')
+                if len(visible) == 1 and not main_started and visible[0].get('paused') and visible[0].get('ready', 0) >= 1 and not visible[0].get('ad'):
+                    playback = start_visible_playback(page, start_time=0)
+                    stats['main_playback_requested_from_start'] = True
+                    main_started = playback.get('ready', False)
                 if len(visible) == 1 and visible[0]['ready'] >= 2 and visible[0]['duration']:
                     info = visible[0]
                     if info.get('ad'):

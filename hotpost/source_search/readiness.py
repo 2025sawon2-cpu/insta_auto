@@ -10,7 +10,7 @@ def parser_revision(provider):
     if provider == 'tiktok':
         return 'tiktok-search-v4-unique-input-and-confirmed-submit'
     if provider == 'bilibili':
-        return 'bilibili-search-v2-same-tab-home-and-confirmed-submit'
+        return 'bilibili-search-v3-clear-before-sequential-input'
     return 'platform-links-v1'
 
 

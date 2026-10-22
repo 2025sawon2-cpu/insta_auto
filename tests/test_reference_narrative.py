@@ -31,6 +31,7 @@ def visual(*,accepted=True,related=False):
         if len(calls)==1:return {'frames':[{'frame_id':'f1','text':'밤 까기 이렇게 쉬워요?'}],
                                    'use_speech_in_benchmark':related}
         return {'accepted':accepted,'frame_ids':['f1'],'speech_related':related,
+                'quote_decisions':[{'frame_id':'f1','accepted':accepted,'reason':'actual frame quote'}],
                 'proposal_sha256':data['proposal_sha256'],'reason':'independent actual frame inspection'}
     return generate,calls
 
@@ -95,3 +96,75 @@ def test_cache_cannot_relabel_unrelated_speech_as_mixed(actual):
     generate,_=visual();result=module.reference_text(None,actual,generate=generate)
     changed={**result,'kind':'mixed','text':result['speech_text']+'\n'+result['text']}
     assert not module.validated_cached_text(changed,result['video_sha256'],result['speech_text'])
+
+
+def test_new_cache_keeps_individual_quote_approval_binding(actual):
+    generate,_=visual();result=module.reference_text(None,actual,generate=generate)
+    changed=copy.deepcopy(result)
+    changed['review']['quote_decisions'][0]['accepted']=False
+    assert not module.validated_cached_text(changed,result['video_sha256'],result['speech_text'])
+    del changed['reading_policy']
+    assert not module.validated_cached_text(changed,result['video_sha256'],result['speech_text'])
+
+
+def two_frames(actual,monkeypatch):
+    first=module.sample_source_frames(None,None,None,None)['frames'][0]
+    other={**first,'frame_id':'f2','source_timestamp':1.}
+    evidence={'source_sha256':sha256_file(actual.parent/'reference.mp4'),'frames':[first,other],
+              'intervals':[{'index':0,'source_start':0.,'source_end':2.}]}
+    monkeypatch.setattr(module,'sample_source_frames',lambda *a,**k:copy.deepcopy(evidence))
+
+
+def test_one_unreadable_quote_is_omitted_and_independently_rechecked(actual,monkeypatch):
+    two_frames(actual,monkeypatch);calls=[]
+    def generate(settings,instruction,data,*,media):
+        calls.append(copy.deepcopy(data))
+        if len(calls)==1:
+            return {'frames':[{'frame_id':'f1','text':'지퍼 손잡이를 교체해요'},
+                              {'frame_id':'f2','text':'unreadable guess'}],
+                    'use_speech_in_benchmark':False}
+        rejected=len(calls)==2
+        return {'accepted':not rejected,'frame_ids':['f1','f2'],'speech_related':False,
+                'proposal_sha256':data['proposal_sha256'],'reason':'f2 is faint',
+                'quote_decisions':[{'frame_id':'f1','accepted':True,'reason':'legible'},
+                                   {'frame_id':'f2','accepted':not rejected,'reason':'faint or correctly omitted'}]}
+    result=module.reference_text(None,actual,generate=generate)
+    assert result['text']=='지퍼 손잡이를 교체해요' and len(calls)==3
+    assert calls[2]['quotes']==[{'frame_id':'f1','text':'지퍼 손잡이를 교체해요'}, {'frame_id':'f2','text':''}]
+    assert calls[1]['proposal_sha256']!=calls[2]['proposal_sha256']
+    assert actual.read_text('utf-8').find('bad OCR')>=0
+    assert module.reference_text(None,actual,generate=lambda *a,**k:pytest.fail('repeat'))==result
+
+
+@pytest.mark.parametrize('mode',['all_rejected','missing_decision','wrong_binding','contradiction'])
+def test_omission_never_forces_acceptance_or_repeats_failed_input(actual,monkeypatch,mode):
+    two_frames(actual,monkeypatch);calls=[]
+    def generate(settings,instruction,data,*,media):
+        calls.append(data)
+        if len(calls)==1:
+            return {'frames':[{'frame_id':'f1','text':'clear'}, {'frame_id':'f2','text':'guess'}]}
+        decisions=[{'frame_id':fid,'accepted':False if mode=='all_rejected' else fid=='f1','reason':'actual frame'}
+                   for fid in ('f1','f2')]
+        if mode=='missing_decision':decisions.pop()
+        return {'accepted':mode=='contradiction','frame_ids':['f1','f2'],
+                'proposal_sha256':'wrong' if mode=='wrong_binding' else data['proposal_sha256'],
+                'reason':'uncertain','quote_decisions':decisions}
+    with pytest.raises(ValueError,match='문구 검토'):
+        module.reference_text(None,actual,generate=generate)
+    assert len(calls)==2 and not (actual.parent/'reference-text-verified.json').exists()
+    with pytest.raises(ValueError,match='문구 검토'):
+        module.reference_text(None,actual,generate=lambda *a,**k:pytest.fail('same failed call'))
+
+
+def test_rejected_omission_review_is_preserved_without_new_proposal_loop(actual,monkeypatch):
+    two_frames(actual,monkeypatch);calls=[]
+    def generate(settings,instruction,data,*,media):
+        calls.append(data)
+        if len(calls)==1:return {'frames':[{'frame_id':'f1','text':'clear'},{'frame_id':'f2','text':'guess'}]}
+        return {'accepted':False,'frame_ids':['f1','f2'],'proposal_sha256':data['proposal_sha256'],
+                'reason':'not accepted','quote_decisions':[{'frame_id':'f1','accepted':True,'reason':'clear'},
+                                                         {'frame_id':'f2','accepted':False,'reason':'uncertain'}]}
+    with pytest.raises(ValueError,match='문구 검토'):module.reference_text(None,actual,generate=generate)
+    assert len(calls)==3
+    with pytest.raises(ValueError,match='문구 검토'):
+        module.reference_text(None,actual,generate=lambda *a,**k:pytest.fail('same failed method'))

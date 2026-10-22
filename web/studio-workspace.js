@@ -55,6 +55,8 @@
         if(JSON.stringify(inputs.source_ids??[])!==JSON.stringify(previous.source_ids??[]))changes.push('사용 영상 변경');
         if(inputs.changes?.length)changes.push('장면·자막 변경');
         if(inputs.remotion_only&&inputs.overlay_document)changes.push('자막·꾸미기 변경');
+        if(inputs.thumbnail_only&&inputs.thumbnail_document)changes.push('썸네일 변경');
+        if(inputs.regenerate_voice)changes.push('음성 다시 생성');
       }
       const date=Number(r.created)>0?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(Number(r.created)*1000)):'';
       return `제작 버전 v${r.number} · ${names[status]||'상태 확인 필요'}${r.id===t.latest_completed_run_id?' · 최신 완료':''}${parent?' · '+(changes.join(', ')||'다시 제작'):''}${date?' · '+date:''}`;

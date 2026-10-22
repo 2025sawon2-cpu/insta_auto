@@ -1,0 +1,41 @@
+/* A quiet instrument panel: motion communicates observed activity, never percent. */
+.card .agent-strip{--agent-accent:#6d53ba;--agent-wash:color-mix(in srgb,var(--agent-accent) 7%,var(--panel));position:relative;overflow:hidden;padding:13px 13px 11px;border:1px solid color-mix(in srgb,var(--agent-accent) 19%,var(--line));border-radius:12px;background:linear-gradient(125deg,var(--agent-wash),var(--panel));color:var(--text);min-height:130px}
+.agent-strip-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.agent-eyebrow{font-size:9px;font-weight:800;letter-spacing:1.6px;color:var(--muted)}
+.agent-state{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:650;color:var(--agent-accent);white-space:nowrap}
+.agent-state>i{width:4px;height:4px;background:currentColor;border-radius:50%}
+.agent-current{display:flex;align-items:center;gap:9px;min-height:28px}
+.agent-current>strong{font-size:14px;line-height:1.45;letter-spacing:-.3px;font-weight:740;min-width:0;word-break:keep-all;overflow-wrap:anywhere}
+.agent-orb{width:28px;height:28px;flex:0 0 28px;display:flex;align-items:center;justify-content:center;gap:2px;border-radius:9px;background:color-mix(in srgb,var(--agent-accent) 11%,transparent);border:1px solid color-mix(in srgb,var(--agent-accent) 19%,transparent);color:var(--agent-accent)}
+.agent-orb>i{display:block;width:2px;height:8px;border-radius:2px;background:currentColor;transform-origin:center}
+.agent-orb>i:nth-child(2){height:14px}.agent-orb>i:nth-child(3){height:11px}.agent-orb>i:nth-child(4){height:6px}
+.agent-orb svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.agent-strip .agent-detail{font-size:10.5px;line-height:1.6;margin:8px 0 12px;color:var(--muted);min-height:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.agent-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
+.agent-stages>span{min-width:0;position:relative;overflow:hidden}
+.agent-stages b{height:2px;border-radius:2px;display:block;background:var(--line);position:relative;overflow:hidden}
+.agent-stages small{display:block;font-size:9px;line-height:1.5;margin-top:5px;color:var(--muted);font-weight:500}
+.agent-stages [data-done=true] b{background:color-mix(in srgb,var(--agent-accent) 58%,var(--line))}
+.agent-stages [data-current=true] b{background:color-mix(in srgb,var(--agent-accent) 25%,var(--line))}
+.agent-stages [data-current=true] small{color:var(--agent-accent);font-weight:750}
+.agent-strip[data-phase=completed]{--agent-accent:#238164}
+.agent-strip:is([data-phase=waiting],[data-phase=attention]){--agent-accent:#a56c1c}
+.agent-strip:is([data-phase=idle],[data-phase=paused],[data-phase=offline],[data-phase=loading]){--agent-accent:var(--muted);background:var(--panel-2);border-color:var(--line)}
+.agent-strip[data-live=true] .agent-orb>i{animation:agent-wave 1.7s ease-in-out infinite}
+.agent-strip[data-live=true] .agent-orb>i:nth-child(2){animation-delay:-.4s}.agent-strip[data-live=true] .agent-orb>i:nth-child(3){animation-delay:-.8s}.agent-strip[data-live=true] .agent-orb>i:nth-child(4){animation-delay:-1.2s}
+.agent-strip[data-live=true] .agent-state>i{animation:agent-breath 2.8s ease-in-out infinite}
+.agent-strip[data-live=true] [data-current=true] b::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,var(--agent-accent),transparent);animation:agent-scan 2.6s ease-in-out infinite}
+/* Replace the old spinning border with a subtle inset treatment on live cards. */
+.card[data-production-state]::after{display:none!important}
+.card[data-agent-live=true]{box-shadow:var(--shadow),0 0 0 1px color-mix(in srgb,#9d86e8 38%,transparent)}
+@keyframes agent-wave{0%,100%{transform:scaleY(.55);opacity:.65}50%{transform:scaleY(1);opacity:1}}
+@keyframes agent-breath{0%,100%{box-shadow:0 0 0 0 transparent;opacity:.65}50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--agent-accent) 12%,transparent);opacity:1}}
+@keyframes agent-scan{0%{transform:translateX(-105%)}65%,100%{transform:translateX(105%)}}
+:root[data-theme=dark] .agent-strip{--agent-accent:#bda9ff}
+:root[data-theme=dark] .agent-strip[data-phase=completed]{--agent-accent:#83d6b5}
+:root[data-theme=dark] .agent-strip:is([data-phase=waiting],[data-phase=attention]){--agent-accent:#e4bc78}
+:root[data-theme=dark] .agent-strip:is([data-phase=idle],[data-phase=paused],[data-phase=offline],[data-phase=loading]){--agent-accent:var(--muted)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .agent-strip{--agent-accent:#bda9ff}:root:not([data-theme=light]) .agent-strip[data-phase=completed]{--agent-accent:#83d6b5}:root:not([data-theme=light]) .agent-strip:is([data-phase=waiting],[data-phase=attention]){--agent-accent:#e4bc78}}
+@media(prefers-reduced-motion:reduce){.agent-strip *,.agent-strip *::after{animation:none!important;transition:none!important}}
+:root:not([data-theme=light]) .agent-strip:is([data-phase=idle],[data-phase=paused],[data-phase=offline],[data-phase=loading]){--agent-accent:var(--muted)}
+@media(max-width:420px){.card .agent-strip{padding:12px}.agent-current>strong{font-size:14px}}

@@ -31,7 +31,9 @@ def reviewed_candidates(path, data, sources):
             continue
         for key in ('source_quality', 'blur_required', 'watermark_masks', 'reviewed_intervals',
                     'mask_review', 'functional_review', 'relevance_review_required', 'video_meta', 'source_role',
-                    'presentation_review_required', 'presentation_review', 'presentation_rejection_reasons'):
+                    'presentation_review_required', 'presentation_review', 'presentation_rejection_reasons',
+                    'review_outcome','overlay_review_error','presentation_review_error','overlay_rejected_intervals',
+                    'interval_recovery_history'):
             if key in source:
                 row[key] = deepcopy(source[key])
         row['editing_eligible'] = bool(source.get('editing_eligible') is True and editing_ready(source) and verified)
@@ -96,7 +98,9 @@ def summarize(path, reviewed_sources=None):
                             'download_attempted':row.get('download_attempted'),
                             'format_warnings':row.get('format_warnings', []), 'portrait_geometry':row.get('portrait_geometry'),
                             'presentation_review':{k:(row.get('presentation_review') or {}).get(k) for k in ('usable','reason')},
-                            'rejections':[*(row.get('rejection_reasons') or []), *(row.get('presentation_rejection_reasons') or [])]}
+                            'rejections':[*(row.get('rejection_reasons') or []), *(row.get('presentation_rejection_reasons') or [])],
+                            'review_outcome':row.get('review_outcome'),
+                            'rejected_intervals':row.get('overlay_rejected_intervals',[])}
                            for row in data.get('candidates',[])[:40]],
             'platform_probe_seconds':data.get('platform_probe_seconds',{}),
             'execution_audit_available': data.get('execution_audit_available', 'search_audit' in data),

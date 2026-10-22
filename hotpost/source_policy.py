@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 
 def current_policy(settings=None):
+    """The historical v3 duration policy, retained for standalone inventories."""
     return {'version': 3, 'completion_mode': 'scene_duration', 'minimum_total': 1,
             'suggested_total': max(1, getattr(settings, 'source_min_usable', 10)),
             'platform_minimums': {},
@@ -11,6 +12,18 @@ def current_policy(settings=None):
             'coverage_ratio': max(1., getattr(settings, 'source_coverage_ratio', 1.25)),
             'fallback_output_seconds': max(1., getattr(settings, 'source_default_duration', 30.)),
             'core_min_seconds': max(1., getattr(settings, 'source_core_min_seconds', 4.))}
+
+
+def montage_policy(settings=None):
+    policy = current_policy(settings)
+    policy.update(version=6, editorial_policy='normal-speed-editorial-v1', minimum_total=5,
+                  allow_source_reuse=True, duration_requirement='preference',
+                  core_duration_requirement='preference',
+                  source_diversity_policy={'version':'minimum-five-sources-v1','minimum_parent_sources':5},
+                  minimum_core_parent_sources=1, search_minimums={'en':5,'zh':5},
+                  core_product_priority={'version':'core-product-first-v1','target_parent_sources':5})
+    policy['source_diversity_policy']['core_product_priority_version']='core-product-first-v1'
+    return policy
 
 
 def run_policy(state, target=10):
@@ -22,11 +35,14 @@ def run_policy(state, target=10):
                                'platform_minimums': {}})
 
 
-def adopt_policy(state, settings=None):
-    policy = (owned_policy() if state.get('creation_mode') == 'self_shot' else current_policy(settings))
-    state['source_policy'] = deepcopy(policy)
+def adopt_policy(state, settings=None, *, new_run=False):
     run = next((r for r in state.get('runs', []) if r['id'] == state.get('run_id')), None)
-    if run and run.get('status') != 'completed':
+    existing = (run or {}).get('source_policy') or state.get('source_policy')
+    if existing and not new_run:
+        return deepcopy(existing)
+    policy = (owned_policy() if state.get('creation_mode') == 'self_shot' else montage_policy(settings))
+    state['source_policy'] = deepcopy(policy)
+    if run and not new_run and run.get('status') != 'completed':
         run['source_policy'] = deepcopy(policy)
     return policy
 
@@ -48,10 +64,19 @@ def source_platform(source):
 
 
 def goal_message(goal):
-    text = (f"사용 가능 {goal['usable_seconds']:g}/{goal['required_seconds']:g}초 · {goal['count']}개"
+    preferred = goal.get('duration_requirement') == 'preference'
+    text = (f"사용 가능 {goal['usable_seconds']:g}초 · 권장 {goal['required_seconds']:g}초 · {goal['count']}개" if preferred else
+            f"사용 가능 {goal['usable_seconds']:g}/{goal['required_seconds']:g}초 · {goal['count']}개"
             if 'required_seconds' in goal else f"전체 {goal['count']}/{goal['target']}개")
     for platform, coverage in goal.get('platform_targets', {}).items():
         text += f" · {'TikTok' if platform == 'tiktok' else platform} {coverage['usable']}/{coverage['target']}개"
     for platform, coverage in goal.get('platform_preferences', {}).items():
         text += f" · {'TikTok' if platform == 'tiktok' else platform} 선호 {coverage['usable']}/{coverage['target']}개"
+    if 'related_parent_count' in goal:
+        text += f" · 관련 원본 {goal['related_parent_count']}/{goal['required_parent_sources']}개"
+        for lang,row in goal.get('search_coverage',{}).items():
+            text += f" · {'영어' if lang=='en' else '중국어'} 실제 검색 {row['count']}/{row['minimum']}개"
+    if 'core_target' in goal:
+        text += f" · 핵심 제품 원본 {goal['core_parent_count']}/{goal['core_target']}개"
+        if goal.get('core_fallback'):text += ' · 실제 탐색 부족분 보조 전환'
     return text

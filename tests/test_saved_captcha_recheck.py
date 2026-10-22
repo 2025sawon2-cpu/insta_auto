@@ -6,6 +6,16 @@ from hotpost.editing_adapter import _atomic_json
 from hotpost.search_access import access_record, manual_required, observe_saved_captcha
 from hotpost import browser_search as bs
 
+
+@pytest.fixture(autouse=True)
+def mocked_image_reviewer(monkeypatch):
+    from hotpost.studio_adapter import StudioAdapter
+    def review(self,instruction,evidence,media):
+        positive=bool(evidence['detector'].get('matched_text') or evidence['detector'].get('challenge_url'))
+        return {'verdict':'captcha' if positive else 'not_captcha','visible_challenge':positive,
+                'observations':['fixture image review'],'reason':'fixture image review'}
+    monkeypatch.setattr(StudioAdapter,'editorial',review)
+
 def saved(settings, reason='captcha'):
     record={'reason':reason,'requires_verification':reason=='captcha','until':time.time()+3600,
             'blocked_at':time.time(),'strikes':3,'server_retry_after':reason=='rate_limited'}
@@ -13,7 +23,9 @@ def saved(settings, reason='captcha'):
     return record
 
 def page(body='TikTok Search videos Profile',url='https://www.tiktok.com/search?q=wallet'):
-    return SimpleNamespace(url=url,locator=lambda _:SimpleNamespace(inner_text=lambda:body),
+    from PIL import Image
+    return SimpleNamespace(url=url,locator=lambda _:SimpleNamespace(inner_text=lambda **kw:body),
+        screenshot=lambda path,**kw:Image.new('RGB',(64,64),'white').save(path),
         goto=lambda *a,**k:pytest.fail('A CAPTCHA recheck must not navigate'),
         reload=lambda *a,**k:pytest.fail('A CAPTCHA recheck must not reload'))
 

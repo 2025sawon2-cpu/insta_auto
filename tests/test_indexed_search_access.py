@@ -22,7 +22,7 @@ def test_challenge_stops_remaining_queries_and_subsequent_calls(tmp_path, monkey
     monkeypatch.setattr(source_finder.requests, 'get', get)
     audit = []
     assert search(['cabinet', 'cabinet closeup', 'cabinet demo'], 6, audit) == []
-    assert len(calls) == 1 and audit[0]['status'] == 'captcha'
+    assert len(calls) == 1 and audit[0]['status'] == 'captcha_review_pending'
     assert audit[0]['http_status'] == 202 and audit[0]['requests']
     assert search(['other cabinet'], 6, audit) == []
     assert len(calls) == 1 and audit[-1]['status'] == 'verification_required'

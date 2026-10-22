@@ -17,6 +17,7 @@ def test_hash_named_mask_frames_keep_actual_decoded_timestamps(tmp_path,monkeypa
         p=tmp_path/f'arbitrary-hash-{i}.png';p.write_bytes(str(t).encode())
         frames.append({'path':str(p),'source_timestamp':t})
     monkeypatch.setattr(module,'frame_inline_data',lambda p:{'mimeType':'image/jpeg','data':base64.b64encode(p.read_bytes()).decode()})
+    monkeypatch.setattr('hotpost.visual_media.review_frame_data',module.frame_inline_data)
     seen=[]
     def generate(settings,instruction,data,*,media):
         seen.extend(media)
@@ -42,6 +43,27 @@ def test_old_rejection_rechecked_and_success_clears_stale_ineligibility():
     assert not needs_function_review(source)
     source['sha256']='changed'
     assert needs_function_review(source)
+
+
+@pytest.mark.parametrize('core',[True,False])
+def test_explicit_source_reanalysis_revisits_old_core_and_context_without_touching_history(core):
+    import copy
+    from hotpost.source_functional import needs_identity_reanalysis, REVIEW_POLICY
+    source={'functional_review':{'reviewed':True,'policy':'visual-product-presentation-v4-full-reference-features',
+                                'same_core_function':core,'context_usable':not core}}
+    state={'run_id':'new','runs':[{'id':'old','status':'completed','inputs':{'source_ids':['old-source']}},
+        {'id':'new','inputs':{'source_selection_mode':'automatic'}}]}
+    before=copy.deepcopy(state)
+    assert needs_identity_reanalysis(state,source)
+    assert state==before
+    source['functional_review']['policy']=REVIEW_POLICY
+    assert not needs_identity_reanalysis(state,source)
+    source['functional_review']['policy']='old'
+    state['run_id']='old'
+    assert not needs_identity_reanalysis(state,source)
+    state['run_id']='new'
+    source['manual_usage_review']={'editing_eligible':False}
+    assert not needs_identity_reanalysis(state,source)
 
 
 def test_current_rejection_and_old_acceptance_are_not_repeated():
@@ -99,6 +121,7 @@ def test_review_sends_bounded_endpoint_evidence_and_labels_uncertain_order(tmp_p
     # is covered with real image pixels in test_visual_media.py.
     monkeypatch.setattr(source_functional,'frame_inline_data',lambda path:
         {'mimeType':'image/jpeg','data':base64.b64encode(path.read_bytes()).decode()})
+    monkeypatch.setattr('hotpost.visual_media.review_frame_data',source_functional.frame_inline_data)
 
     def files(names):
         result = []
@@ -146,7 +169,7 @@ def test_whole_reference_overview_contains_late_scene_and_tracks_file_identity(t
     info=reference_review_info({'reference_video':str(video),'original_text':'두 가지 기능을 보여요.'},tmp_path)
     assert info['reference_sha256']==sha256_file(video)
     with Image.open(info['overview_path']) as im:
-        first=im.convert('RGB').getpixel((135,240));last=im.convert('RGB').getpixel((945,1200))
+        first=im.convert('RGB').getpixel((135,240));last=im.convert('RGB').getpixel((1320,1491))
         assert first[0]>first[2]+100 and last[2]>last[0]+100
     old=info['overview_path'];create('green')
     updated=reference_review_info({'reference_video':str(video)},tmp_path)
@@ -170,3 +193,49 @@ def test_secondary_feature_review_receives_full_overview_and_reference_informati
     assert captured['data']['provided_reference_info']['original_product_text']==info['original_product_text']
     assert result['matched_reference_features']==['cloth hanging on convertible frame']
     assert str(overview) in result['evidence_frames'] and result['context_usage_limits']
+
+
+def test_reference_scene_samples_survive_without_false_chronology(tmp_path,monkeypatch):
+    from PIL import Image
+    from hotpost.source_functional import REFERENCE_EVIDENCE_REVISION
+    frames=[]
+    for name in ['frame_001.jpg','frame_002.jpg','frame_003.jpg','frame_004.jpg','frame_123_scene_001.jpg']:
+        p=tmp_path/name;Image.new('RGB',(20,20),'gray').save(p);frames.append(p)
+    seen={}
+    def generate(settings,instruction,data,*,media):
+        seen.update(instruction=instruction,media=media)
+        return {'same_core_function':False,'context_usable':False,'observed_actions':['uncertain']}
+    monkeypatch.setattr('hotpost.script_rewriter._generate',generate)
+    receipt=review_function(Settings(),SimpleNamespace(file_sha256='test'),frames,[frames[0]],
+        {'reference_evidence_revision':REFERENCE_EVIDENCE_REVISION})
+    assert str(frames[-1]) in receipt['evidence_frames']
+    assert any('REFERENCE:' in p.get('text','') and 'order unknown' in p['text'] for p in seen['media'])
+    assert 'visible evidence in BOTH videos' in seen['instruction']
+    assert receipt['reference_evidence_revision']==REFERENCE_EVIDENCE_REVISION
+    assert not receipt['same_core_function']
+
+
+def test_prior_same_function_identity_rejection_gets_one_richer_reference_review(tmp_path):
+    from test_core_product_priority import state,asset
+    from hotpost.source_functional import needs_identity_reanalysis,REFERENCE_EVIDENCE_REVISION
+    s=state();item=asset(tmp_path,0,s)
+    assert not needs_identity_reanalysis(s,item)
+    item['functional_review']['featured_product_identity']=False
+    assert needs_identity_reanalysis(s,item)
+    item['functional_review']['reference_evidence_revision']=REFERENCE_EVIDENCE_REVISION
+    assert not needs_identity_reanalysis(s,item)
+    item['functional_review'].pop('reference_evidence_revision')
+    item['manual_usage_review']={'editing_eligible':False}
+    assert not needs_identity_reanalysis(s,item)
+
+
+@pytest.mark.parametrize('finished',['completed','superseded'])
+def test_richer_reference_revision_preserves_finished_runs(tmp_path,finished):
+    from test_core_product_priority import state,asset
+    from hotpost.source_functional import needs_identity_reanalysis
+    s=state();item=asset(tmp_path,0,s)
+    item['functional_review']['featured_product_identity']=False
+    s.update(status=finished,runs=[{'id':s['run_id'],'status':finished,'source_policy':s['source_policy']}])
+    assert not needs_identity_reanalysis(s,item)
+    s['runs'][0]['status']='running'
+    assert needs_identity_reanalysis(s,item)

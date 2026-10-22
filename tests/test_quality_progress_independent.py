@@ -367,6 +367,12 @@ def test_store_duplicate_review_and_source_completion_preserve_progress_and_hist
     from hotpost.studio_store import StudioStore
     from test_cover_scope_recovery import Acceptance,recollection_state,refresh_result
     state,_,_=fixture(tmp_path)
+    # This checks idempotent completion of a saved pre-v5 task, not the new
+    # five-parent acquisition/edit contract (covered independently).
+    legacy_policy={'version':4,'minimum_total':1,'platform_minimums':{},
+        'editorial_policy':'normal-speed-editorial-v1','allow_source_reuse':True,
+        'duration_requirement':'preference','core_duration_requirement':'preference'}
+    state['source_policy']=copy.deepcopy(legacy_policy)
     review=store_plan(tmp_path,state,plan('b'),'new-reviewed')
     review.update(passed=True,issues=[],review_path='new-review.json')
     preview=tmp_path/'new-preview.mp4';preview.write_bytes(b'actual duplicate-review fixture media')
@@ -393,6 +399,7 @@ def test_store_duplicate_review_and_source_completion_preserve_progress_and_hist
     assert after['edits']==before['edits'] and after['runs']==before['runs']
 
     source_state=recollection_state(tmp_path)
+    source_state['source_policy']=copy.deepcopy(legacy_policy)
     source_store=StudioStore(tmp_path/'duplicate-source-store')
     made,_=source_store.create('source-duplicate','제품',prepare=False,initial=source_state)
     source_task=made['id']
@@ -458,7 +465,7 @@ def test_explicit_exhausted_resume_requires_new_actual_method_and_preserves_hist
     assert state['automation']['paused_by_user'] and not state['automation']['active']
 
 
-def test_quality_review_reuses_same_actual_evidence_after_review_code_change(daily_ready,monkeypatch):
+def _quality_review_cache_fixture(daily_ready):
     from pathlib import Path
     from hotpost import daily_quality
     studio,task=daily_ready
@@ -477,14 +484,54 @@ def test_quality_review_reuses_same_actual_evidence_after_review_code_change(dai
     prior={'edit_id':edit['id'],'passed':False,'issues':[{'kind':'cover','reason':'표지가 답을 공개함'}],
         'render_sha256':hashlib.sha256(Path(edit['preview_path']).read_bytes()).hexdigest(),
         'plan_sha256':hashlib.sha256(Path(edit['plan_path']).read_bytes()).hexdigest(),
-        'review_contract_sha256':'older-review-contract','review_path':'older-review.json'}
+        'review_contract_sha256':hashlib.sha256(daily_quality.REVIEW_INSTRUCTION.encode()).hexdigest(),
+        'boundary_evidence':{'policy':'output-boundaries-v1',
+            'render_sha256':hashlib.sha256(Path(edit['preview_path']).read_bytes()).hexdigest()},
+        'review_path':'older-review.json'}
     state['daily_quality']['reviews']=[prior]
-    monkeypatch.setattr(daily_quality,'REVIEW_INSTRUCTION',daily_quality.REVIEW_INSTRUCTION+' A code contract revision.')
-    monkeypatch.setattr('hotpost.script_rewriter._generate',lambda *a,**k:pytest.fail('Same actual evidence must not be re-questioned'))
+    return studio,state,edit,prior
+
+
+def test_quality_review_reuses_same_actual_evidence_with_current_contract_and_boundaries(daily_ready,monkeypatch):
+    from hotpost import daily_quality
+    studio,state,edit,prior=_quality_review_cache_fixture(daily_ready)
+    monkeypatch.setattr('hotpost.script_rewriter._generate',lambda *a,**k:pytest.fail('Current bound review should be reused'))
+    monkeypatch.setattr(daily_quality.subprocess,'run',lambda *a,**k:pytest.fail('Cache hit must not decode media again'))
     output=studio._quality_review(state,{'id':'new-review-id','payload':{'edit_id':edit['id']}})
     assert output['reused_evidence_review'] and not output['passed']
     assert output['issues']==prior['issues']
     assert output['render_sha256']==prior['render_sha256']
+
+
+@pytest.mark.parametrize('changed',['policy','missing_boundaries'])
+def test_quality_review_requires_fresh_evaluation_for_stale_or_incomplete_receipt(daily_ready,monkeypatch,changed):
+    from hotpost import daily_quality
+    studio,state,edit,prior=_quality_review_cache_fixture(daily_ready)
+    preserved=copy.deepcopy(prior)
+    if changed=='policy':
+        monkeypatch.setattr(daily_quality,'REVIEW_INSTRUCTION',daily_quality.REVIEW_INSTRUCTION+' A policy revision.')
+    else:
+        prior.pop('boundary_evidence')
+        preserved=copy.deepcopy(prior)
+
+    class FreshMediaReviewStarted(RuntimeError):
+        pass
+
+    calls=[]
+    def fresh_decode(command,**kwargs):
+        # This cache unit fixture has no decodable MP4. Stop explicitly at the
+        # first fresh-media boundary; a fabricated decode success would hide it.
+        assert command==['ffmpeg','-v','error','-xerror','-i',edit['preview_path'],'-f','null','-']
+        assert kwargs=={'check':True,'capture_output':True}
+        calls.append(command)
+        raise FreshMediaReviewStarted('Fresh review selected; real media decode is required')
+
+    monkeypatch.setattr(daily_quality.subprocess,'run',fresh_decode)
+    monkeypatch.setattr('hotpost.script_rewriter._generate',lambda *a,**k:pytest.fail('Model cannot run before fresh media verification'))
+    with pytest.raises(FreshMediaReviewStarted,match='Fresh review selected'):
+        studio._quality_review(state,{'id':'new-review-id','payload':{'edit_id':edit['id']}})
+    assert len(calls)==1
+    assert state['daily_quality']['reviews']==[preserved]
 
 
 def test_user_pause_stops_automatic_quality_collection_and_retains_manual_source_request(tmp_path):

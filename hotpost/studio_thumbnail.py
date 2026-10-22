@@ -44,6 +44,70 @@ def validate_thumbnail(document, duration):
     return {**result, 'frame': frame}
 
 
+def verify_manual_thumbnail(state, edit, plan, video):
+    """Bind manual typography to the actual render, and body to a reviewed parent."""
+    from .daily_quality import verified_quality_export
+    from .source_quality import sha256_file
+    parent = next((e for e in state.get('edits', []) if e['id'] == edit.get('parent_id')), None)
+    if not parent or not verified_quality_export(state, parent, historical=True):
+        raise ValueError('수동 썸네일의 본문 승인 근거가 확인되지 않았습니다.')
+    if any(edit.get(k) != parent.get(k) for k in ('script_id', 'voice_id', 'duration')):
+        raise ValueError('수동 썸네일의 본문 버전이 변경되었습니다.')
+    document = validate_thumbnail(plan['thumbnail_document'], edit['duration'])
+    if parent.get('plan_path'):
+        old_plan=json.loads(Path(parent['plan_path']).read_text('utf8'))
+        body_keys=('script_text','duration','beats','shots','sources','cues','voice','voice_source',
+            'pause_processing','narration_policy','alignment','caption_style','sound_effects',
+            'sound_effect_policy','sfx_gain','audio_mix','remotion_document')
+        if any(plan.get(k)!=old_plan.get(k) for k in body_keys):
+            raise ValueError('수동 썸네일의 본문 편집 계획이 변경되었습니다.')
+    folder = Path(edit['plan_path']).parent
+    request = json.loads((folder/'thumbnail-request.json').read_text('utf8'))
+    result = json.loads((folder/'thumbnail-result.json').read_text('utf8'))
+    spec = plan['cover_spec']; source = spec.get('source', {})
+    cover = Path(result['cover_path']); background = Path(request['background'])
+    parent_video = Path(parent['export_path'])
+    receipt = json.loads(Path(video).with_suffix('.cover-copy.json').read_text('utf8'))
+    bundled_font = folder/'thumbnail-bundle/public/DoHyeon.ttf'
+    font = ROOT.parent/'web/assets/fonts/DoHyeon-Regular.ttf'
+    if (request['document'] != document or spec.get('lines') != [e['text'] for e in document['elements']]
+            or source.get('rendered_cover_sha256') != sha256_file(cover)
+            or source.get('frame_sha256') != sha256_file(background)
+            or sha256_file(bundled_font) != sha256_file(font)
+            or receipt.get('sha256') != sha256_file(Path(video))
+            or receipt.get('inputs', {}).get(str(cover.resolve())) != sha256_file(cover)
+            or receipt.get('inputs', {}).get(str(parent_video.resolve())) != sha256_file(parent_video)
+            or not all(receipt.get('proof', {}).get(k) is True for k in ('body_frames_identical', 'audio_identical'))):
+        raise ValueError('수동 썸네일의 문구·폰트·영상 보존 근거가 변경되었습니다.')
+
+
+def queue_preserved_thumbnail(studio, state, db, run, edit):
+    """A voice-only reproduction keeps the last manually edited cover."""
+    if not edit or run.get('inputs', {}).get('thumbnail_only') or run.get('inputs', {}).get('remotion_only'):
+        return False
+    previous=next((r for r in state.get('runs', []) if r['id']==run.get('parent_id')), {})
+    old=next((e for e in state.get('edits', []) if e['id']==previous.get('artifacts', {}).get('edit_id')), {})
+    if not old or edit.get('voice_id')==old.get('voice_id') or edit.get('preserved_thumbnail_from')==old.get('id'):
+        return False
+    scripts={s['id']:s['text'] for s in state.get('scripts', [])}
+    if (not scripts.get(edit.get('script_id')) or scripts.get(edit.get('script_id'))!=scripts.get(old.get('script_id'))
+            or set(run.get('inputs', {}).get('source_ids', []))!=set(previous.get('inputs', {}).get('source_ids', []))):
+        return False
+    old_plan=json.loads(Path(old['plan_path']).read_text('utf8'))
+    document=old_plan.get('thumbnail_document')
+    if not document:return False
+    from .daily_quality import verified_quality_export
+    if not verified_quality_export(state, old, historical=True) or not verified_quality_export(state, edit):
+        raise ValueError('목소리 변경 후 유지할 썸네일·본문의 승인 근거가 없습니다.')
+    document=copy.deepcopy(document);document['frame']=-1
+    studio.store.enqueue(db,state['id'],'revision',{'edit_id':edit['id'],'script_id':edit['script_id'],
+        'voice_id':edit['voice_id'],'thumbnail_only':True,'thumbnail_document':document,
+        'preserved_thumbnail_from':old['id']},'preserve-thumbnail:'+run['id']+':'+edit['id'])
+    state['automation']['stage']='edit'
+    state.update(status='editing',message='수정한 목소리에 기존 썸네일을 유지하는 중',error='')
+    return True
+
+
 def render_thumbnail(studio, state, job, edit, plan):
     document = validate_thumbnail(job['payload']['thumbnail_document'], edit['duration'])
     base = Path(edit.get('export_path') or '').resolve()
@@ -57,27 +121,29 @@ def render_thumbnail(studio, state, job, edit, plan):
     # particular, do not reuse the large legacy lossless thumbnail export.
     anchor = edit
     seen = set()
-    while anchor.get('export_kind') == 'thumbnail':
+    while True:
+        anchor_video=Path(anchor.get('export_path') or anchor.get('preview_path') or '').resolve()
+        copy_receipt=anchor_video.with_suffix('.cover-copy.json')
+        if not copy_receipt.is_file():
+            if anchor.get('export_kind')=='thumbnail':raise ValueError('썸네일 원본 완성본의 본문 보존 영수증이 없습니다.')
+            break
         if anchor.get('id') in seen:
             raise ValueError('썸네일 원본 연결이 순환하고 있습니다.')
         seen.add(anchor.get('id'))
         parent = next((e for e in state.get('edits', []) if e.get('id') == anchor.get('parent_id')), None)
         if not parent or any(parent.get(k) != anchor.get(k) for k in ('duration', 'script_id', 'voice_id')):
             raise ValueError('썸네일 원본 완성본을 찾을 수 없습니다.')
+        from .source_quality import sha256_file
+        receipt=json.loads(copy_receipt.read_text('utf8'))
+        parent_video=Path(parent.get('export_path') or parent.get('preview_path') or '').resolve()
+        if (receipt.get('sha256')!=sha256_file(anchor_video)
+                or receipt.get('inputs',{}).get(str(parent_video))!=sha256_file(parent_video)
+                or not all(receipt.get('proof',{}).get(k) is True for k in ('body_frames_identical','audio_identical'))):
+            raise ValueError('썸네일 원본 본문·음성 보존 근거가 변경되었습니다.')
         anchor = parent
-    source_video = Path(anchor.get('export_path') or '').resolve()
+    source_video = Path(anchor.get('export_path') or anchor.get('preview_path') or '').resolve()
     if not source_video.is_file() or not source_video.is_relative_to(data_root):
         raise ValueError('썸네일 원본 완성본이 준비되지 않았습니다.')
-    def metadata(path):
-        return json.loads(subprocess.run([probe, '-v', 'error', '-count_frames', '-show_streams',
-            '-show_format', '-of', 'json', str(path)], check=True, capture_output=True, encoding='utf-8', timeout=120).stdout)
-    original = metadata(base)
-    a = next(s for s in original['streams'] if s['codec_type']=='video')
-    if (a['width'], a['height'], a['r_frame_rate'], a['codec_name'], a['pix_fmt']) != (1080, 1920, '30/1', 'h264', 'yuv420p'):
-        raise ValueError('첫 프레임 썸네일은 H.264 1080×1920, 30fps 완성 영상에서 지원합니다.')
-    scale, deltas, _, _ = video_timing(source_video)
-    if len(deltas) != int(a['nb_read_frames']):
-        raise ValueError('썸네일 원본과 현재 완성본의 길이가 다릅니다.')
     folder = studio.folder(state['id'])/job['id']
     folder.mkdir(exist_ok=True)
     background = folder/'thumbnail-background.png'
@@ -104,55 +170,25 @@ def render_thumbnail(studio, state, job, edit, plan):
     if not cover.is_relative_to(folder.resolve()):
         raise ValueError('썸네일 렌더링 결과를 확인할 수 없습니다.')
     target = folder/'thumbnail-final.mp4'
-    prefix, joined = folder/'thumbnail-frame.mp4', folder/'thumbnail-joined.mp4'
-    color = []
-    for key, option in [('color_range','-color_range'), ('color_space','-colorspace'),
-                        ('color_transfer','-color_trc'), ('color_primaries','-color_primaries')]:
-        if a.get(key) and a[key] not in ('unknown', 'unspecified'):
-            color += [option, a[key]]
-    def encode(args):
-        subprocess.run([ffmpeg, '-y', '-v', 'error', *map(str, args)], check=True,
-            capture_output=True, timeout=studio.settings.auto_capcut_timeout)
-    # Encode one cover sample; retain all original P/B reference samples.
-    encode(['-i', cover, '-frames:v', '1', '-r', '30', '-c:v', 'libx264', '-crf', '18',
-            '-preset', 'medium', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-bf', '0',
-            *color, '-video_track_timescale', scale, prefix])
-    listing = folder/'thumbnail-concat.txt'
-    def concat_path(path):
-        return "file '"+path.as_posix().replace("'", "'\\''")+"'\n"
-    listing.write_text(concat_path(prefix.resolve())+'duration 0.03333333333333333\n'+
-                       concat_path(source_video), encoding='utf-8')
-    encode(['-f', 'concat', '-safe', '0', '-i', listing, '-i', source_video,
-            '-map', '0:v:0', '-map', '1:a?', '-c', 'copy', *color,
-            '-video_track_timescale', scale, '-movie_timescale', scale, joined])
-    present_cover(joined, source_video, target)
-    if target.stat().st_size > source_video.stat().st_size+max(512*1024, source_video.stat().st_size//10):
-        raise RuntimeError('썸네일 반영 후 파일 용량이 예상보다 크게 증가했습니다.')
-    rendered = metadata(target)
-    b = next(s for s in rendered['streams'] if s['codec_type']=='video')
-    if any(a.get(k) != b.get(k) for k in ('width', 'height', 'r_frame_rate', 'nb_read_frames')):
-        raise RuntimeError('썸네일 반영 후 영상 규격·프레임 수가 달라졌습니다.')
-    if abs(float(original['format']['duration'])-float(rendered['format']['duration'])) > .04:
-        raise RuntimeError('썸네일 반영 후 영상 길이가 달라졌습니다.')
-    def frames(path):
-        output = subprocess.run([ffmpeg, '-v', 'error', '-i', str(path), '-map', '0:v:0',
-            '-pix_fmt', 'yuv420p', '-f', 'framemd5', '-'], check=True, capture_output=True,
-            encoding='utf-8', timeout=studio.settings.auto_capcut_timeout).stdout
-        return [r for r in output.splitlines() if r and not r.startswith('#')]
-    before_frames, after_frames = frames(base), frames(target)
-    if len(before_frames) != len(after_frames) or before_frames[1:] != after_frames[1:]:
-        raise RuntimeError('썸네일 반영 후 본문 프레임·타이밍이 달라졌습니다.')
-    if any(s['codec_type']=='audio' for s in original['streams']):
-        def audio_hash(path):
-            return subprocess.run([ffmpeg,'-v','error','-i',str(path),'-map','0:a','-c','copy','-f','hash','-'],
-                capture_output=True, check=True, timeout=120).stdout
-        if audio_hash(base) != audio_hash(target):
-            raise RuntimeError('썸네일 반영 후 음성이 달라졌습니다.')
-    joined.unlink()
-    prefix.unlink()
+    from .cover_frame_copy import replace_frame
+    replace_frame(source_video,cover,target,studio.settings.auto_capcut_timeout,validation_base=base)
     revised = copy.deepcopy(plan)
     revised['thumbnail_document'] = document
-    revised.setdefault('cover_spec', {})['background_path'] = str(background)
+    previous_cover=copy.deepcopy(revised.get('cover_spec',{}))
+    # A manual cover is a new actual image/document, not the old source's approval.
+    from .source_quality import sha256_file
+    revised['cover_spec']={'lines':[e['text'] for e in document['elements']],
+        'background_path':str(background),'copy_origin':'manual_thumbnail_document',
+        'source':{'frame_path':str(background),'frame_sha256':sha256_file(background),
+            'rendered_cover_path':str(cover),'rendered_cover_sha256':sha256_file(cover),
+            'manual_background_frame':document['frame'],'parent_edit_id':edit['id']}}
+    revised.setdefault('cover_revision_history',[]).append({'parent_edit_id':edit['id'],
+        'previous_cover_spec':previous_cover,'reason':'manual_thumbnail_document'})
+    revised['cover_path']=str(cover)
+    revised['cover_text']='\n'.join(revised['cover_spec']['lines'])
+    revised['cover_review_policy']='manual-thumbnail-awaiting-actual-qa'
+    if revised.get('mask_application_clock'):
+        revised['mask_application_clock']['final_render_sha256']=sha256_file(target)
     revised['cover_mode'] = 'replace_first_frame'
     timeline = folder/'thumbnail-timeline.json'
     _atomic_json(timeline, revised)

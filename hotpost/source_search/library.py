@@ -36,7 +36,7 @@ def contains(text, phrase):
     if not phrase:
         return False
     if re.fullmatch(r'[a-z0-9 ]+',phrase):
-        return bool(re.search(r'(?<![a-z0-9])'+re.escape(phrase)+r'(?![a-z0-9])',text))
+        return bool(re.search(r'(?<![a-z0-9])'+re.escape(phrase)+r's?(?![a-z0-9])',text))
     if ' ' in phrase and re.search(r'[가-힣]', phrase):
         # Korean hashtags omit word spacing; the actual subject stays the same.
         return bool(re.search(r'\s*'.join(re.escape(w) for w in phrase.split()), text))
@@ -110,6 +110,16 @@ def discover(settings, shortcode, query_plan, limit):
     disabled=disabled_platforms(settings)
     products=[str(p[k]) for p in query_plan.get('products',[]) if isinstance(p,dict)
               for k in ('ko','en','zh') if p.get(k)]
+    identity=query_plan.get('search_identity')
+    if identity:
+        from ..source_query_identity import checked_identity
+        identity=checked_identity(identity)
+        # Old plans can contain a shape noun (apple) as a separate product.
+        # Look up actual product nouns, not that stale broad metadata. These
+        # remain proposals; missing brand/shape text does not veto context cuts.
+        products=[t for terms in identity['product_terms'].values() for t in terms]
+        shared=families(' '.join(products).lower())
+        products=list(dict.fromkeys([*products,*[a for i in shared for a in FAMILIES[i]]]))
     if not products:
         products=[str(q.get('query','')) for q in query_plan.get('query_details',[]) if isinstance(q,dict)]
     if not products or limit<=0:
@@ -141,10 +151,13 @@ def discover(settings, shortcode, query_plan, limit):
                 cached_path=str(file))
             if candidate.platform in disabled:
                 continue
-            ranked.append((candidate.platform=='tiktok',score,row['selected'],candidate))
-    ranked.sort(key=lambda r:r[:3],reverse=True)
+            identity_score=(sum(any(contains(row['body'].lower(),term)
+                for terms in required['terms'].values() for term in terms)
+                for required in identity['required_terms']) if identity else 0)
+            ranked.append((identity_score,candidate.platform=='tiktok',score,row['selected'],candidate))
+    ranked.sort(key=lambda r:r[:4],reverse=True)
     result=[];seen=set()
-    for _,_,_,candidate in ranked:
+    for _,_,_,_,candidate in ranked:
         key=canonical_video_key(candidate.url)
         if key in seen:
             continue

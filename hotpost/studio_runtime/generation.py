@@ -12,12 +12,22 @@ from pathlib import Path
 from ..editing_adapter import _atomic_json, selected_source_videos
 from ..local_compute import release_idle_voice, serialized_compute
 from ..source_quality import editing_ready
+from ..source_intake import downloaded_candidates
+from ..studio_sources import SourceAcquisitionMixin
 from ..studio_store import uid
 from ..studio_workflow import enabled, snapshot
 from .common import digest
 
+LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
 
 class GenerationMixin:
+    def __getattr__(self, name):
+        attr = getattr(SourceAcquisitionMixin, name, None)
+        if callable(attr):
+            return attr.__get__(self, type(self))
+        raise AttributeError(f'{type(self).__name__!r} object has no attribute {name!r}')
+
     def _prepare(self, state, job):
         job.setdefault('task_id', state['id'])
         if state.get('creation_mode') == 'photo_post':
@@ -67,6 +77,9 @@ class GenerationMixin:
             if enabled(s):
                 snapshot(s)
         change_claimed(self.store, job, record_transcript)
+        # A manual draft may be promoted while reference analysis is running.
+        # Continue with the current protocol instead of the pre-command snapshot.
+        state = self.store.get(state['id'])
         if not original.strip():
             raise ValueError('집필할 원본 참고 내용이 없습니다.')
         if enabled(state):
@@ -75,13 +88,31 @@ class GenerationMixin:
                 raise ValueError('대본 재가공에 필요한 기준 영상이 없습니다.')
             ids = job.get('payload', {}).get('source_ids')
             sources = [v for v in state['sources'] if ids is None or v['id'] in ids]
+            if not sources and ids is None and state.get('recovery_source_manifest_path'):
+                from ..video_agent_recovery import retained_candidates
+                sources = retained_candidates(self,state)
+            from ..studio_automation import _normalize_screen_text, _resolve_rewrite_manifest, identify_subject
+            from ..reference_context import post_caption
+            try:
+                screen_text = _normalize_screen_text(json.loads(transcript.read_text('utf-8')).get('screen_text', ''))
+            except (OSError, ValueError, TypeError):
+                screen_text = ''
+            full_caption = post_caption(self.settings, state) or state['title']
             manifest = self.folder(state['id'])/(job['id']+'-reference.json')
-            _atomic_json(manifest, {'caption':state['title'], 'user_supplied':bool(ids),
+            manifest_data = {'caption':full_caption, 'screen_text':screen_text, 'user_supplied':bool(ids),
                 'downloaded':len(sources), 'candidates':[{'title':v.get('original_name',''),
                     'file_sha256':v['sha256'], 'original_url':v.get('origin_url',''),
-                    'rights':v.get('rights','unknown'), 'selected_for_zip':True} for v in sources]})
-            return {'original_text':original, 'reference_video':str(reference), 'transcript_path':str(transcript),
-                    'sources':sources, 'manifest_path':str(manifest)}
+                    'rights':v.get('rights','unknown'), 'selected_for_zip':True} for v in sources]}
+            manifest_data = _resolve_rewrite_manifest(self, {**state, 'original_text': original,
+                'reference_speech_text': narrative['speech_text'], 'reference_video': str(reference),
+                'transcript_path': str(transcript)}, manifest_data)
+            _atomic_json(manifest, manifest_data)
+            initial_product = state.get('product_override') or identify_subject(manifest_data, original, state.get('product') or state['title'])
+            prepared = {'original_text':original, 'reference_video':str(reference), 'transcript_path':str(transcript),
+                        'sources':sources, 'manifest_path':str(manifest)}
+            if initial_product and initial_product != '원작 중심 대상 미확인':
+                prepared['product'] = initial_product
+            return prepared
         manifests = sorted(self.settings.source_dir.glob(f"{code}-*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
         # User uploads are production assets, not another search request. Keep
         # their IDs/provenance so selected sources remain selected downstream.
@@ -96,18 +127,19 @@ class GenerationMixin:
                 data["candidates"] = [c for c in data.get("candidates", []) if editing_ready(c) or c.get('relevance_review_required') or c.get('presentation_review_required')]
                 filtered = candidate.parent / "studio-selected.json"
                 _atomic_json(filtered, data)
-                videos = selected_source_videos(filtered)
+                videos = downloaded_candidates(filtered)
                 manifest = candidate
                 break
             except (ValueError, OSError): continue
         if not videos:
+            progress=self._bind_source_attempt_progress(state,job,progress)
             result = find_sources(self.settings, code, progress)
             manifest = Path(result["zip_path"]).parent / "manifest.json"
             data = json.loads(manifest.read_text(encoding='utf-8'))
             data['candidates'] = [c for c in data.get('candidates', []) if editing_ready(c) or c.get('relevance_review_required') or c.get('presentation_review_required')]
             filtered = manifest.parent / 'studio-selected.json'
             _atomic_json(filtered, data)
-            videos = selected_source_videos(filtered)
+            videos = downloaded_candidates(filtered)
         if not videos:
             raise ValueError('제작에 사용할 소스 영상이 없습니다. 자료를 확인하고 재시도하세요.')
         original = narrative['text']
@@ -139,8 +171,14 @@ class GenerationMixin:
                 "manifest_path": str(manifest)}
 
     def _refresh_sources(self, state, job):
+        job.setdefault('task_id',state['id'])
         try:
-            return self._refresh_source_attempt(state,job)
+            from ..studio_pause import pause_scope,check_paused
+            def boundary(*_):pass
+            boundary.check_cancel=lambda:check_paused(self.store,job)
+            with pause_scope(boundary):
+                boundary.check_cancel()
+                return self._refresh_source_attempt(state,job)
         except Exception:
             self._preserve_source_attempt_history(state,job)
             raise
@@ -153,20 +191,25 @@ class GenerationMixin:
         if job['payload'].get('daily_quality_repair'):
             from ..scene_narration_prepare import prepare_narration_context
             prepare_narration_context(self, state, job)
-            if (state.get('scene_narration_plan')
-                    and state['scene_narration_plan'].get('old_edit_id')==state.get('edit_id')):
-                from ..scene_requirements import assess
+            from ..scene_requirements import assess, required_scenes
+            # Existing approved footage can repair an unchanged narration too.
+            # assess independently compares actual candidate/failed-cut frames;
+            # inventory readiness alone never resolves a watermark defect.
+            if required_scenes(state):
                 from ..scene_narration_prepare import _save, commit_identity
                 expected_identity=commit_identity(state)
                 coverage=assess(self.settings,state)
-                _save(self,state,{'daily_quality':{'scene_requirements':coverage}},expected_identity)
+                _save(self,state,{'daily_quality':{'scene_requirements':coverage}},expected_identity,job=job)
                 from ..quality_issue_scope import is_cover_scene_gap
                 cover_gap=any(i.get('kind')=='cover' or is_cover_scene_gap(i) for i in state.get('daily_quality',{}).get('feedback',[]))
                 if coverage.get('ready') and not cover_gap:
                     return {'sources':[], 'scene_requirements':coverage, 'searches':[], 'attempted_urls':[],
                         'source_search_manifest_path':state.get('source_search_manifest_path') or state.get('manifest_path')
-                            or state['scene_narration_plan']['plan_path'],
-                        'local_narration_preparation':True}
+                            or (state.get('scene_narration_plan') or {}).get('plan_path')
+                            or next((e.get('plan_path') for e in state.get('edits',[])
+                                     if e.get('id')==state.get('edit_id')), ''),
+                        'local_narration_preparation':bool(state.get('scene_narration_plan')),
+                        'local_scene_preparation':True,'visual_review_only':True}
         from ..source_finder import find_sources
         from ..studio_pause import check_paused
         def progress(message, pct):
@@ -181,12 +224,20 @@ class GenerationMixin:
         state = self._restore_source_attempt_history(state,job)
         self._bind_source_attempt_progress(state,job,progress)
         progress.check_cancel()
-        deferred=(self._review_deferred_downloads(state,job,progress)
-                  if not job.get('checkpoint',{}).get('refresh_discovery') and (
-                      state.get('source_acquisition',{}).get('interrupted_attempts')
-                      or any((r.get('review_completion') or {}).get('deferred_sources',0)
-                         for r in state.get('source_acquisition',{}).get('rounds',[]))) else None)
-        if deferred is None and state.get('sources') and not job.get('checkpoint',{}).get('refresh_discovery'):
+        deferred=None
+        if not job.get('checkpoint',{}).get('refresh_discovery'):
+            if (job['payload'].get('search_before_saved_reviews')
+                    and job.get('checkpoint',{}).get('source_attempts')):
+                # The requested search already ran in this job. Resume its
+                # received files through normal review, never another job's.
+                deferred=self._review_deferred_downloads(state,job,progress,own_attempts_only=True)
+            elif not job['payload'].get('search_before_saved_reviews') and (
+                    state.get('source_acquisition',{}).get('interrupted_attempts')
+                    or any((r.get('review_completion') or {}).get('deferred_sources',0)
+                           for r in state.get('source_acquisition',{}).get('rounds',[]))):
+                deferred=self._review_deferred_downloads(state,job,progress)
+        if (deferred is None and not job['payload'].get('search_before_saved_reviews')
+                and state.get('sources') and not job.get('checkpoint',{}).get('refresh_discovery')):
             deferred=self._review_pending_local_sources(state,job,progress)
         if deferred is not None:
             for source in deferred['sources']:source['id']=uid('source-')
@@ -205,10 +256,21 @@ class GenerationMixin:
         wait_receipts = job['checkpoint'].get('refresh_wait_history', [])
         for receipt in wait_receipts:
             history = merge_history(history, receipt.get('searches', []))
+        from ..source_policy import run_policy
+        from ..source_coverage import diversity_required,current_search_rows,search_scope_for_state
+        acquisition_policy=run_policy(state)
+        if diversity_required(acquisition_policy):
+            history=current_search_rows({**state,'source_acquisition':{**acquisition,'queries':history}})
+            from ..source_diversity import acquisition_policy as collection_policy
+            acquisition_policy=collection_policy(state,acquisition_policy)
         excluded = list(dict.fromkeys([*acquisition.get('urls', []), *acquisition.get('inspected_urls', []),
             *(url for receipt in wait_receipts for key in ('attempted_urls','inspected_urls') for url in receipt.get(key, []))]))
         request=job['payload'].get('request', '')
-        request_key=hashlib.sha256((state['shortcode']+'\n'+request).encode()).hexdigest()
+        request_input=state['shortcode']+'\n'+request
+        if diversity_required(acquisition_policy):
+            request_input+='\n'+json.dumps({'run_id':state.get('run_id'),
+                'search_context':search_scope_for_state(state),'source_policy':acquisition_policy},sort_keys=True)
+        request_key=hashlib.sha256(request_input.encode()).hexdigest()
         saved=job['checkpoint'].get('refresh_discovery')
         if saved:
             # A service wait during visual review resumes the received files.
@@ -225,7 +287,10 @@ class GenerationMixin:
             result = find_sources(self.settings, state['shortcode'], progress, search_request=request,
                                   search_round=max(1, acquisition.get('round', 0)), previous_searches=history,
                                   exclude_urls=excluded,
-                                  search_context={'completed_rounds':acquisition.get('bounded_rounds',0),
+                                  search_context={'task_id':state['id'],'job_id':job['id'],
+                                                  'completed_rounds':acquisition.get('bounded_rounds',0),
+                                                  'source_policy':acquisition_policy,'run_id':state.get('run_id'),
+                                                  'search_context':search_scope_for_state(state),
                                                   'ready_routes':ready_routes,
                                                   'expected_reference_sha256':(sha256_file(Path(state['reference_video']))
                                                       if state.get('reference_video') and Path(state['reference_video']).is_file() else None),

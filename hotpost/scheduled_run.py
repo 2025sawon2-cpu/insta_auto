@@ -12,7 +12,8 @@ def main() -> int:
     settings = load_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     with (settings.data_dir / 'daily_collect.log').open('a', encoding='utf-8') as log:
-        log.write(f'\n[{datetime.now().astimezone().isoformat()}] scheduled collection started\n')
+        log.write(f'\n[{datetime.now().astimezone().isoformat()}] scheduled collection started '
+                  f'python={sys.executable} data_dir={settings.data_dir} db_exists={settings.db_path.exists()}\n')
         log.flush()
         from .storage import Storage
         for attempt in range(2):

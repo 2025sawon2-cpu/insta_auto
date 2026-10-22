@@ -93,6 +93,9 @@
     selecting=true;
     try{
       if(dirty)await saveScript();
+      if(tasks.find(t=>t.id===id)?._summary){
+        const detail=await api('/'+id);tasks=tasks.map(t=>t.id===id?detail:t);
+      }
       let restoreScroll=null;
       if(selectedId!==id){
         rememberPanel();
@@ -295,7 +298,13 @@
   async function refresh(){
     if(refreshing)return;refreshing=true;
     try{
-      const data=await api('');tasks=data.tasks;$('#board-loading').hidden=true;document.documentElement.dataset.studioConnection='live';$('#connection').hidden=true;$('#work-list').classList.remove('board-stale');renderList();updateDrawerHeader();
+      const data=await api('?view=list'),previous=new Map(tasks.map(t=>[t.id,t]));
+      tasks=data.tasks.map(t=>t._summary&&previous.get(t.id)?.revision===t.revision&&!previous.get(t.id)?._summary?previous.get(t.id):t);
+      if(selectedId&&tasks.find(t=>t.id===selectedId)?._summary){
+        const detailId=selectedId;
+        const detail=await api('/'+detailId);tasks=tasks.map(t=>t.id===detailId?detail:t);
+      }
+      $('#board-loading').hidden=true;document.documentElement.dataset.studioConnection='live';$('#connection').hidden=true;$('#work-list').classList.remove('board-stale');renderList();updateDrawerHeader();
       if(requestedId){const id=requestedId;requestedId=null;if(tasks.some(t=>t.id===id))await openWork(id);else toast('요청한 작업을 찾을 수 없습니다.');}
       const t=current();
       if(t&&(t.automation?.protocol===2||t.revision!==lastRevision&&!dirty&&!document.activeElement.matches('textarea,input,select')&&!$('#detail')._legacyEditing&&!$('#detail')._uploading&&![...$('#detail').querySelectorAll('video,audio')].some(m=>!m.paused)))renderDetail();

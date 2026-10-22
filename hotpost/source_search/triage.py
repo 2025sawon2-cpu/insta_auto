@@ -20,16 +20,60 @@ def action_keys(text):
     return {key for key, pattern in ACTION_WORDS.items() if re.search(pattern,text,re.I)}
 
 
+def _topic_title_priority(title, identity):
+    """Soft title order from approved evidence; never query or media permission."""
+    from ..source_query_identity import checked_identity,contains,matches_identity,FLEXIBLE_VERSION
+    profile=checked_identity(identity)
+    # Search transport is an exact allowlist. Candidate titles instead compare
+    # the separately grounded subject, retaining all required identity terms.
+    if matches_identity(title,{**profile,'version':FLEXIBLE_VERSION}):
+        return 8,'핵심 제품 조건의 제목 근거 우선 · 실제 정체성은 영상 검토로 확정'
+    shared={}
+    for row in profile['approved_queries']:
+        words=row['query'].split();lang=row['language']
+        for start in range(len(words)):
+            for end in range(start+1,len(words)+1):
+                phrase=' '.join(words[start:end])
+                if len(phrase)<2 or not any(contains(term,[phrase]) for term in profile['product_terms'][lang]):
+                    continue
+                shared.setdefault((lang,phrase),set()).add(row['semantic_key'])
+    phrases={phrase for (lang,phrase),keys in shared.items() if len(keys)>=2}
+    # Prefer the longest actually shared phrase. Do not promote a loose word
+    # like "machine" when the approved shared product phrase is "spark machine".
+    maximal={phrase for phrase in phrases if not any(
+        other!=phrase and len(other)>len(phrase) and contains(other,[phrase]) for other in phrases)}
+    if contains(title,maximal):
+        return 2,'독립 승인 검색어들의 공통 제품 표현이 제목에 있음 · 실제 정체성은 영상 검토로 확정'
+    return 0,''
+
+
 def rank_candidates(candidates, plan):
     """Titles inform priority only; they never grant/revoke editing eligibility."""
-    action_rows = [q for q in plan.get('query_details',[]) if q.get('role') == 'subject_action' and q.get('evidence_quote')]
+    # Approved visual-noun plans retain legacy query rows for provenance, but
+    # those food/storage templates do not describe arbitrary reference actions
+    # (e.g. fridge decorations are not cold-storage demonstrations).
+    visual_plan = bool(plan.get('visual_query_evidence') and not plan.get('tiktok_operator_request'))
+    action_rows = [] if visual_plan else [q for q in plan.get('query_details',[])
+        if q.get('role') == 'subject_action' and q.get('evidence_quote')]
     wanted = set().union(*(action_keys(q['query']) for q in action_rows)) if action_rows else set()
     if 'cold_storage' in wanted:
         wanted.discard('storage')
-    products = plan.get('products',[])
+    products = list(plan.get('products',[]))
+    ps = plan.get('primary_subject')
+    if isinstance(ps, dict) and ps.get('name') and not products:
+        products = [{'ko': ps['name'], 'en': ps['name'], 'zh': ps['name']}]
     for candidate in candidates:
         title = candidate.title.lower()
         points, reasons = 0.0, []
+        if (plan.get('source_policy',{}).get('core_product_priority') and plan.get('search_identity')):
+            from ..source_query_identity import matches_identity
+            if plan['search_identity'].get('version')=='reviewed-topic-discovery-v1':
+                added,reason=_topic_title_priority(candidate.title,plan['search_identity'])
+                points+=added
+                if reason:reasons.append(reason)
+            elif matches_identity(candidate.title,plan['search_identity']):
+                points+=8
+                reasons.append('핵심 제품 조건의 제목 근거 우선 · 실제 정체성은 영상 검토로 확정')
         for product in products:
             bases = [re.sub(r' preparation$|\s*준비$|准备$', '', product.get(lang,'')).strip().lower()
                      for lang in ('en','ko','zh')]
@@ -44,6 +88,9 @@ def rank_candidates(candidates, plan):
                 points += 1
                 reasons.append('제목의 상위 주제 일치 · 세부 재료·동작은 영상 검사로 판단')
                 break
+        if '/shorts/' in (candidate.url or ''):
+            points += 1.5
+            reasons.append('세로형 Shorts URL 우선')
         observed = action_keys(title)
         matched = wanted & observed
         if matched:

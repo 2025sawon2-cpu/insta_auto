@@ -15,11 +15,14 @@ from hotpost.studio_workflow import snapshot, transient
 
 @pytest.fixture(autouse=True)
 def small_inventory_contract(monkeypatch):
-    # These queue/version tests use one dummy asset. Full production quotas,
-    # actual file inventory and legacy preservation are integration-tested in
-    # test_source_quota_policy.py and test_parallel_sources.py.
-    monkeypatch.setattr('hotpost.source_policy.current_policy', lambda settings=None: {
-        'version':2, 'minimum_total':getattr(settings, 'source_min_usable', 1), 'platform_minimums':{}})
+    # This file's existing queue/version tests model legacy v4 count fixtures
+    # (one dummy asset, or two when a test requests collection). Pin only this
+    # module's factory so a new v5 default cannot change the guard under test.
+    # Actual v5 acquisition/body minimums have separate independent tests.
+    monkeypatch.setattr('hotpost.source_policy.montage_policy', lambda settings=None: {
+        'version':4, 'minimum_total':getattr(settings, 'source_min_usable', 1), 'platform_minimums':{},
+        'editorial_policy':'normal-speed-editorial-v1','allow_source_reuse':True,
+        'duration_requirement':'preference','core_duration_requirement':'preference'})
 
 
 @pytest.fixture
@@ -60,6 +63,30 @@ def complete(studio,task, *, stop_after_edit=False):
     assert studio.store.get(task)['status']=='exporting'
     final=folder/(job['id']+'-final.mp4');final.write_bytes(b'exported')
     finish(studio,{'export_path':str(final),'export_verified':True})
+
+
+def test_explicit_reproduction_recovers_initial_failure_without_resuming_paused_collection(prepared):
+    from hotpost.daily_quality import POLICY
+    studio,task=prepared
+    def failed(s,db):
+        db.execute("UPDATE jobs SET status='done' WHERE task_id=?",(task,))
+        s['daily_quality']={'policy':POLICY,'pending':'failed','status':'needs_attention',
+                            'failed_job_kind':'edit','failed_job_id':'old-edit','error':'unverified ending',
+                            'repair_round':0,'reviews':[]}
+        for kind in ('collect_sources','refresh_sources'):
+            jid=studio.store.enqueue(db,task,kind,{},'held-'+kind)
+            db.execute("UPDATE jobs SET status='paused' WHERE id=?",(jid,))
+    before=studio.store.change(task,failed)
+    result=studio.action(task,'make-video',{'revision':before['revision'],
+        'pronunciations':[{'from':'도구','to':'도 구'}]})
+    assert result['voice_id'] is None and result['run_id']!=before['run_id']
+    jobs=studio.store.jobs(task)
+    assert len([j for j in jobs if j['kind']=='voice' and j['status']=='queued'])==1
+    assert all(j['status']=='paused' for j in jobs if j['kind'] in {'collect_sources','refresh_sources'})
+    current=studio.store.get(task)
+    assert current['daily_quality'].get('pending')!='failed'
+    assert current['daily_quality']['stop_history'][-1]['error']=='unverified ending'
+    assert current['daily_quality']['repair_round']==0
 
 
 def test_export_is_completion_boundary_and_all_assets_download(prepared):
@@ -532,7 +559,10 @@ def test_unverified_screen_reading_keeps_reference_and_stops_before_source_searc
 
 
 def test_error_classification():
-    assert transient(TimeoutError()) and transient(RuntimeError('HTTP 503'))
+    from urllib.error import HTTPError
+    assert not transient(TimeoutError())
+    assert not transient(RuntimeError('HTTP 503'))
+    assert transient(HTTPError('https://service.test', 503, 'unavailable', {}, None))
     assert not transient(ValueError('대본 검증 실패'))
     assert not transient(RuntimeError('로그인 필요'))
 

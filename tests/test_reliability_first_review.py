@@ -37,7 +37,7 @@ class SingleWorkerStore(StudioStore):
 
 def test_source_completion_preserves_latest_user_denial_receipt(monkeypatch):
     current={'editing_eligible':False,'reason':'excluded during review','reviewer':'user','at':42}
-    state={'id':'task','sources':[{'id':'stable','sha256':'sha',
+    state={'id':'task','product':'검토 대상 제품','sources':[{'id':'stable','sha256':'sha',
         'manual_usage_review':copy.deepcopy(current),'editing_eligible':False}],
         'source_acquisition':{},'status':'completed'}
     mixin=SourceAcquisitionMixin()

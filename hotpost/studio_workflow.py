@@ -57,12 +57,8 @@ def snapshot(state):
 
 
 def transient(exc):
-    if isinstance(exc, (TimeoutError, ConnectionError, subprocess.TimeoutExpired)):
-        return True
-    text = str(exc).lower()
-    if any(s in text for s in ('login', '로그인', 'captcha', '검증', '해시', '자료', 'api_key', '401', '403')):
-        return False
-    return any(s in text for s in ('timeout', 'timed out', '시간 초과', '연결하지 못', 'connection', 'http 429', 'http 502', 'http 503', 'http 504'))
+    from .retry_policy import classify_failure
+    return classify_failure(exc)['retryable']
 
 
 def validate_edit_feedback(edit, changes):
@@ -288,6 +284,8 @@ class WorkflowMixin:
                 feedback.pop('caption_only', None)
                 feedback.pop('overlay_document', None)
                 feedback.pop('remotion_only', None)
+                feedback.pop('thumbnail_document', None)
+                feedback.pop('thumbnail_only', None)
             elif action in {'save-script', 'restore-script', 'apply-proposal', 'select-candidate'}:
                 if action == 'save-script': text = str(data.get('text', '')).strip()
                 elif action == 'restore-script': text = next(v['text'] for v in s['scripts'] if v['id'] == data['script_id'])
@@ -318,10 +316,18 @@ class WorkflowMixin:
                             raise ValueError('발음 교정은 원문과 읽을 발음을 입력하세요.')
                     feedback['pronunciations'] = pairs
                 if 'source_ids' in data:
+                    if data.get('source_selection_mode') == 'automatic':
+                        raise ValueError('자동 소스 재선정과 직접 소스 선택을 동시에 요청할 수 없습니다.')
                     ids = data['source_ids']
                     if not isinstance(ids, list) or not set(ids) <= {v['id'] for v in s['sources']}:
                         raise ValueError('보유한 소스에서 선택하세요.')
                     feedback['source_ids'] = list(dict.fromkeys(ids))
+                    feedback['source_selection_mode'] = 'manual'
+                if 'source_selection_mode' in data:
+                    if data['source_selection_mode'] != 'automatic' or 'source_ids' in data:
+                        raise ValueError('자동 소스 재선정 요청을 확인하세요.')
+                    feedback.pop('source_ids', None)
+                    feedback['source_selection_mode'] = 'automatic'
                 if action == 'regenerate-voice': feedback['regenerate_voice'] = True
             elif action == 'revise-edit':
                 feedback.pop('caption_only', None)
@@ -347,7 +353,7 @@ class WorkflowMixin:
             if action in {'reproduce','export-edit','make-video','export-overlays','export-thumbnail'}:
                 if s.get('pending_reproduction'): raise Conflict('이미 재제작이 대기 중입니다.')
                 if not feedback: raise ValueError('반영할 변경사항을 먼저 저장하세요.')
-                if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids', 'voice_profile_id')):
+                if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and any(k in feedback for k in ('script_text', 'speed', 'pronunciations', 'regenerate_voice', 'source_ids', 'source_selection_mode', 'voice_profile_id')):
                     raise Conflict('대본·음성·소스를 바꾸면 장면 구성이 달라집니다. 구간 수정만 초기화한 뒤 재제작하고, 새 영상에서 장면·자막을 조정하세요. 기존 완성본은 보존됩니다.')
                 ids = feedback.get('source_ids', [v['id'] for v in s['sources']])
                 if not ids and not feedback.get('thumbnail_only'): raise ValueError('사용할 소스를 한 개 이상 선택하세요.')
@@ -380,7 +386,8 @@ class WorkflowMixin:
         old_script = next((x['text'] for x in s['scripts'] if x['id']==s.get('script_id')), '')
         old_sources = old['inputs'].get('source_ids') or [x['id'] for x in s['sources']]
         changed_narration = 'script_text' in feedback and feedback['script_text'] != old_script
-        changed_sources = 'source_ids' in feedback and set(feedback['source_ids']) != set(old_sources)
+        automatic_sources = feedback.get('source_selection_mode') == 'automatic'
+        changed_sources = automatic_sources or ('source_ids' in feedback and set(feedback['source_ids']) != set(old_sources))
         if s.get('reviewed_scene_rules') and (changed_narration or changed_sources):
             # Bounded manual review belongs to those exact narration/source
             # inputs. New user edits return to normal actual-frame selection.
@@ -395,11 +402,16 @@ class WorkflowMixin:
         old_inputs.pop('remotion_only', None)
         old_inputs.pop('thumbnail_document', None)
         old_inputs.pop('thumbnail_only', None)
+        if automatic_sources:
+            # A new automatic source analysis must include inventory acquired
+            # later, rather than pinning the previous run's small selection.
+            # The completed parent's selection and artifacts remain immutable.
+            old_inputs.pop('source_ids', None)
         old_inputs.update(feedback)
         s.pop('run_id', None)
         from .source_policy import adopt_policy
         if not feedback.get('remotion_only') and not feedback.get('thumbnail_only'):
-            adopt_policy(s, self.settings)
+            adopt_policy(s, self.settings, new_run=True)
         run = init_run(s)
         run.update(inputs=old_inputs, parent_id=old['id'])
         if 'script_text' in feedback:
@@ -407,11 +419,11 @@ class WorkflowMixin:
             s['automation']['needs_top_pick'] = False
         if any(k in feedback for k in ('script_text', 'pronunciations', 'speed', 'regenerate_voice', 'voice_profile_id')):
             s.update(voice_id=None, approved_voice_id=None, edit_id=None)
-        elif 'source_ids' in feedback:
+        elif 'source_ids' in feedback or automatic_sources:
             s['edit_id'] = None
         s['automation'].update(active=True, paused_by_user=False)
         s.update(error='', progress=0)
-        if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids','voice_profile_id')):
+        if (feedback.get('changes') or 'overlay_document' in feedback or 'thumbnail_document' in feedback) and not any(k in feedback for k in ('script_text','pronunciations','speed','regenerate_voice','source_ids','source_selection_mode','voice_profile_id')):
             edit = next(e for e in s['edits'] if e['id'] == feedback['base_edit_id'])
             self.store.enqueue(db, s['id'], 'revision', {'edit_id':edit['id'], 'script_id':edit['script_id'],
                 'voice_id':edit['voice_id'], 'changes':feedback.get('changes', []), 'caption_only':bool(feedback.get('caption_only')),
@@ -419,6 +431,11 @@ class WorkflowMixin:
                 **({'thumbnail_only':True, 'thumbnail_document':feedback['thumbnail_document']} if 'thumbnail_document' in feedback else {})}, 'revision:'+run['id'])
             s.update(status='editing', message='첫 프레임 썸네일을 반영한 새 버전 제작 중' if feedback.get('thumbnail_only') else '수정한 자막으로 MP4 내보내기 중' if feedback.get('caption_only') else '저장한 장면·자막 수정으로 새 버전 제작 중')
         else:
+            if s.get('daily_quality', {}).get('pending') == 'failed' and not s.get('edit_id'):
+                # An explicit new reproduction uses the same technical-recovery
+                # assessment as resume, without requeuing old paused collectors.
+                from .quality_progress import resume_assessment
+                resume_assessment(s)
             self._advance_auto(s, db)
 
     def advance_workflow(self, s, db):
@@ -430,6 +447,9 @@ class WorkflowMixin:
         if not s['automation'].get('active') or not s.get('original_text'): return
         script, voice, edit = (selected(s, c, k) for c, k in [('scripts','script_id'), ('voices','voice_id'), ('edits','edit_id')])
         if self.advance_daily_quality(s, db, script, voice, edit):
+            return
+        from .studio_thumbnail import queue_preserved_thumbnail
+        if queue_preserved_thumbnail(self,s,db,run,edit):
             return
         if run['inputs'].get('photo_story'):
             # Explicit still-image production is a separate editing contract.
@@ -449,6 +469,9 @@ class WorkflowMixin:
             # This revision uses an already rendered, immutable picture/audio base.
             # Do not recollect footage or reconsider the previously chosen narration.
             if edit and edit.get('parent_id') == run['inputs'].get('base_edit_id') and edit.get('export_verified') and Path(edit.get('export_path', '')).is_file():
+                from .source_diversity import require_body_minimum, policy_for_state
+                require_body_minimum(json.loads(Path(edit['plan_path']).read_text(encoding='utf-8')),
+                                     expected_policy=policy_for_state(s))
                 run.update(status='completed', completed=time.time())
                 s['latest_completed_run_id'] = run['id']
                 s['automation'].update(stage='completed', completed_at=time.time())
@@ -487,6 +510,8 @@ class WorkflowMixin:
                 return
             if digest(voice['path']) != voice['sha256']: raise Conflict('음성 파일이 변경되었습니다.')
             stage, status, message = 'edit', 'editing', '장면·자막 구성 및 프로젝트 생성 대기'
+            if s.get('source_diversity_generation'):
+                key+=':source-diversity:'+str(s['source_diversity_generation'])
             s['approved_voice_id'] = voice['id']
             s['automation']['voice_selection'] = {'mode':'automatic','voice_id':voice['id']}
             # Freeze the exact validated inventory used by this edit, including
@@ -532,7 +557,8 @@ class WorkflowMixin:
                        'web_render':'최종 MP4 내보내기 완료 · 웹 렌더링으로 복구'}.get(edit.get('export_kind'), 'CapCut 최종 영상 내보내기 완료')
             s.update(status='completed', message=message, progress=100, error='')
             return
-        queue_key = stage+':'+key+(':personal' if stage=='voice' and wrong_automatic_voice else '')
+        retry_count = int((s.get('daily_quality') or {}).get('resume_retry_count', 0) or 0)
+        queue_key = stage+':'+key+(':personal' if stage=='voice' and wrong_automatic_voice else '')+(':retry:'+str(retry_count) if stage=='edit' and retry_count>0 else '')
         existing = db.execute('SELECT status FROM jobs WHERE key=?', (queue_key,)).fetchone()
         if existing and existing['status'] == 'failed' and s.get('error'):
             return
@@ -633,9 +659,71 @@ class WorkflowMixin:
                 raise QualitySceneGap([{'kind':'scene_gap','beat_id':b['id'],
                     'reason':'편집 전 필요한 사용 장면의 연결이 확인되지 않음',
                     'search_query':state.get('product') or state.get('title','')} for b in missing])
+        if selected.get('footage_selection_policy')=='product-story-global-v3':
+            # Required native evidence may have narrowed windows after global
+            # selection. Freeze that validated final plan without reallocating.
+            selected.pop('selection_frozen',None)
+            selected=self._process(state,job,'freeze-selection',{'plan':selected})['plan']
         candidates=self._process(state,job,'cover-candidates',{'plan':selected})['candidates']
+        if daily_enabled(state) and state.get('edit_id') and getattr(select_cover,'__module__','')=='hotpost.cover_selection':
+            from .quality_issue_scope import is_cover_scene_gap
+            from .cover_selection import POLICY as cover_policy
+            from .editing_adapter import _atomic_json
+            feedback=state.get('daily_quality',{}).get('feedback',[])
+            has_cover_defect=any(i.get('kind')=='cover' or is_cover_scene_gap(i) for i in feedback)
+            prepared_src=(plan.get('cover_spec') or {}).get('source') or {}
+            parent_edit=next((e for e in state.get('edits',[]) if e.get('id')==state.get('edit_id')),None)
+            parent_path=Path((parent_edit or {}).get('plan_path',''))
+            if has_cover_defect and parent_path.is_file() and not prepared_src.get('single_frame_confirmation'):
+                try:
+                    old_plan=json.loads(parent_path.read_text('utf-8'))
+                    old_src=(old_plan.get('cover_spec') or {}).get('source') or {}
+                    old_sha=old_src.get('source_sha256')
+                    old_ts=old_src.get('timestamp')
+                    cover_beats={i.get('beat_id') for i in feedback if (i.get('kind')=='cover' or is_cover_scene_gap(i)) and i.get('beat_id')}
+                    rejected_shots={b.get('selected_shot_id') for b in selected.get('beats',[]) if b.get('id') in cover_beats and b.get('selected_shot_id')}
+                    filtered=[c for c in candidates if not (
+                        (c.get('shot_id') and c.get('shot_id') in rejected_shots)
+                        or (old_sha and c.get('source_sha256')==old_sha and isinstance(old_ts,(int,float))
+                            and isinstance(c.get('timestamp'),(int,float)) and abs(float(c['timestamp'])-float(old_ts))<1.5)
+                    )]
+                    if filtered:
+                        candidates=filtered
+                except (OSError,ValueError,KeyError,TypeError):pass
+            cover_sel_path=self.folder(state['id'])/job['id']/'cover-selection.json'
+            seed_plan=plan if (prepared_src.get('review_policy')==cover_policy and prepared_src.get('single_frame_confirmation')) else (
+                json.loads(parent_path.read_text('utf-8')) if (feedback and not has_cover_defect and parent_path.is_file()) else None)
+            if seed_plan is not None and not cover_sel_path.exists():
+                try:
+                    old_src=(seed_plan.get('cover_spec') or {}).get('source') or {}
+                    old_rgb=(old_src.get('cover_pixel_binding') or {}).get('canvas_rgb_sha256')
+                    if (old_src.get('review_policy')==cover_policy and old_rgb
+                            and seed_plan.get('script_text')==selected.get('script_text')
+                            and (seed_plan.get('cover_spec') or {}).get('lines')==(selected.get('cover_spec') or {}).get('lines')):
+                        match_idx=next((i for i,c in enumerate(candidates)
+                            if c.get('source_id')==old_src.get('source_id')
+                            and c.get('source_sha256')==old_src.get('source_sha256')
+                            and (c.get('cover_pixel_binding') or {}).get('canvas_rgb_sha256')==old_rgb),None)
+                        if match_idx is not None:
+                            fp=hashlib.sha256(json.dumps({'policy':cover_policy,'lines':selected['cover_spec']['lines'],
+                                'script':selected['script_text'],'candidates':[{**c,'frame_sha256':sha256_file(Path(c['frame_path']))} for c in candidates]},
+                                ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+                            reason_txt=str(old_src.get('visual_observation') or '이전 검수 통과 표지 프레임 보존')
+                            conf_reviews=(old_src.get('single_frame_confirmation') or {}).get('reviews') or [{
+                                'id':'0','eligible':True,'faces_present':False,'face_blur_used':False,
+                                'hook_unresolved':True,'overlays_acceptable':True,'mask_coverage_valid':True,
+                                'product_view_preserved':True,'reason':reason_txt}]
+                            _atomic_json(cover_sel_path,{'fingerprint':fp,'policy':cover_policy,
+                                'reviews':[{'id':str(match_idx),'eligible':True,'faces_present':False,'face_blur_used':False,
+                                    'hook_unresolved':True,'overlays_acceptable':True,'mask_coverage_valid':True,
+                                    'product_view_preserved':True,'reason':reason_txt}],
+                                'confirmations':[{'candidate_id':str(match_idx),'reviews':conf_reviews}]})
+                except (OSError,ValueError,KeyError,TypeError):pass
         selected=select_cover(self.settings,selected,candidates,self.folder(state['id'])/job['id'],
             search_context=state.get('product') or state.get('title',''))
+        cover_src=(selected.get('cover_spec') or {}).get('source') or {}
+        if cover_src.get('frame_path') and 'frame_sha256' not in cover_src and Path(cover_src['frame_path']).is_file():
+            cover_src['frame_sha256']=sha256_file(Path(cover_src['frame_path']))
         if daily_enabled(state):
             validate_selected_scenes(state,selected)
             if job['payload'].get('quality_prepare_only'):
@@ -656,6 +744,10 @@ class WorkflowMixin:
                     if reason:hold(current,reason,'stop_method')
                 change_claimed(self.store, job,before_render)
                 if blocked[0]:raise QualityProgressHold(blocked[0],waiting=blocked[0]=='사용자 중지 유지')
+        if daily_enabled(state) and job['kind']=='quality_reedit':
+            from .cover_frame_copy import render_if_cover_only
+            copied=render_if_cover_only(self,state,job,selected)
+            if copied is not None:return copied
         return self._process(state,job,'render',{'plan':selected})
 
     def _suggest_edit(self, state, job):
@@ -697,6 +789,9 @@ class WorkflowMixin:
                 'voice':bool(voice.get('path') and Path(voice['path']).is_file()),
                 'project':bool(edit.get('portable_draft_path') and Path(edit['portable_draft_path']).is_dir()),
                 'export':bool(edit.get('export_verified') and edit.get('export_path') and Path(edit['export_path']).is_file())}
+            if available['export']:
+                from .daily_quality import verified_quality_export
+                available['export']=verified_quality_export(state,edit,historical=True)
             stage = state.get('automation', {}).get('stage', 'prepare')
             active_key = {'prepare':'sources','rewrite':'script','voice':'voice','edit':'project','register':'project','export':'export',
                           'quality_review':'project','quality_reedit':'project','refresh_sources':'sources'}.get(stage)

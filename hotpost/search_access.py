@@ -3,7 +3,7 @@ import json
 import time
 from pathlib import Path
 
-MANUAL_REASONS={'captcha','login_required'}
+MANUAL_REASONS={'captcha','captcha_review_pending','login_required'}
 PROVIDERS={'google':'google-lens','tiktok':'tiktok','douyin':'douyin','xiaohongshu':'xiaohongshu'}
 
 
@@ -24,7 +24,7 @@ def observe_saved_captcha(settings, provider, page):
     from urllib.parse import urlparse
     from .editing_adapter import _atomic_json
     record = access_record(settings.data_dir, provider)
-    if record.get('reason') != 'captcha' or not manual_required(record):
+    if record.get('reason') not in {'captcha','captcha_review_pending'} or not manual_required(record):
         return {'status':'not_needed'}
     domains = {'google-lens':('google.com',), 'yandex-images':('yandex.com','yandex.ru'),
                'tikvideo':('tikvideo.app',)}.get(provider, (provider+'.com',))
@@ -35,13 +35,14 @@ def observe_saved_captcha(settings, provider, page):
         body = page.locator('body').inner_text()
         if not body.strip():
             raise ValueError('Current page has no observable body')
-        captcha = challenge_on_page(page)
+        from .captcha_review import review_page
+        review=review_page(settings,provider,page)
         login = login_wall_on_page(page, provider)
     except Exception as exc:
         return {'status':'unavailable','error_type':type(exc).__name__}
-    status = 'captcha' if captcha else 'login_required' if login else 'clear'
+    status=review['status'] if review['status']!='clear' else 'login_required' if login else 'clear'
     observation = {'at':time.time(),'status':status,'page':page.url,
-                   'navigation_performed':False,'challenge_solved_by_agent':False}
+                   'navigation_performed':False,'challenge_solved_by_agent':False,'captcha_review':review}
     record['captcha_observations'] = [*record.get('captcha_observations',[]), observation][-20:]
     record['last_captcha_check'] = observation
     if status == 'clear':
@@ -49,7 +50,7 @@ def observe_saved_captcha(settings, provider, page):
     elif status == 'login_required':
         record.update(reason='login_required', requires_verification=True)
     else:
-        record['requires_verification'] = True
+        record.update(reason=status,requires_verification=True,captcha_review=review)
     _atomic_json(settings.data_dir/'search_cooldowns'/f'{provider}.json', record)
     return observation
 
@@ -75,7 +76,9 @@ def indexed_gate(provider, response=None, settings=None):
                  or any(token in visible for token in
                         ('bots use duckduckgo', 'verify you are human', 'confirm you are not a robot',
                          'unusual traffic', '로봇이 아닙니다', '비정상적인 트래픽')))
-    reason = 'captcha' if challenge else 'rate_limited' if response.status_code == 429 else ''
+    # An HTTP body cannot supply a screenshot. Keep a suspicion pending until
+    # the existing browser can capture/review it; never label it confirmed CAPTCHA.
+    reason = 'captcha_review_pending' if challenge else 'rate_limited' if response.status_code == 429 else ''
     if not reason:
         return {}
     from .editing_adapter import _atomic_json
@@ -95,8 +98,10 @@ def request_manual_recheck(data_dir,provider):
     from .editing_adapter import _atomic_json
     from .source_search.readiness import request_readiness_recheck
     readiness_recheck = request_readiness_recheck(data_dir,provider)
+    from .captcha_review import request_recheck
+    image_recheck=request_recheck(data_dir,provider)
     record=access_record(data_dir,provider)
-    if not manual_required(record):return readiness_recheck
+    if not manual_required(record):return readiness_recheck or image_recheck
     record.update(requires_verification=False,until=0,manual_recheck_at=time.time())
     _atomic_json(Path(data_dir)/'search_cooldowns'/f'{provider}.json',record)
     return True
@@ -104,24 +109,30 @@ def request_manual_recheck(data_dir,provider):
 
 def challenge_in_text(text):
     """Recognize a captured visible body, never unexecuted HTML/script text."""
+    from .captcha_review import TOKENS
     body=str(text).lower()
-    return any(token in body for token in ('unusual traffic','verify you are human','confirm you are not a robot',
-        '로봇이 아닙니다','비정상적인 트래픽','drag the slider','fit the puzzle','slide to verify',
-        '拖动滑块','拖動滑塊','滑动验证','滑動驗證','请完成下方验证','请完成安全验证',
-        '슬라이더를 끌어','슬라이더를 드래그','퍼즐을 맞춰','퍼즐을 맞추'))
+    return any(token in body for token in TOKENS)
 
 
 def challenge_on_page(page):
+    """Suspicion only. Call screenshot review before recording confirmed CAPTCHA."""
     from urllib.parse import urlparse
     if any(token in urlparse(page.url).path.lower() for token in ('/sorry/','/showcaptcha','/captcha')):return True
     return challenge_in_text(page.locator('body').inner_text())
+
+
+def reviewed_challenge(settings,provider,page,*,query=''):
+    if not challenge_on_page(page):return {'status':'clear','suspected':False}
+    from .captcha_review import review_page
+    return review_page(settings,provider,page,query=query)
 
 
 def login_wall_on_page(page,provider):
     body=page.locator('body').inner_text().lower()
     patterns={'douyin':('登录后即可搜索','登录后查看搜索结果','请登录后搜索'),
               'xiaohongshu':('登录后查看搜索结果','登录后探索更多','登录后搜索'),
-              'tiktok':('log in to search','log in to see search results','로그인하여 검색')}
+              'tiktok':('log in to search','log in to see search results','로그인하여 검색'),
+              'youtube':('로그인하여 봇이 아님을 확인하세요',"sign in to confirm you're not a bot",'sign in to confirm you’re not a bot')}
     # A normal header's login button, or the name of an SMS login method,
     # does not by itself indicate either a challenge or a search access wall.
     if any(token in body for token in patterns.get(provider,())):

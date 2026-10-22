@@ -81,7 +81,7 @@ def test_real_challenge_has_priority_over_restriction_notice(tmp_path, monkeypat
     audit = {}
     assert searcher._wait_platform_results(page(NOTICE + ' 슬라이더를 드래그하여 퍼즐을 맞추세요'),
                                            'tiktok', '국자', audit, []) is None
-    assert audit['status'] == 'captcha'
+    assert audit['status'] == 'captcha_review_pending'
 
 
 def test_search_query_containing_captcha_path_is_not_a_challenge_url():

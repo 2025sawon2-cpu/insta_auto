@@ -26,6 +26,11 @@ def task(tmp_path):
     folder=studio.folder(state['id']);ref=folder/'reference.mp4';ref.write_bytes(b'reference')
     def prepared(s,db):
         db.execute("UPDATE jobs SET status='done'")
+        # These cases exercise the preserved v3 acquisition contract. New
+        # montage v4 readiness is covered in test_editorial_inventory_policy.
+        from hotpost.source_policy import current_policy
+        s['source_policy'] = current_policy()
+        for run in s.get('runs', []):run['source_policy'] = current_policy()
         s.update(original_text='마늘을 준비해 한 스푼 떠서 요리에 넣어요.',reference_video=str(ref))
         studio.advance_workflow(s,db)
     studio.store.change(state['id'],prepared)
@@ -272,20 +277,28 @@ def test_source_authentication_error_stops_identical_retries_without_stopping_sc
 
 
 def test_transient_source_retry_has_a_limit(tmp_path):
+    from requests.exceptions import ConnectTimeout
     studio,tid,folder=task(tmp_path);job=studio.store.claim('sources')
-    studio.handle_source_error(job,TimeoutError('timeout'))
-    assert job['checkpoint']['auto_retries']==1
+    studio.handle_source_error(job,ConnectTimeout('connect timeout'))
+    assert job['checkpoint']['retry_budget']['reserved']
     with studio.store.transaction() as db:
         checkpoint = dict(job['checkpoint']);checkpoint.pop('not_before',None)
         db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),job['id']))
     job=studio.store.claim('sources')
-    studio.handle_source_error(job,TimeoutError('timeout'))
-    assert job['checkpoint']['auto_retries']==2
+    studio.handle_source_error(job,ConnectTimeout('connect timeout'))
+    assert job['checkpoint']['retry_budget']['reserved']
     with studio.store.transaction() as db:
         checkpoint = dict(job['checkpoint']);checkpoint.pop('not_before',None)
         db.execute('UPDATE jobs SET checkpoint=? WHERE id=?',(json.dumps(checkpoint),job['id']))
     job=studio.store.claim('sources')
-    studio.handle_source_error(job,TimeoutError('timeout'))
+    studio.handle_source_error(job,ConnectTimeout('connect timeout'))
+    assert next(j for j in studio.store.jobs(tid) if j['id']==job['id'])['status']=='failed'
+
+
+def test_unknown_timeout_needs_diagnosis_not_a_blind_retry(tmp_path):
+    studio,tid,folder=task(tmp_path);job=studio.store.claim('sources')
+    studio.handle_source_error(job,TimeoutError('unknown side effect outcome'))
+    assert not job['checkpoint']['retry_budget']['reserved']
     assert next(j for j in studio.store.jobs(tid) if j['id']==job['id'])['status']=='failed'
 
 

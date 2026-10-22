@@ -5,6 +5,7 @@ Never use this route to bypass a stored TikTok challenge or request limit.
 from dataclasses import replace
 import re
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from .source_browser_runtime import attach_browser,browser_lease,endpoint,pace,existing_page,create_source_tab
@@ -138,21 +139,33 @@ def with_fallback(settings,url,target,max_bytes,deadline=None,diagnostics=None):
     from .tiktok_download import download as direct
     from .browser_search import BrowserSearcher
     stats=diagnostics if diagnostics is not None else {}
+    from .source_transfer_trace import event, finish
     try:
-        path=direct(settings,url,target,max_bytes,diagnostics=stats)
-        stats['method']='existing_browser_playback'
+        event(stats,'direct')
+        try:
+            path=direct(settings,url,target,max_bytes,diagnostics=stats)
+            stats['method']='existing_browser_playback'
+        except Exception as exc:
+            stats['direct_error']=str(exc)[:300]
+            stats['direct_ended_at']=time.time()
+            if (stats.get('access_status') in {'access_denied','captcha','login_required','rate_limited'}
+                    or stats.get('access_resolution_error')):
+                raise
+            from .operation_progress import NoProgressTimeout
+            if not isinstance(exc,NoProgressTimeout) and '완전한 MP4 응답을 확보하지 못했습니다' not in str(exc):raise
+            if BrowserSearcher(settings,Path(target).parent)._cooling_down('tiktok'):raise
+            fallback={'_checkpoint':stats.get('_checkpoint')};stats['fallback']=fallback
+            event(stats,'fallback')
+            event(fallback,'starting')
+            try:
+                path=download(settings,url,target,max_bytes,diagnostics=fallback)
+            except Exception as fallback_error:
+                finish(fallback,error=fallback_error)
+                raise
+            finish(fallback)
+            stats['method']='tikvideo_visible_form'
+        finish(stats)
         return path
     except Exception as exc:
-        stats['direct_error']=str(exc)[:300]
-        if (stats.get('access_status') in {'access_denied','captcha','login_required','rate_limited'}
-                or stats.get('access_resolution_error')):
-            raise  # A media timeout cannot turn typed access denial into fallback authorization.
-        # Authentication gates, changed tabs, and disconnected browsers are
-        # stop conditions. The fallback is only for incomplete media reception.
-        from .operation_progress import NoProgressTimeout
-        if not isinstance(exc,NoProgressTimeout) and '완전한 MP4 응답을 확보하지 못했습니다' not in str(exc):raise
-        if BrowserSearcher(settings,Path(target).parent)._cooling_down('tiktok'):raise
-        fallback={};stats['fallback']=fallback
-        path=download(settings,url,target,max_bytes,diagnostics=fallback)
-        stats['method']='tikvideo_visible_form'
-        return path
+        finish(stats,error=exc)
+        raise

@@ -22,11 +22,12 @@ class NativeExportUnavailable(RuntimeError):
 
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    import uuid
-    temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    import tempfile
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='j', suffix='.tmp')
+    temp = Path(temporary)
     try:
-        temp.write_text(json.dumps(value, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2))
         import time
         for attempt in range(4):
             try:

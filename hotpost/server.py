@@ -29,6 +29,8 @@ from .job_queue import JobQueue
 from .legacy_production import ProductionManager as LegacyProductionManager
 from .studio import Studio
 from .studio_http import StudioHTTP
+from .monetization import Monetization
+from .monetization_http import MonetizationHTTP
 from .retention import cleanup_dry_run, cleanup_execute, disk_usage
 from .production import ProductionManager
 
@@ -65,11 +67,14 @@ def make_handler(settings: Settings):
         accounts = AccountRegistry(settings)
         productions = ProductionManager(settings)
         studio = Studio(settings)
+        monetization = Monetization(settings, lambda task_id: studio.store.get(task_id),
+                                    completion_store=getattr(studio, 'store', None))
         # Never consume queued production through the temporary legacy worker
         # while the Studio owner is still being constructed.
         job_queue.register("production", lambda code, progress: {"studio": studio.create(code)})
         job_queue.start_workers()
         job_queue.resume_queued()
+        monetization.start_completion_worker()
     except Exception:
         try:
             job_queue.close()
@@ -79,7 +84,7 @@ def make_handler(settings: Settings):
         raise
     criteria_lock = threading.Lock()
 
-    class Handler(StudioHTTP, SimpleHTTPRequestHandler):
+    class Handler(MonetizationHTTP, StudioHTTP, SimpleHTTPRequestHandler):
         def log_message(self, *_args) -> None:
             return
 
@@ -133,6 +138,7 @@ def make_handler(settings: Settings):
             return
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.monetization_request(monetization, mutation=True): return
             if self.studio_post(studio): return
             path = urlparse(self.path).path
             if path == '/api/productions' or path.startswith('/api/productions/'):
@@ -265,6 +271,7 @@ def make_handler(settings: Settings):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
         def do_GET(self) -> None:  # noqa: N802
+            if self.monetization_request(monetization): return
             if urlparse(self.path).path == '/api/report':
                 try:
                     report = json.loads(settings.report_path.read_text(encoding='utf-8'))
@@ -290,6 +297,15 @@ def make_handler(settings: Settings):
             if path == '/api/production-health':
                 from .production_health import check
                 self._json(check(settings)); return
+            if path == '/api/studio-supervision':
+                monitor = getattr(studio, 'supervisor', None)
+                self._json(monitor.summary() if monitor else {'healthy': False, 'error': '제작 감시 소유자 없음'}); return
+            if path == '/api/video-agents':
+                manager=getattr(studio,'video_agents',None)
+                if not manager:self._json({'healthy':False,'agents':[]});return
+                with studio.store.connect() as db:
+                    task_ids=[r[0] for r in db.execute('SELECT task_id FROM video_agents ORDER BY updated DESC')]
+                self._json({'healthy':manager.healthy(),'agents':[manager.summary(t) for t in task_ids]});return
             if path == '/api/productions' or path.startswith('/api/productions/'):
                 try:
                     parts = path.strip('/').split('/')
@@ -509,6 +525,7 @@ def make_handler(settings: Settings):
     handler = partial(Handler, directory=str(settings.web_dir))
     handler.job_queue = job_queue
     handler.studio_resource = studio
+    handler.monetization_resource = monetization
     handler.server_count = 0
     handler.resource_lock = threading.Lock()
     return handler
@@ -535,9 +552,13 @@ class ManagedHTTPServer(ThreadingHTTPServer):
             close = handler.server_count == 0
         if close:
             try:
-                handler.job_queue.close()
+                if getattr(handler, 'monetization_resource', None):
+                    handler.monetization_resource.close()
             finally:
-                handler.studio_resource.close()
+                try:
+                    handler.job_queue.close()
+                finally:
+                    handler.studio_resource.close()
 
 
 def serve(settings: Settings, port: int = 8775, host: str = "127.0.0.1",

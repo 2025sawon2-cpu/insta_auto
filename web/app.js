@@ -133,6 +133,7 @@
   // ---------- 카드 ----------
   const productionByCode = new Map();
   const studioByCode = new Map();
+  let studioLoaded=false,studioOnline=true,studioSyncedAt=0;
   const studioSelected = new Set();
   document.addEventListener('click', async e => {
     const choice = e.target.closest('.studio-choice');
@@ -156,14 +157,17 @@
     } catch (error) { e.target.textContent = error.message; e.target.disabled = false; }
   }, true);
   function productionMarkup(code) {
-    const status = productionState(code);
-    return `<span class="production-badge is-${status.state}" title="${esc(status.reason)}">${status.label}</span>`;
+    return window.AgentStatus.markup(agentState(code));
+  }
+  function agentState(code) {
+    return window.AgentStatus.model(studioByCode.get(code),{legacy:productionByCode.get(code),loaded:studioLoaded,online:studioOnline&&(!studioSyncedAt||Date.now()-studioSyncedAt<15000)});
   }
   function productionState(code) {
     const work = studioByCode.get(code);
     if (work) {
-      const view = window.StudioBoard.describe(work), active = window.PostResult.model(work).active;
-      if (view.complete && active?.video_url) return {state:'completed',label:'완성',action:'완성 영상 보기',reason:'완성 영상을 재생하고 다운로드할 수 있어요.'};
+      const view = window.StudioBoard.describe(work), ready = work._summary?work.completed_video_ready:window.PostResult.model(work).active?.video_url;
+      if (view.complete && ready) return {state:'completed',label:'완성',action:'완성 영상 보기',reason:'완성 영상을 재생하고 다운로드할 수 있어요.'};
+      if(work.video_agent?.activity?.phase==='attention')return {state:'attention',label:'확인필요',action:'진행 확인',reason:work.video_agent.activity.detail};
       if (view.complete || view.attention || view.review || ['paused','unknown'].includes(view.state)) return {state:'attention',label:'확인필요',action:'상세 보기',reason:view.complete?'완성 영상 파일을 확인해 주세요.':view.message};
       return {state:'working',label:'제작중',action:'제작 보기',reason:view.message};
     }
@@ -173,7 +177,7 @@
       if (['error','missing','done'].includes(job.status)) return {state:'attention',label:'확인필요',action:'상세 보기',reason:job.error||'제작 결과를 확인해 주세요.'};
       return {state:'working',label:'제작중',action:'제작 보기',reason:job.message||'자동 제작을 진행하고 있어요.'};
     }
-    return {state:'attention',label:'확인필요',action:'상세 보기',reason:'아직 제작 작업이 등록되지 않았어요.'};
+    return {state:'idle',label:'제작 전',action:'상세 보기',reason:'아직 제작 작업이 등록되지 않았어요.'};
   }
   function legacyProductionMarkup(code) {
     const job = productionByCode.get(code);
@@ -189,12 +193,18 @@
       <small class="${job.status === 'error' ? 'production-error' : ''}">${esc(job.status === 'queued' ? '자동 제작 대기' : job.error || job.message)}</small>
       ${job.status === 'error' ? `<button class="btn ghost production-retry" data-code="${esc(code)}">중단 단계부터 다시 시도</button>` : ''}`;
   }
+  let productionsRefreshing=false;
   async function refreshProductions() {
+    if(productionsRefreshing)return;productionsRefreshing=true;
+    try{
     const responses = await Promise.allSettled([
-      fetch('/api/studio', {cache:'no-store'}).then(r=>r.ok?r.json():null),
-      fetch('/api/legacy-productions', {cache:'no-store'}).then(r=>r.ok?r.json():null)
+      fetch('/api/studio?view=list', {cache:'no-store',signal:AbortSignal.timeout(9000)}).then(r=>r.ok?r.json():null),
+      fetch('/api/legacy-productions', {cache:'no-store',signal:AbortSignal.timeout(9000)}).then(r=>r.ok?r.json():null)
     ]);
+    studioLoaded=true;
+    studioOnline=responses[0].status==='fulfilled'&&Array.isArray(responses[0].value?.tasks);
     if (responses[0].status==='fulfilled' && responses[0].value?.tasks) {
+      studioSyncedAt=Date.now();
       studioByCode.clear();
       for (const item of responses[0].value.tasks) studioByCode.set(item.shortcode,item);
     }
@@ -205,10 +215,12 @@
         const code=card.dataset.code, status=productionState(code), badge=$('.production-status',card);
         if(!badge)return;
         card.dataset.productionState=status.state;
+        card.dataset.agentLive=String(agentState(code).live);
         const markup=productionMarkup(code);if(badge.innerHTML!==markup)badge.innerHTML=markup;
         $('.card-open-production',card).textContent=status.action+' →';
       });
     } catch (_) { /* Keep verified last state while the server reconnects. */ }
+    }finally{productionsRefreshing=false;}
   }
   document.addEventListener('click', async e => {
     const button = e.target.closest('.production-retry');
@@ -223,13 +235,19 @@
   }, true);
   refreshProductions();
   setInterval(refreshProductions, 4000);
+  // Stop activity motion even when a reconnecting request has not returned yet.
+  setInterval(()=>{
+    if(studioSyncedAt&&Date.now()-studioSyncedAt>=15000){
+      $$('#cards .production-status').forEach(el=>{const code=el.dataset.code;el.closest('.card').dataset.agentLive='false';const next=productionMarkup(code);if(el.innerHTML!==next)el.innerHTML=next;});
+    }
+  },3000);
   function metric(label, val, ratio, na) {
     return `<div class="m ${na ? 'na' : ''}"><div class="k">${label}</div><div class="v">${na ? '–' : fmt(val)}</div><div class="r ${ratioCls(ratio)}">${na ? '' : ratioTxt(ratio) + (ratio != null ? ' 평소 대비' : '')}</div></div>`;
   }
   function card(p, i) {
     const thumb = p.thumb ? `<img loading="lazy" src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`;
     const status = productionState(p.shortcode);
-    return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}"` : ''}>
+    return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}" data-agent-live="${agentState(p.shortcode).live}"` : ''}>
       <div class="thumb">${thumb}
         ${isVideo(p) ? `<label class="studio-choice" style="position:absolute;bottom:10px;right:10px;z-index:4;background:#fffef2;color:#285b46;border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer"><input type="checkbox" data-studio-code="${esc(p.shortcode)}" ${studioSelected.has(p.shortcode)?'checked':''}> 제작 선택</label>` : ''}
         <div class="tl">${p.tier ? `<span class="pill t${p.tier}">${tierTxt(p.tier)} ×${p.multiplier.toFixed(1)}</span>` : `<span class="pill">×${p.multiplier.toFixed(1)}</span>`}</div>
@@ -273,9 +291,12 @@
     if(flowCode!==code||modal.hidden)return;
     const root=$('#production-flow',modal);if(!root)return;
     try {
-      const data=await window.ProductionFlow.api('');
+      const known=studioByCode.get(code);
+      const data=known?{tasks:[known]}:await window.ProductionFlow.api('?view=list');
       if(flowCode!==code)return;
-      const task=data.tasks.find(t=>t.shortcode===code);
+      const item=data.tasks.find(t=>t.shortcode===code);
+      const task=item?._summary?await window.ProductionFlow.api('/'+item.id):item;
+      if(flowCode!==code)return;
       if(task)window.PostResult.mount(root,task);
       else {
         window.PostResult.mountEmpty(root);

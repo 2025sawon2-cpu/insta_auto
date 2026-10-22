@@ -52,13 +52,19 @@ PRODUCTS = [
     ('휴대폰 거치대', 'phone holder stand', '手机支架', ('폰 거치대', '휴대폰 거치대', 'phone holder', '手机支架')),
     ('신발 세척 도구', 'shoe cleaning tool', '鞋子清洁工具', ('신발 세척', 'shoe cleaning', '鞋子清洁')),
     ('반려동물 털 제거기', 'pet hair remover', '宠物除毛器', ('털 제거', 'pet hair remover', '除毛器')),
+    ('손난로', 'hand warmer', '暖手宝', ('손난로', '키티 손난로', '헬로키티 손난로', 'hand warmer', '暖手宝', '暖手寶')),
+    ('보조배터리', 'power bank', '充电宝', ('보조배터리', '보조 배터리', 'power bank', '充电宝')),
+    ('패딩', 'puffer jacket', '羽绒服', ('패딩', '몽벨 패딩', 'puffer jacket', 'down jacket', '羽绒服', '棉服')),
 ]
 BRANDS = [('DAISO', 'DAISO', ('daiso', '다이소', '大创', 'ダイソー')),
           ('adidas', '阿迪达斯', ('adidas', '아디다스', '阿迪达斯')),
           ('UGG', 'UGG', ('ugg', '어그')),
           ('nike', '耐克', ('nike', '나이키', '耐克')),
           ('dyson', '戴森', ('dyson', '다이슨', '戴森')),
-          ('xiaomi', '小米', ('xiaomi', '샤오미', '小米'))]
+          ('xiaomi', '小米', ('xiaomi', '샤오미', '小米')),
+          ('Hello Kitty', 'Hello Kitty', ('hello kitty', 'hellokitty', '헬로키티', '키티', '凯蒂猫')),
+          ('Sanrio', '三丽鸥', ('sanrio', '산리오', '三丽鸥')),
+          ('Montbell', 'Montbell', ('montbell', '몽벨', 'モンベル'))]
 FEATURES = [('nylon', '尼龙', ('나일론', 'nylon', '尼龙')),
             ('suede', '绒面革', ('스웨이드', 'suede', '绒面革')),
             ('flap', '翻盖', ('플랩', 'flap', '翻盖')),
@@ -113,6 +119,28 @@ REVIEWED_OBJECT_GROUPS = (
     ('스팀 청소기', '스팀청소기', 'steam cleaner', '蒸汽清洁机', '蒸汽清洁器', '蒸汽清洗机'),
     ('계량스푼', '계량 스푼', 'measuring spoon', '量勺', '计量勺'),
     ('로봇청소기', '로봇 청소기', 'robot cleaner', '清洁机器人'),
+    ('손난로', 'hand warmer', '暖手宝', '暖手寶'),
+    ('보조배터리', '보조 배터리', 'power bank', '充电宝'),
+    ('물감', '스틱 물감', 'paint stick', '固体水彩'),
+    ('암막 텐트', '난방 텐트', 'blackout tent', '遮光帐篷'),
+    ('오트밀빵', '오트밀 빵', 'oatmeal bread', '燕麦面包'),
+    ('세정시트', '청소 시트', 'cleaning sheet', '清洁片'),
+    ('화장품 브러시', '메이크업 브러시', '브러시', 'makeup brush', '化妆刷'),
+    ('차량용 타프', '차박 그늘막', '그늘막', 'car awning', '车边帐'),
+    ('독서대', '책 거치대', 'book stand', 'reading stand', '阅读架', '看书架'),
+    ('가습기', '미니 가습기', 'humidifier', 'mini humidifier', '加湿器'),
+    ('마사지기', '안마기', 'massager', '按摩器', '按摩仪'),
+    ('캠핑 랜턴', '랜턴', 'camping lantern', 'lantern', '露营灯'),
+    ('거품기', '우유 거품기', 'milk frother', 'frother', '奶泡机', '打蛋器'),
+    ('밀봉기', '미니 밀봉기', 'bag sealer', 'heat sealer', '封口机'),
+    ('보풀 제거기', '보풀제거기', 'lint remover', 'fabric shaver', '毛球修剪器'),
+    ('주방 저울', '전자저울', 'kitchen scale', 'digital scale', '厨房秤', '电子秤'),
+    ('에어프라이어', 'air fryer', '空气炸锅'),
+    ('계란찜기', '에그보일러', 'egg steamer', 'egg cooker', '煮蛋器'),
+    ('무드등', '수면등', 'night light', 'ambient light', '小夜灯', '氛围灯'),
+    ('충전기', '무선 충전기', 'charger', 'wireless charger', '充电器', '无线充电器'),
+    ('파우치', '화장품 파우치', 'pouch', 'makeup pouch', '收纳包', '化妆包'),
+    ('텀블러', '보온병', 'tumbler', 'thermos', '保温杯', '随行杯'),
 )
 for _group in REVIEWED_OBJECT_GROUPS:
     for _term in _group:
@@ -126,7 +154,7 @@ TIKTOK_MODIFIERS = {
         'front zip pocket','drawstring','flap','on','waterproof','danton','lightweight','inner down','down','photo',
         'l-shaped','l shaped','handheld'),
     'ko': ('빨간','빨강','은색','검정','검은','흰색','하얀','파란','파랑','녹색','초록','회색',
-        '분홍','노란','노랑','갈색','베이지','실리콘','금속','스테인리스','나무','플라스틱',
+        '분홍','핑크','노란','노랑','갈색','베이지','실리콘','금속','스테인리스','나무','플라스틱',
         '나일론','스웨이드','접이식','휴대용','전기','전동','무타공','자동 감김','발 전용',
         '다진','다단','캠핑','주방','차량','래글런','나그랑','온 러닝','온러닝','스카치 매직',
         '마늘간장','마늘 간장','분사형','정리','방수','단톤','경량','이너 다운','사진',
@@ -166,8 +194,12 @@ def _approved_tiktok_noun(query):
     return any(value.startswith(b+' ') and re.fullmatch(model,value[len(b)+1:]) for b in brands)
 
 
-def tiktok_noun_phrase(query: str) -> str:
-    """Remove collection suffixes; reject action/instruction queries, never guess an object."""
+def within_query_word_limit(query):
+    """Current dispatch ceiling: ten whitespace-separated words in every language."""
+    return isinstance(query,str) and 1<=len(query.split())<=10
+
+
+def _clean_tiktok_syntax(query: str, *, max_words=6, max_characters=80) -> str:
     query = ' '.join(str(query).split())
     suffix = (r'\s+(?:raw footage no captions|close up footage|원본 영상 자막 없는|클로즈업 영상|'
               r'实拍\s*无字幕|特写视频|detail review|demonstration|unboxing|실물 리뷰|사용 영상|'
@@ -179,9 +211,28 @@ def tiktok_noun_phrase(query: str) -> str:
                   r'(?:^|\s)(?:여닫기|열기|닫기|접기|펼치기)(?:\s|$)|방법|과정|후기|사용법|'
                   r'\b(?:scraping|scrape|scrapes|scooping|fry|frying(?!\s+pan\b)|how to|footage|captions?|tutorial|'
                   r'review|unboxing|demonstration|step by step)\b|无字幕|無字幕|视频|視頻|教程|演示|刮锅|刮鍋')
-    if not query or len(query) > 80 or len(query.split()) > 6 or re.search(prohibited, query, re.I):
+    if not query or (max_characters is not None and len(query)>max_characters) or len(query.split()) > max_words or re.search(prohibited, query, re.I):
         return ''
-    return query if _approved_tiktok_noun(query) else ''
+    return query
+
+
+def register_tiktok_noun_head(phrase: str) -> str:
+    clean = _clean_tiktok_syntax(phrase,max_words=10,max_characters=None)
+    if not clean or re.search(r'(?:으로|로)\s+\S+|(?:하기|하는|만들기|만드는)$', clean):
+        return ''
+    lang = language(clean)
+    if lang in TIKTOK_NOUN_HEADS:
+        low = clean.casefold()
+        if low not in TIKTOK_NOUN_HEADS[lang]:
+            TIKTOK_NOUN_HEADS[lang] = (*TIKTOK_NOUN_HEADS[lang], low)
+        return clean
+    return ''
+
+
+def tiktok_noun_phrase(query: str) -> str:
+    """Remove collection suffixes; reject action/instruction queries, never guess an object."""
+    query = _clean_tiktok_syntax(query,max_words=10,max_characters=None)
+    return query if query and _approved_tiktok_noun(query) else ''
 
 
 TIKTOK_EQUIVALENTS = (
@@ -201,7 +252,7 @@ TIKTOK_EQUIVALENTS = (
     ('red','빨간','빨강','红色','赤い'), ('silver','은색','银色','銀色'),
     ('black','검정','검은','黑色','黒い'), ('white','흰색','하얀','白色','白い'),
     ('blue','파란','파랑','蓝色'), ('green','녹색','초록','绿色'),
-    ('gray','grey','회색','灰色'), ('pink','분홍','粉色'), ('yellow','노란','노랑','黄色'),
+    ('gray','grey','회색','灰色'), ('pink','분홍','핑크','粉色'), ('yellow','노란','노랑','黄色'),
     ('brown','갈색','棕色'), ('beige','베이지'),
     ('silicone','실리콘','硅胶','シリコン'), ('metal','금속','金属'),
     ('stainless steel','스테인리스','不锈钢'), ('wooden','나무','木制'),
@@ -278,7 +329,51 @@ def prioritize_tiktok_requests(plan,requested):
 
 def tiktok_product_queries(plan: dict, fallback: list[str] | None = None) -> list[str]:
     """Prefer separately grounded product phrases over scene/quality instructions."""
+    if plan.get('search_purpose')=='support':
+        from .source_query_identity import checked_identity
+        identity=checked_identity(plan.get('core_search_identity'))
+        approved={word for words in identity['product_terms'].values() for word in words[:3]}
+        result=[]
+        for row in plan.get('query_details',[]):
+            word=row.get('query')
+            if word in approved:
+                register_tiktok_noun_head(word)
+                if query:=tiktok_noun_phrase(word):result.append(query)
+        return list(dict.fromkeys(result))
+    if plan.get('text_query_evidence') and not plan.get('tiktok_operator_request'):
+        from .source_text_query_receipts import plan_text_queries
+        rows = plan_text_queries(plan)
+        accepted = []
+        for row in rows:
+            if register_tiktok_noun_head(row['query']):
+                accepted.append(row['query'])
+        return list(dict.fromkeys(accepted))
+    visual_rows = []
+    if plan.get('visual_query_evidence') and not plan.get('tiktok_operator_request'):
+        from .source_visual_queries import plan_queries
+        # Recheck this plan's actual pixels/receipts at dispatch; a registered
+        # noun from another task is never sufficient evidence for this one.
+        visual_rows = plan_queries(plan)
+        from .reference_scene_roles import diverse_query_order
+        visual_rows = diverse_query_order(visual_rows)
+        # Keep the product identity during refinement as well as first search.
+        # A broad caption head must not turn replacement parts into clothing.
+        for row in visual_rows:
+            register_tiktok_noun_head(row['query'])
+        return list(dict.fromkeys(row['query'] for row in visual_rows))
     operator=plan.get('tiktok_operator_request',False)
+    ps = plan.get('primary_subject')
+    dynamic_primary = ''
+    if isinstance(ps, dict):
+        from .source_planning import primary_subject, grounded_named_terms
+        ev = dict(plan.get('query_evidence') or {})
+        if not ev and ps.get('source') and ps.get('quote'):
+            ev = {str(ps['source']): str(ps['quote'])}
+        validated = primary_subject(ps, ev)
+        if validated and grounded_named_terms(validated['name'], ev):
+            ev_text = ' '.join(str(v) for v in ev.values()).casefold()
+            if _literal_term(validated['name'].casefold(), ev_text):
+                dynamic_primary = register_tiktok_noun_head(validated['name'])
     details=plan.get('tiktok_operator_query_details',[]) if operator else plan.get('tiktok_query_details', [])
     rows = [q for r in details if (q :=
         grounded_tiktok_noun_phrase(r['query'],r['evidence_quote']) if r.get('evidence_quote')
@@ -290,6 +385,8 @@ def tiktok_product_queries(plan: dict, fallback: list[str] | None = None) -> lis
                   if r.get('evidence_quote') else tiktok_noun_phrase(r['query']))]
     rows += [p[lang] for p in ([] if operator else plan.get('products', []))
              for lang in ('en', 'ko', 'zh', 'ja') if p.get(lang)]
+    if dynamic_primary and not operator and dynamic_primary not in rows:
+        rows.append(dynamic_primary)
     if not rows:
         rows = list(fallback or [])
     if 'query_evidence' in plan:
@@ -308,7 +405,10 @@ def tiktok_product_queries(plan: dict, fallback: list[str] | None = None) -> lis
                 if clean.casefold().endswith(head) and grounded_tiktok_noun_phrase(head,evidence):
                     approved.append(head);break
         rows=approved
-    return list(dict.fromkeys(q for row in rows if (q := tiktok_noun_phrase(row))))
+    for r in visual_rows:
+        register_tiktok_noun_head(r['query'])
+    return list(dict.fromkeys([*[r['query'] for r in visual_rows],
+        *[q for row in rows if (q := tiktok_noun_phrase(row))]]))
 
 
 def language(text: str) -> str:
@@ -500,14 +600,21 @@ def next_round_queries(plan, round_number, history):
     return list({normalize_query(d['query']): d for d in details}.values())
 
 
-def platform_queries(queries: list[str], provider: str, limit: int) -> list[str]:
+def platform_queries(queries: list[str], provider: str, limit: int, *, search_minimums=None) -> list[str]:
     """지원 언어별 풀에서 고른다. 앞쪽 네 검색어에서 잘라 중국어를 버리지 않는다."""
+    queries=[q for q in queries if within_query_word_limit(q)]
     if provider == 'tiktok':
         queries = list(dict.fromkeys(q for raw in queries if (q := tiktok_noun_phrase(raw))))
     languages = ('zh', 'en', 'ko') if provider in {'douyin', 'xiaohongshu', 'bilibili'} else ('en', 'ko', 'zh', 'ja')
     pools = {lang: [q for q in dict.fromkeys(queries) if language(q) == lang] for lang in languages}
     if provider in {'douyin', 'xiaohongshu', 'bilibili'}:
         return pools['zh'][:max(0, limit)]
+    if search_minimums:
+        # English and Chinese minima precede supplementary languages; retain
+        # literal phrases and let actual execution evidence satisfy the quota.
+        priority=[q for batch in zip_longest(pools.get('en',[]),pools.get('zh',[])) for q in batch if q]
+        rest=[q for lang in languages if lang not in {'en','zh'} for q in pools[lang]]
+        return [*priority,*rest][:max(0,limit)]
     if provider == 'tiktok':
         # One query in each language before spending a second slot on any language.
         return [q for batch in zip_longest(*(pools[l] for l in languages))

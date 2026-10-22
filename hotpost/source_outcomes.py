@@ -73,7 +73,13 @@ def platform_outcomes(candidates, searches, targets=None, budget_stop=''):
             elif 'platform_cooldown' in rejected: reasons['cooldown'] += 1
             elif 'platform_budget_exhausted' in rejected: reasons['budget_exhausted'] += 1
             elif item.get('downloaded_file') and (rejected or not editing_ready(item)):
-                if not rejected and item.get('selected_for_zip') and item.get('editing_eligible') is None:
+                from .source_review_status import review_status
+                status=review_status({**item,'sha256':item.get('sha256') or item.get('file_sha256')})
+                if status in {'response_error','unconfirmed','service_wait','no_usable_intervals','pending'}:
+                    reasons[{'response_error':'review_response_error','unconfirmed':'review_unconfirmed',
+                             'service_wait':'review_service_wait','no_usable_intervals':'no_approved_intervals',
+                             'pending':'review_pending'}[status]] += 1
+                elif not rejected and item.get('selected_for_zip') and item.get('editing_eligible') is None:
                     reasons['review_pending'] += 1
                 elif rejected != ['valid_candidate_limit_reached']: reasons['quality_rejected'] += 1
             elif 'invalid_duration' in rejected and (item.get('discovery_meta') or {}).get('duration') is not None:

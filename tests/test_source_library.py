@@ -34,6 +34,26 @@ def test_cross_reference_library_does_not_carry_old_function_or_mask_approval(tm
     assert platform_outcomes(items,[],{'tiktok':5})['tiktok']['usable']==0
 
 
+def test_identity_product_lookup_avoids_apple_food_and_prioritizes_kitty(tmp_path):
+    settings=Settings(data_dir=tmp_path)
+    saved(settings,'food','https://www.tiktok.com/@cook/video/1234567890',
+          'Apple cutting recipe',selected_for_zip=True)
+    saved(settings,'context','https://www.tiktok.com/@maker/video/1234567891',
+          'Rechargeable hand warmers',selected_for_zip=True)
+    saved(settings,'kitty','https://www.youtube.com/watch?v=kitty123',
+          'Hello Kitty 苹果形 暖手宝',selected_for_zip=False)
+    plan={'products':[{'en':'apple'},{'ko':'손난로'}], 'search_identity':{
+        'version':'core-product-identity-v1','kind':'branded',
+        'product_terms':{'en':['handwarmer'],'zh':['暖手宝'],'ko':['손난로']},
+        'required_terms':[
+            {'kind':'brand','terms':{'en':['Hello Kitty'],'zh':['Hello Kitty'],'ko':['헬로키티']}},
+            {'kind':'feature','terms':{'en':['apple-shaped'],'zh':['苹果形'],'ko':['사과형']}}]}}
+    result=discover(settings,'new',plan,10)
+    assert [r.title for r in result]==['Hello Kitty 苹果形 暖手宝','Rechargeable hand warmers']
+    assert all(not r.selected_for_zip and r.functional_review is None for r in result)
+    assert platform_outcomes(result,[],{'tiktok':5})['youtube']['usable']==0
+
+
 def test_related_korean_subject_discovers_chinese_source_title(tmp_path):
     settings=Settings(data_dir=tmp_path)
     saved(settings,'old','https://www.youtube.com/watch?v=stored123','双肩包 背包')

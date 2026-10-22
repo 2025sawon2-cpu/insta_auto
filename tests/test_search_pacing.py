@@ -24,8 +24,8 @@ def test_captcha_cooldown_survives_worker_restart(tmp_path, monkeypatch):
     messages = []
     searcher.progress = messages.append
     assert searcher._check_block(page, 'google-lens', audit)
-    assert audit['status'] == 'captcha'
-    assert any('CAPTCHA 인증 대기' in m for m in messages)
+    assert audit['status'] == 'captcha_review_pending'  # No screenshot-capable page in this fixture.
+    assert any('재검토 대기' in m for m in messages)
     bs.BROWSER_COOLDOWNS.clear()
     later = bs.BrowserSearcher(searcher.settings, tmp_path)
     # A recorded challenge requires reading the same existing tab, never
@@ -34,8 +34,8 @@ def test_captcha_cooldown_survives_worker_restart(tmp_path, monkeypatch):
         locator=lambda _:SimpleNamespace(inner_text=lambda:'Verify you are human'))
     monkeypatch.setattr(later,'_page',lambda *args:current)
     later._google(SimpleNamespace(), [], 10)
-    assert later.searches[0]['status'] == 'verification_required'
-    assert later.searches[0]['captcha_check']['status']=='captcha'
+    assert later.searches[0]['status'] == 'captcha_review_pending'
+    assert later.searches[0]['captcha_check']['status']=='captcha_review_pending'
     assert not later._cooling_down('yandex-images')
 
 
@@ -46,7 +46,7 @@ def test_captcha_on_same_url_does_not_masquerade_as_results(tmp_path, monkeypatc
                            locator=lambda _: SimpleNamespace(inner_text=lambda: 'Unusual traffic'))
     audit = {}
     assert searcher._check_block(page, 'google-lens', audit)
-    assert audit['status'] == 'captcha'
+    assert audit['status'] == 'captcha_review_pending'
 
 
 def test_tiktok_slider_challenge_stops_search_even_on_http_200(tmp_path, monkeypatch):
@@ -56,18 +56,18 @@ def test_tiktok_slider_challenge_stops_search_even_on_http_200(tmp_path, monkeyp
                            locator=lambda _: SimpleNamespace(inner_text=lambda: 'Top Users Videos LIVE Drag the slider to fit the puzzle'))
     audit = {'http_status': 200}
     assert searcher._check_block(page, 'tiktok', audit)
-    assert audit['status'] == 'captcha'
+    assert audit['status'] == 'captcha_review_pending'
     assert searcher._cooling_down('tiktok')
 
 
-def test_user_solved_captcha_continues_without_cooldown(tmp_path, monkeypatch):
+def test_missing_capture_cannot_claim_challenge_was_solved(tmp_path, monkeypatch):
     monkeypatch.setattr(bs, 'BROWSER_COOLDOWNS', {})
     searcher = bs.BrowserSearcher(Settings(data_dir=tmp_path), tmp_path)
     page = SimpleNamespace(url='https://www.google.com/sorry/index',
                            locator=lambda _: SimpleNamespace(inner_text=lambda: 'results'))
     page.wait_for_timeout = lambda _: setattr(page, 'url', 'https://lens.google.com/search')
-    assert not searcher._check_block(page, 'google-lens', {})
-    assert not searcher._cooling_down('google-lens')
+    assert searcher._check_block(page, 'google-lens', {})
+    assert searcher._cooling_down('google-lens')
 
 
 def test_429_does_not_wait_or_retry_and_cooldown_expires(tmp_path, monkeypatch):

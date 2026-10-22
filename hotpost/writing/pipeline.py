@@ -3,7 +3,7 @@ import json
 from . import codex_writer
 from .checks import review
 from .contract import receipt
-from .reference_evidence import COMMENT_KEYWORD
+from .reference_evidence import COMMENT_KEYWORD, VISUAL_INSTRUCTION, visual_context, VisualEvidenceIntegrityError
 from .script_integrity import digest
 from .script_quantities import quantity_readings
 
@@ -56,14 +56,22 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
     evidence={'reference':reference,'reference_kind':payload.get('reference_kind','provided_text'),
               'reference_caption':payload.get('reference_caption',''),'comment_keyword':keyword,
               'request':payload.get('notes',''),'quantity_readings':list(quantity_readings(reference))}
+    visual, images = visual_context(payload)
+    if visual:
+        evidence['reference_visual'] = visual
     if payload.get('variant_context'):
         evidence['variant_context'] = payload['variant_context']
     if owned:
         evidence.update(reference_kind='product_information', product=payload.get('product'), research=payload.get('research', {}))
     state={'directory':directory,'calls':[]}
+    if visual:
+        state['reference_visual'] = visual
     rules=contract['prompt']
     def ask(instruction, data, schema):
-        return codex_writer.chat(instruction+'\n공통 규칙:\n'+rules,json.dumps(data,ensure_ascii=False),schema,check,state)
+        current_images = visual_context(payload)[1] if images else []
+        return codex_writer.chat(instruction+'\n공통 규칙:\n'+rules+(VISUAL_INSTRUCTION if images else ''),
+            json.dumps(data,ensure_ascii=False),schema,check,state,
+            **({'images':current_images} if current_images else {}))
     progress(.15,'Codex가 대본을 작성·검토하는 중')
     text=(draft if draft is not None else ask(('제품 정보로 짧고 강렬한 제품 후킹 쇼츠의 새 내레이션 한 편을 쓰세요. ' if owned else
               '원본을 벤치마킹한 완성 내레이션 한 편을 쓰세요. ')+ '분석문 없이 text만 반환하세요.',evidence,TEXT_SCHEMA)['text'].strip()
@@ -73,7 +81,10 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
     local=review(text,reference,evidence_mode=mode,keyword=keyword,contract=contract)
     progress(.55,'의미·문장 복사·새 사연 추가·말투를 확인하는 중')
     editorial={'status':'unavailable','issues':[]};repair={'attempted':False};warnings=[]
+    thumbnail_lines=(payload.get('variant_context') or {}).get('selected_variant',{}).get('thumbnail_lines')
+    copy_review=None
     try:
+        from ..thumbnail_copy import editorial_schema, COPY_REVIEW_INSTRUCTION
         value=ask(('제품 근거 자료와 후보를 대조하세요. ' if owned else '원본과 후보를 대조하세요. ')+
                   '실제 문제가 있는 문구를 정확히 인용하고 이유를 적으세요. '
                   '일반 기능의 직접 서술은 이번 규칙에서 허용합니다. 전언 말투를 강요하지 마세요. '
@@ -82,11 +93,16 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
                   '표면 치환형만 원작의 메커니즘·흐름을 유지하되 의미 있는 요소 2~3개를 바꿀 수 있습니다. '
                   '1인칭과 새 생활 상황 연출은 허용하며, 설정 변경을 제품 사실 추가와 혼동하지 마세요. '
                   '원문 문장·특징적인 설명 묶음, 추상적 교훈이나 기준·방법에 대한 댓글 요청은 검사하세요. '
-                  '수정할 필요가 없으면 issues는 빈 배열입니다. 새 사실·인물·수치 추가나 복사는 구분하세요.',
-                  {**evidence,'candidate':text},ISSUE_SCHEMA)
+                  '수정할 필요가 없으면 issues는 빈 배열입니다. 새 사실·인물·수치 추가나 복사는 구분하세요.'
+                  +(COPY_REVIEW_INSTRUCTION if thumbnail_lines else ''),
+                  {**evidence,'candidate':text,**({'thumbnail_lines':thumbnail_lines} if thumbnail_lines else {})},
+                  editorial_schema(ISSUE_SCHEMA) if thumbnail_lines else ISSUE_SCHEMA)
+        copy_review=value.get('thumbnail_review')
         if any(not i['quote'] or i['quote'] not in text for i in value['issues']):
             raise ValueError('검사 의견의 인용이 실제 대본과 일치하지 않습니다.')
         editorial={'status':'evaluated',**value}
+    except VisualEvidenceIntegrityError:
+        raise
     except (RuntimeError,ValueError,OSError) as exc:
         check();warnings.append('검사 미완료: '+str(exc)[:200])
     issues=[*local['quality_summary']['issues'],*[i['reason'] for i in editorial['issues']]]
@@ -120,9 +136,13 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
                 text=proposed;local=proposed_review;editorial={'status':'evaluated','issues':comparison['issues']}
             elif comparison['preferred']==0:
                 editorial={'status':'evaluated','issues':comparison['issues']}
+        except VisualEvidenceIntegrityError:
+            raise
         except (RuntimeError,ValueError,OSError) as exc:
             check();repair['error']=str(exc)[:200];warnings.append('보완 미완료 · 이전 대본 보존')
     check()
+    if images:
+        visual_context(payload)
     remaining=list(dict.fromkeys([*local['quality_summary']['issues'],*[i['reason'] for i in editorial['issues']]]))
     local['quality_summary'].update(status='issues_found' if remaining else
         'checks_clear_not_guaranteed' if editorial['status']=='evaluated' else 'not_evaluated',issues=remaining)
@@ -130,6 +150,17 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
         'single_pass_review':{**editorial,'script_sha256':digest(text),'reference_sha256':digest(reference),
                               'contract':receipt(contract),'advisory_only':True},
         'estimated_seconds':round(len(text.replace(' ',''))/6,1)}
+    if thumbnail_lines:
+        from ..thumbnail_copy import resolve_copy
+        try:
+            lines,copy_receipt=resolve_copy(
+                lambda instruction,data,schema:ask(instruction,{**evidence,**data},schema),
+                thumbnail_lines,text,reference,copy_review,script_changed=text!=initial)
+            candidate.update(thumbnail_lines=lines,thumbnail_copy_review=copy_receipt)
+        except VisualEvidenceIntegrityError:
+            raise
+        except (RuntimeError,ValueError,OSError) as exc:
+            check();warnings.append('썸네일 보완 검토 미완료 · 기존 문구 보존: '+str(exc)[:160])
     audit={'initial_text':initial,'repair':repair,'calls':state['calls'],'warnings':warnings}
     (directory/'writing-audit.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2),'utf-8')
     return {'type':'scripts','scripts':[candidate],'writing_contract':receipt(contract),'flow':'single-draft-v1',

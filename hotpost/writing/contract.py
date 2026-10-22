@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 
-VERSION = 'internal-codex-three-variants-20261012-v5-fixed-nado'
+VERSION = 'internal-codex-three-variants-20261017-v9-copy-review'
 
 
 def snapshot(mode=None):

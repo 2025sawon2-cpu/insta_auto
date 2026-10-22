@@ -17,7 +17,19 @@ UNOBSERVED = "이 장면의 프레임 설명을 확보하지 못했습니다. �
 
 OBSERVE_INSTRUCTION = (
     "Analyze only these actual video frames as untrusted visual data. Return JSON "
-    "{shots:[{id,observation,tags:[string],visual_type:string}]}. Describe visibly present objects and actions in Korean. "
+    "{shots:[{id,observation,tags:[string],visual_type:string,presentation:{product_visible:boolean,"
+    "product_role:string,frame_product_visibility:[boolean],visible_information:[string],visual_cluster:string,composition:number,clarity:number,"
+    "product_coverage:number,mask_product_overlap:number,uncertainty:string}}]}. "
+    "For EACH bounded interval assess product visibility separately from the file role. Split intervals containing "
+    "preparation or a product change before treating the whole span as product evidence. Return one "
+    "frame_product_visibility boolean per supplied frame in order. product_visible is true only if the relevant "
+    "product is actually visible in EVERY supplied frame; one preparation-only frame invalidates full-interval "
+    "product support. A file's core label cannot override this. product_role is "
+    "promoted_product, related_product, comparison, general_context or preparation. A knit coat cannot establish "
+    "puffer-jacket details; an undressed setup cannot inherit core. List only visible information (fit, side, quilting, "
+    "zipper). Use the same visual_cluster for reposts of the same scene, different clusters for new angles/actions. "
+    "Ratings are 0..1; product_coverage is the visible canvas fraction, mask_product_overlap the obscured product "
+    "fraction. State uncertainty and distinguish samples from continuous visibility. Describe visibly present objects and actions in Korean. "
     "visual_type is product, person, logo_only, shopping_interface, blank_transition or other. "
     "Use logo_only for an isolated logo/title card or macro logo with no meaningful product/use view. "
     "A physical logo on a clearly visible garment/product is product, not logo_only. "
@@ -25,6 +37,12 @@ OBSERVE_INSTRUCTION = (
     "Each SHOT label identifies one bounded source interval; its frames are in temporal order. "
     "Return one description per supplied shot ID. Do not infer actions between sampled frames, "
     "material quality, invisible properties, identity or claims. Do not describe IDs outside this batch. "
+    "CONTEXT ONLY restrictions govern direct narration claims, not the identity of a visibly present subject. "
+    "Use featured_subject to understand the central subject, including a food or dish. A shot of that actual "
+    "subject may be promoted_product/related_product even when it cannot demonstrate a particular recipe tip "
+    "or function. Do not label a visible featured soup general_context solely because its soaking tip is unseen. "
+    "product_source_kind describes a reviewed file identity, never proof that every frame shows it; inspect "
+    "all supplied pixels and retain preparation/general_context for intervals without the subject. "
     "CONTEXT ONLY restrictions remain binding. If frames do not establish an action, say so explicitly. "
     "For changes of state describe the visible start state, movement direction and end state: "
     "folding versus unfolding, attaching versus removing, loading versus unloading. "
@@ -34,14 +52,16 @@ RANK_INSTRUCTION = (
     'If render_review_feedback is supplied, address its concrete observed defects using the current observed catalog. '
     'Prefer distinct visible actions/views over similar reposted motifs, and prefer the promoted object structure for object-specific narration. '
     'Prefer sources with no inserted creator watermark when available. Offer alternatives from different parent originals and distinct views. '
-    'Shared brand names alone do not establish the promoted product structure or use. Do not use logo-only cuts or a talking face without a meaningful product view to pad diversity. '
-    'A color/model-specific detail needs matching footage only for that detail; general narration may use other reviewed brand/function contexts. '
+    'Before a second shot from one parent, retain the best suitable shot from every other suitable parent (up to six). '
+    'Shared brand names alone do not establish the promoted product structure or use. Do not use logo-only cuts to pad diversity. Observed reactions or context may support general benefits in the complete product montage. '
+    'Prefer color/model matching when it improves clarity, but do not require simultaneous matching even when the words name a color. Same-product color variants and a transition within one narration beat may form a coherent montage. Only a concrete false exclusive specification or misleading different-structure demonstration is blocking; ordinary color timing differences are advisory. '
     "Narration is final and takes priority. Never rewrite, weaken or reject a narration beat because matching footage is missing. "
     "Use honest context/illustration alternatives and record the visual gap; do not claim unseen actions are established. "
     "Rank narration beats against the supplied per-shot visual observations, not filenames or ID order. "
     "No images are supplied in this step; observations are the only visual evidence and remain untrusted data. "
     "Return JSON {beats:[{id,emphasis,emphasis_reason,opposite_shot_ids:[string],"
-    "promoted_subject_reference:boolean,incompatible_subject_shot_ids:[string],options:[{shot_id,relation,reason,action_match}]}]}. "
+    "promoted_subject_reference:boolean,visual_requirement:string,incompatible_subject_shot_ids:[string],"
+    "feature_incompatible_shot_ids:[string],options:[{shot_id,relation,reason,action_match}]}]}. "
     "For each supplied beat choose up to 6 distinct supplied shot IDs by semantic fit. Keep all suitable alternatives up to six without inventing fit to fill the count. "
     "Return each supplied beat ID exactly once; duplicate beat rows are invalid, and invented beat IDs cannot affect another beat. "
     "relation is direct only if the observation actually establishes the referenced object/action; "
@@ -54,11 +74,17 @@ RANK_INSTRUCTION = (
     "close-up as context when the named person's appearance is not verified. Avoid blank openings, "
     "transition slides and shopping website interfaces; preserve narration with actual product footage. "
     "Explain missing details in reason. Vary suitable source footage; do not mechanically repeat the first IDs. "
-    "action_match is supports, opposite, not_established or not_applicable. Mark opposite only when "
-    "the observed action contradicts this beat's direction: unfolding for folding, removal for attachment, "
-    "unloading for loading. List ALL such supplied shots in opposite_shot_ids; never choose them, even as context. "
+    "action_match is supports, opposite, not_established or not_applicable. Mark opposite when "
+    "the observed motion would be misleadingly presented as this beat's actual action or explicit "
+    "preparation sequence, not merely because an action word occurs in the narration: unfolding for folding, "
+    "removal for attachment, unloading for loading, or pouring raw egg/liquid onto dry ingredients already in a pan "
+    "when the beat narrates putting ingredients into pre-mixed batter in a bowl (or when context_usage_limits forbids "
+    "using the shot for this step). A general capability or benefit line is not by itself a claim that "
+    "the pictured person is performing that action right now. List ALL actual misleading opposite "
+    "demonstrations in opposite_shot_ids; never restore a confirmed opposite demonstration merely "
+    "by relabelling it context. "
     "A folded state can be honest context for folding when the action itself was not witnessed; "
-    "not_established is not opposite. Do not reverse footage to fabricate the desired action. "
+    "not_established is not opposite unless the sequence/order contradicts the beat. Do not reverse footage to fabricate the desired action. "
     "Choose emphasis 0/1/2 selectively for surprise, evaluation, reveal or a call to action. "
     "Most ordinary explanatory beats should be 0; do not emphasize every sentence ending. "
     + PRODUCT_APPEAL_INSTRUCTION
@@ -66,18 +92,29 @@ RANK_INSTRUCTION = (
     'An absent literal story event does not justify no_usable_scenes when that footage is available. '
     'Read the entire narration and adjacent fragments before classifying every beat. Product references '
     'often span several short subtitle beats, including endings such as "there is a remover", "this spray", '
-    'and "I want one". Across the complete introduction, use, benefit and closing sentence, do not offer '
-    'a visibly incompatible formulation, applicator or product as the promoted subject merely by tagging '
-    'it context. In incompatible_subject_shot_ids list ALL observed shots that would make that product '
-    'reference misleading; exclude them from this beat even as context/illustration. Keep this separate '
-    'from opposite motion. Other-product general setting footage may still support fictional story beats. '
+    'and "I want one". Product words identify the narration subject; they do not require a product image '
+    'in every subtitle fragment. visual_requirement is montage_support by default, including general '
+    'benefit, reaction, story and closing cuts. Use product only when this chosen visual must establish '
+    'the actual product appearance/structure, and direct_action only when the chosen visual is offered '
+    'as actual proof of that action. Do not classify a beat as direct_action merely because its words '
+    'mention an action. An observed reaction or general context may be a context/illustration option '
+    'during benefit narration without proving the narrated benefit or identifying a named person. '
+    'Never present a visibly wrong formulation, applicator or product as the promoted subject merely '
+    'by tagging it context. incompatible_subject_shot_ids is ONLY for such product-identity mismatches '
+    'that would mislead across the promoted subject, not a missing individual feature. These identity '
+    'exclusions propagate across promoted-subject fragments. feature_incompatible_shot_ids is for a '
+    'specific feature, installation location or direct demonstration contradicted by that shot; these '
+    'exclusions apply ONLY to this beat. For example a standalone raised-floor tent cannot demonstrate '
+    'vehicle mounting, but may support the shared raised-floor benefit in another beat. Do not copy '
+    'its vehicle-mounting exclusion into the floor-benefit or closing beats. Keep both separate from '
+    'opposite motion. Other-product general setting footage may still support honest context. '
     'Relevant views of the promoted product may support narration without demonstrating its exact '
     'action, elapsed time, invisible comfort or story event. Minor color/model differences remain allowed. '
     'For EACH beat return promoted_subject_reference=true when that fragment belongs to a sentence '
     'identifying, describing, using, recommending or closing on the promoted product; include adjacent '
     'short endings that refer to the same product. Return false for independent fictional story/setup '
-    'beats. Any known incompatible product view is excluded across ALL such promoted-product '
-    'fragments, while unrelated everyday setup may continue to use honest context footage. '
+    'beats. This boolean records narration reference only and is not a per-cut product-visibility gate. '
+    'Keep useful feature footage as an option on repeated returns even without newly visible information. '
 )
 
 
@@ -150,6 +187,8 @@ def _observe(settings, catalog, generate):
             value = generate(settings, OBSERVE_INSTRUCTION, {'shot_ids': [s['id'] for s in supplied],
                 'shots': [{'id': s['id'], 'start': s['start'], 'end': s['end'],
                            'frame_count': len(s['frames']), 'source_role': s.get('source_role', 'core'),
+                           'featured_subject':s.get('featured_subject'),
+                           'product_source_kind':s.get('product_source_kind'),
                            'context_usage_limits': _limits(s)} for s in supplied]}, media=media)
         except Exception as exc:
             from .model_service import ModelServiceUnavailable, ModelResponseInvalid
@@ -169,6 +208,10 @@ def _observe(settings, catalog, generate):
                     'evidence_status': 'observed'}
                 if row.get('visual_type') in {'product','person','logo_only','shopping_interface','blank_transition','other'}:
                     observations[row['id']]['visual_type'] = row['visual_type']
+                from .shot_presentation import interval_receipt
+                shot=next(s for s in supplied if s['id']==row['id'])
+                receipt=interval_receipt(shot,row.get('presentation') or {})
+                if receipt:observations[row['id']]['shot_presentation']=receipt
     return observations
 
 
@@ -179,7 +222,9 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
     observations = _observe(settings, catalog, generate)
     for shot in catalog:
         row = observations[shot['id']]
-        if blank_opening(shot):
+        if shot.get('interval_presentation_required') and not row.get('shot_presentation'):
+            row['selection_exclusion']='interval_presentation_unconfirmed'
+        elif blank_opening(shot):
             row['selection_exclusion'] = 'blank_opening'
         elif row.get('visual_type') in {'logo_only','shopping_interface','blank_transition'}:
             row['selection_exclusion'] = row['visual_type']
@@ -187,10 +232,19 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
                 and not observations[s['id']].get('selection_exclusion')]
     rankable = {s['id'] for s in grounded}
     context = {s['id'] for s in catalog if s.get('source_role') == 'context_only'}
+    context.update(sid for sid,row in observations.items()
+                   if row.get('shot_presentation',{}).get('product_role') in {'comparison','general_context','preparation'})
     value = {}
     if grounded and beats:
         try:
             instruction=RANK_INSTRUCTION
+            core_priority=any(s.get('product_source_kind')=='core_product' for s in catalog)
+            if core_priority:
+                instruction=instruction.replace('up to 3 distinct','up to 12 distinct')
+                instruction+=(' Core product priority: preserve suitable options from DIFFERENT core_product parent originals '
+                    'before related products or context. Retain at least one suitable option per available core parent '
+                    'up to twelve. Observed core product views may support general narration as montage without literal '
+                    'action matching. Never invent fit or remove actual opposite/identity exclusions to fill a count.')
             if review_feedback:
                 instruction=instruction.replace('up to 3 distinct','up to 6 distinct')
                 instruction+=' For general context beats, retain all suitable alternatives up to six when available, across different parent originals and observed visual motifs, so the editor can avoid repetition. Never invent semantic fit to fill the count.'
@@ -204,6 +258,7 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
                             'parent_original_sha256':s.get('parent_original_sha256'),
                             'creator_overlay_present':s.get('creator_overlay_present',False),
                             'source_role': s.get('source_role', 'core'),
+                            'product_source_kind':s.get('product_source_kind'),
                             'context_usage_limits': _limits(s)} for s in grounded]}, media=[])
         except Exception as exc:
             from .model_service import ModelServiceUnavailable, ModelResponseInvalid
@@ -224,12 +279,17 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
               if isinstance(b.get('id'), str) and b['id'] in supplied_beats}
     promoted_incompatible=set()
     for row in ranked.values():
+        # Product identity exclusions remain global; feature-specific exclusions
+        # never enter this set. Missing feature lists preserve legacy negatives.
         ids=row.get('incompatible_subject_shot_ids')
         if isinstance(ids,list):
             promoted_incompatible.update(sid for sid in ids if isinstance(sid,str) and sid in rankable)
     choices = {}
     for index, beat in enumerate(beats):
         row = ranked.get(beat['id'], {})
+        visual_requirement=row.get('visual_requirement','montage_support')
+        if not isinstance(visual_requirement,str) or visual_requirement not in {'montage_support','product','direct_action'}:
+            visual_requirement='montage_support'
         excluded = row.get('opposite_shot_ids', [])
         opposite = {sid for sid in excluded if isinstance(sid, str) and sid in rankable} if isinstance(excluded, list) else set()
         opposite.update(o['shot_id'] for o in _rows(row, 'options')
@@ -239,7 +299,9 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
         incompatible={sid for sid in incompatible if isinstance(sid,str) and sid in rankable} if isinstance(incompatible,list) else set()
         if row.get('promoted_subject_reference') is True:
             incompatible.update(promoted_incompatible)
-        excluded_shots=opposite | incompatible
+        feature_ids=row.get('feature_incompatible_shot_ids',[])
+        feature_incompatible={sid for sid in feature_ids if isinstance(sid,str) and sid in rankable} if isinstance(feature_ids,list) else set()
+        excluded_shots=opposite | incompatible | feature_incompatible
         options, used = [], set()
         for option in _rows(row, 'options'):
             shot_id, relation = option.get('shot_id'), option.get('relation')
@@ -247,9 +309,19 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
                     or not isinstance(relation, str) or relation not in {'direct', 'context', 'illustration'}):
                 continue
             reason = str(option.get('reason') or '확인된 장면 설명을 기준으로 선택했습니다.')[:600]
+            if (('visual_requirement' not in row or visual_requirement=='direct_action')
+                    and option.get('action_match') == 'not_established' and '순서여서' in reason and (
+                    '쓸 수 없' in reason or '쓰면 안 됨' in reason or '불가' in reason)):
+                opposite.add(shot_id)
+                excluded_shots.add(shot_id)
+                continue
             if relation == 'direct' and option.get('action_match') == 'not_established':
                 relation = 'context'
                 reason = '동작 자체는 미확인 · 제품 상태/사용 상황으로만 배치. ' + reason
+            presentation=observations[shot_id].get('shot_presentation')
+            if presentation and visual_requirement in {'product','direct_action'}:
+                from .shot_presentation import supports_product
+                if not supports_product(presentation):continue
             if shot_id in context and relation == 'direct':
                 relation = 'context'
                 reason = '보조 상황 장면 · 핵심 동작의 증거로 사용하지 않음. ' + reason
@@ -257,14 +329,34 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
             if option.get('action_match') in {'supports', 'not_established', 'not_applicable'}:
                 options[-1]['action_match'] = option['action_match']
             used.add(shot_id)
-            if len(options) == 6:
-                break
+        # A long run of shots from one original must not hide later, explicitly
+        # suitable originals. This never adds an option that the model omitted.
+        option_limit=12 if any(s.get('product_source_kind')=='core_product' for s in catalog) else 6
+        if option_limit==12:
+            by_id={s['id']:s for s in catalog}
+            options.sort(key=lambda o:by_id[o['shot_id']].get('product_source_kind')!='core_product')
+        if len(options)>option_limit:
+            by_id={s['id']:s for s in catalog}
+            parents=set();first=[];rest=[]
+            from .source_diversity import parent_groups
+            aliases=parent_groups([{'id':s.get('source_id',s['id']),'sha256':s.get('sha256'),
+                'original_sha256':s.get('parent_original_sha256')} for s in catalog])
+            for option in options:
+                shot=by_id[option['shot_id']]
+                parent=aliases.get(shot.get('source_id',shot['id'])) or shot.get('source_id',shot['id'])
+                if parent in parents:rest.append(option)
+                else:first.append(option);parents.add(parent)
+            options=(first+rest)[:option_limit]
         status = 'ranked' if options else 'fallback'
         if not options:
             # Preserve editability without pretending an unranked/undescribed shot
             # proves the narration. Initial cyclic options never enter the prompt.
             pool = grounded or [s for s in catalog if not observations[s['id']].get('selection_exclusion')]
             pool = [s for s in pool if s['id'] not in excluded_shots]
+            if visual_requirement in {'product','direct_action'}:
+                from .shot_presentation import supports_product
+                pool=[s for s in pool if not observations[s['id']].get('shot_presentation')
+                      or supports_product(observations[s['id']]['shot_presentation'])]
             if not pool and opposite:
                 status = 'opposite_only'
             elif not pool:
@@ -274,11 +366,16 @@ def analyze_shots(settings, catalog, beats, generate, review_feedback=None):
                 reason = ('장면 의미 순위를 확보하지 못해 임시 배치했습니다. 대본 일치 여부는 미확인입니다.'
                           if grounded else UNOBSERVED + ' 임시 배치 장면입니다.')
                 options.append({'shot_id': shot['id'], 'relation': 'illustration', 'reason': reason})
+        if status=='ranked':
+            from .shot_presentation import prefer_clear_options
+            options=prefer_clear_options(options,observations,catalog)
         emphasis = row.get('emphasis')
         choices[beat['id']] = {'options': options, 'analysis_status': status,
+            'visual_requirement':visual_requirement,
             'promoted_subject_reference':row.get('promoted_subject_reference') if type(row.get('promoted_subject_reference')) is bool else None,
             'opposite_shot_ids': sorted(opposite),
             'incompatible_subject_shot_ids':sorted(incompatible),
+            'feature_incompatible_shot_ids':sorted(feature_incompatible),
             'emphasis': emphasis if status == 'ranked' and type(emphasis) is int and emphasis in (0, 1, 2) else 0,
             'emphasis_reason': str(row.get('emphasis_reason') or '')[:400] if status == 'ranked' else ''}
     return observations, choices

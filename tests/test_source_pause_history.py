@@ -262,3 +262,50 @@ def test_real_finder_wrapper_registers_root_before_request_and_pause_exposes_own
     assert current['status']=='paused' and current['execution_audit_available'] is False
     assert Path(owned['receipt_path']).is_file()
     assert fresh_queries(['apple'],'youtube',h.store.state['source_acquisition']['queries'])==[]
+
+
+def interrupted_before_input():
+    from hotpost.source_search.readiness import parser_revision
+    return {'provider':'tiktok','query':'apple','language':'en','status':'started',
+        'parser_revision':parser_revision('tiktok'),'stage':'locate_search_input',
+        'execution':{'query_submitted':False,'query_url_matched':False}}
+
+
+def test_settled_pre_input_recovery_preserves_receipts_and_does_not_count_search(tmp_path):
+    from hotpost.source_search.strategy import restore_history
+    from hotpost.source_coverage import actual_search_coverage
+    h,s,j,m,p=setup(tmp_path);w=worker(p,m,[interrupted_before_input()])
+    h._preserve_source_attempt_history(s,j)
+    record=h.store.state['source_acquisition'];before=copy.deepcopy(record)
+    raw=w.read_bytes();history=restore_history(record)
+    assert fresh_queries(['apple'],'tiktok',history)==['apple']
+    assert actual_search_coverage(history,{'en':5})['en']['count']==0
+    assert record['interrupted_attempts']==before['interrupted_attempts'] and w.read_bytes()==raw
+    assert record['search_resolutions'][0]['previous']==before['queries'][0]
+    again=copy.deepcopy(record);restore_history(record);assert record==again
+
+
+@pytest.mark.parametrize('damage',['bare','receipt','child','manifest','different_query','different_run',
+    'submitted','submit_intent','typed','input_marker','ui_failure','image','missing_execution'])
+def test_unknown_or_sent_interruption_never_authorizes_retransmission(tmp_path,damage):
+    from hotpost.source_search.strategy import restore_history
+    h,s,j,m,p=setup(tmp_path);row=interrupted_before_input()
+    if damage=='submitted':row['execution']['query_submitted']=True
+    if damage=='submit_intent':row['execution']['submit_intent']=True
+    if damage=='typed':row['execution']['input_value']='apple'
+    if damage=='input_marker':row['requests']=[{'operation':'search_input'}]
+    if damage=='ui_failure':row['status']='page_unresolved'
+    if damage=='image':row['language']='image'
+    if damage=='missing_execution':row.pop('execution');row['requests']=[{'operation':'search_input'}]
+    w=worker(p,m,[row]);h._preserve_source_attempt_history(s,j)
+    record=h.store.state['source_acquisition']
+    if damage=='bare':record['interrupted_attempts']=[]
+    if damage=='receipt':Path(record['interrupted_attempts'][0]['receipt_path']).write_text('{}','utf8')
+    if damage=='child':w.write_text('{}','utf8')
+    if damage=='manifest':m.write_text('{}','utf8')
+    if damage=='different_query':record['queries'][0]['query']='other'
+    if damage=='different_run':record['queries'][0]['run_id']='other'
+    history=restore_history(record)
+    assert not record.get('search_resolutions')
+    query='other' if damage=='different_query' else 'apple'
+    if damage!='image':assert fresh_queries([query],'tiktok',history)==[]

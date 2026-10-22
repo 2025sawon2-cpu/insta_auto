@@ -84,10 +84,10 @@ export function ThumbnailEditor({root,task,edit}){
         <label className="re-check"><input type="checkbox" checked={element.background} disabled={blocked} onChange={e=>patch(element.id,{background:e.target.checked})}/>문구 뒤에 배경 넣기</label>
         <button className="re-delete" disabled={blocked} onClick={()=>{commit({...document,elements:document.elements.filter(e=>e.id!==element.id)});setSelected(null);}}>선택한 문구 삭제</button>
       </div>}</section></aside></div>
-    <div className="re-feedback" role="status">{issue||notice||(active?'썸네일을 반영한 새 버전을 만드는 중입니다.':hasDraft?'미저장 썸네일은 이 기기에 임시 보관 중입니다.':'문구는 도현 폰트로 표시됩니다. 썸네일은 영상 재생 시간에 추가되지 않습니다.')}</div>
+    <div className="re-feedback" role="status">{issue||notice||(active?'영상 제작이 진행 중입니다. 완료되면 썸네일을 수정할 수 있습니다.':hasDraft?'미저장 썸네일은 이 기기에 임시 보관 중입니다.':'문구는 도현 폰트로 표시됩니다. 썸네일은 영상 재생 시간에 추가되지 않습니다.')}</div>
     <footer className="re-footer"><button disabled={blocked||!history.length} onClick={()=>{const next=history.at(-1);setHistory(h=>h.slice(0,-1));commit(next,false);}}>실행 취소</button>
       <button disabled={sending||!hasDraft&&!stale} onClick={cancel}>이번 수정 취소</button>
       <button disabled={blocked||!!issue||!apiReady} onClick={()=>save('save-thumbnail')}>썸네일 내용 저장</button>
-      <button className="re-primary" disabled={blocked||!!issue||!apiReady} onClick={()=>save('export-thumbnail')}>{active?'새 버전 제작 중':'썸네일 반영한 영상 만들기'}</button></footer>
+      <button className="re-primary" disabled={blocked||!!issue||!apiReady} onClick={()=>save('export-thumbnail')}>{active?'영상 제작 중':'썸네일 반영한 영상 만들기'}</button></footer>
   </section>;
 }

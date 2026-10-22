@@ -29,6 +29,7 @@ def setup_review(tmp_path, monkeypatch):
             'functional_review':{'reviewed':True,'same_core_function':True}}
     monkeypatch.setattr(module,'sample_source_frames',lambda *a,**k:copy.deepcopy(evidence))
     monkeypatch.setattr(module,'_duration',lambda *a:10.)
+    monkeypatch.setattr(module,'review_windows',lambda *a:[[2.,4.]])
     return source,tmp_path/'output'
 
 
@@ -127,6 +128,72 @@ def test_independent_rejection_never_creates_ready_result(setup_review):
     with pytest.raises(ValueError,match='every region'):
         module.review_source_overlays(None,source,output,generate=generate)
     assert not (output/'overlay-reviewed.json').exists()
+
+
+def test_frame_identifier_typo_gets_one_real_media_recheck_and_cached_restore(setup_review):
+    source,output=setup_review;original,calls=visual_calls()
+    def generate(settings,instruction,data,*,media):
+        result=original(settings,instruction,data,media=media)
+        if len(calls)==2:result['intervals'][0]['frame_ids']=['actual-fame']
+        return result
+    result=module.review_source_overlays(None,source,output,generate=generate)
+    assert len(calls)==3 and calls[1][2]==calls[2][2]
+    assert calls[2][1]['identifier_errors'][0]['received_frame_ids']==['actual-fame']
+    raw=json.loads((output/'overlay-review-batch-01.json').read_text('utf8'))
+    assert raw['review']['intervals'][0]['frame_ids']==['actual-fame']
+    assert result['mask_review']['intervals'][0]['frame_ids']==['actual-frame']
+    restored=module.review_source_overlays(None,source,output,
+        generate=lambda *a,**k:pytest.fail('completed repair must restore without another model call'))
+    assert restored['mask_review']==result['mask_review']
+
+
+def test_invalid_repair_stays_unconfirmed_and_does_not_loop_after_restart(setup_review,monkeypatch):
+    source,output=setup_review;original,calls=visual_calls()
+    def generate(settings,instruction,data,*,media):
+        result=original(settings,instruction,data,media=media)
+        if len(calls)>1:result['intervals'][0]['frame_ids']=['actual-fame']
+        return result
+    for attempt in range(2):
+        if attempt:
+            monkeypatch.setattr(module,'sample_source_frames',lambda *a,**k:
+                pytest.fail('restart must not generate new UUID evidence or overwrite the original'))
+        with pytest.raises(ValueError,match='every region'):
+            module.review_source_overlays(None,source,output,generate=generate)
+    assert len(calls)==3 and not (output/'overlay-reviewed.json').exists()
+
+
+def test_frame_typo_with_substantive_denial_is_not_retried(setup_review):
+    source,output=setup_review;original,calls=visual_calls(accepted=False)
+    def generate(settings,instruction,data,*,media):
+        result=original(settings,instruction,data,media=media)
+        if len(calls)>1:result['intervals'][0]['frame_ids']=['actual-fame']
+        return result
+    with pytest.raises(ValueError,match='every region'):
+        module.review_source_overlays(None,source,output,generate=generate)
+    assert len(calls)==2 and not (output/'overlay-review-repair-01-attempt.json').exists()
+
+
+def test_identifier_repair_never_reapproves_previously_rejected_interval(tmp_path):
+    from hotpost.source_overlay_repair import repair_frame_ids
+    proposal={'proposal_sha256':'proposal','watermark_masks':[], 'evidence':{
+        'source_sha256':'source','geometry':dict(GEOMETRY),
+        'intervals':[{'index':0,'source_start':0.,'source_end':4.},
+                     {'index':1,'source_start':4.,'source_end':8.}],
+        'frames':[{'frame_id':'valid-id','interval_index':0,'source_timestamp':1.}]}}
+    accepted={'source_start':0.,'source_end':4.,'frame_ids':['typo-id'],
+              'mask_indices':[],'no_overlays_confirmed':True,'coverage_confirmed':True,'subject_visible':True}
+    denied={'source_start':4.,'source_end':8.,'reason':'subject occluded'}
+    original={'proposal_sha256':'proposal','source_sha256':'source','geometry':dict(GEOMETRY),
+              'intervals':[accepted],'rejected_intervals':[denied]}
+    data={'proposal':proposal,'review_scope':[{'source_start':0.,'source_end':4.},
+        {'source_start':4.,'source_end':8.}],'attached_frame_ids':['valid-id']}
+    captured=[]
+    def generate(settings,instruction,data,*,media):
+        captured.append(data)
+        return {**original,'intervals':[{**accepted,'frame_ids':['valid-id']},denied], 'rejected_intervals':[]}
+    with pytest.raises(ValueError,match='미승인'):
+        repair_frame_ids(generate,None,'review',data,[],original,tmp_path,0)
+    assert captured[0]['review_scope']==[{'source_start':0.,'source_end':4.}]
 
 
 def test_missing_frames_cannot_become_clean(setup_review):
@@ -293,16 +360,21 @@ def test_saved_source_review_precedes_search_and_checks_only_editable_frames(tmp
     monkeypatch.setattr(source_finder,'find_sources',lambda *a,**k:pytest.fail('unnecessary external search'))
     monkeypatch.setattr(source_finder,'extract_frames',lambda *a,**k:[])
     inside=folder/'inside.png';outside=folder/'outside.png'
+    Image.new('RGB',(12,12),'gray').save(inside)
+    Image.new('RGB',(12,12),'black').save(outside)
     def overlay(*a,**k):
         value=copy.deepcopy(a[1]);value.pop('functional_review')
         value.update(source_quality='clean-source',blur_required=False,
             reviewed_intervals=[{'source_start':2.,'source_end':4.}],
-            mask_review={'source_sha256':source['sha256'],'evidence_frames':[
-                {'path':str(inside),'source_timestamp':3.},{'path':str(outside),'source_timestamp':8.}]})
+            mask_review={'source_sha256':source['sha256'],
+                'intervals':[{'source_start':2.,'source_end':4.,'frame_ids':['inside']}],
+                'evidence_frames':[
+                    {'frame_id':'inside','path':str(inside),'source_timestamp':3.,'sha256':sha256_file(inside)},
+                    {'frame_id':'outside','path':str(outside),'source_timestamp':8.,'sha256':sha256_file(outside)}]})
         return value
     monkeypatch.setattr(module,'review_source_overlays',overlay)
     def function(settings,candidate,reference_frames,candidate_frames,reference_info=None):
-        assert candidate_frames==[{'path':str(inside),'source_timestamp':3.}]
+        assert candidate_frames==[{'path':str(inside),'source_timestamp':3.,'review_interval':[2.,4.]}]
         return source['functional_review']
     monkeypatch.setattr(source_functional,'review_function',function)
     monkeypatch.setattr(source_functional,'reference_review_info',lambda state,folder:{'original_product_text':state['original_text']})
@@ -328,6 +400,8 @@ def test_rejected_saved_overlay_is_retained_excluded_and_not_retried_forever(tmp
     monkeypatch.setattr(source_finder,'extract_frames',lambda *a,**k:[])
     def reject(*a,**k):raise ValueError('product obscured by overlay')
     monkeypatch.setattr(module,'review_source_overlays',reject)
+    # No observed alternative short scope; do not repeat the original failed review.
+    monkeypatch.setattr('hotpost.source_interval_recovery.propose',lambda *a,**k:([],None))
     job=studio.store.claim('sources');result=studio._collect_sources(studio.store.get(tid),job)
     finish(studio,job,result);state=studio.store.get(tid)
     assert len(state['sources'])==1 and Path(state['sources'][0]['path']).exists()

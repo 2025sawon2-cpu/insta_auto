@@ -67,16 +67,20 @@ def build_comparison(studio, codes=BATCH_CODES, *, review_codes=(), snapshot_suf
         else:
             uri=copy_asset(state['reference_video'],code+'-original.mp4')
             original=f'<video controls playsinline preload="metadata" src="{uri}"></video>'
-        used_sources=[]
+        used_sources=[];usage_note=''
         plan_path=Path(edit.get('plan_path') or '__missing__')
         if plan_path.is_file():
             plan=json.loads(plan_path.read_text('utf-8'))
-            used_shots={b.get('selected_shot_id') for b in plan.get('beats',[])}
+            used_shots={b.get('selected_shot_id') for b in (plan.get('visual_cuts') or plan.get('beats',[]))}
             used_ids={s.get('source_id') for s in plan.get('shots',[]) if s.get('id') in used_shots}
             used_sources=[s for s in plan.get('sources',[]) if s.get('id') in used_ids]
+            if plan.get('source_diversity_policy'):
+                from .source_diversity import body_usage_report
+                usage=body_usage_report(plan)
+                usage_note=f'<p class="note">본문에 서로 다른 원본 {usage["used_parent_sources"]}개 사용 · 최소 {usage["minimum_parent_sources"]}개 기준</p>'
         credits=sorted({s.get('origin_url','') for s in [*used_sources,*edit.get('photo_assets',[])] if urlsplit(s.get('origin_url','')).scheme in {'http','https'}})
         credit_html=''.join('<li><a target="_blank" rel="noopener noreferrer" href="'+html.escape(u,quote=True)+'">소스 '+str(i+1)+'</a></li>' for i,u in enumerate(credits))
-        kind_note='<p class="note">원본 사진에 화면 이동·확대, 제작 음성과 자막을 넣은 사진 영상입니다.</p>' if edit.get('export_kind')=='photo_story' else ''
+        kind_note=('<p class="note">원본 사진에 화면 이동·확대, 제작 음성과 자막을 넣은 사진 영상입니다.</p>' if edit.get('export_kind')=='photo_story' else '')+usage_note
         sections.append(f'<section><h2>{title}</h2><div class="pair"><article><h3>원본</h3>{original}<a href="https://www.instagram.com/p/{code}/" target="_blank" rel="noopener noreferrer">Instagram 원본 보기</a></article><article><h3>완성본</h3><video controls playsinline preload="metadata" src="{final}"{poster}></video>{kind_note}<a class="download" href="{final}?download=1" download="{code}.mp4">완성 영상 다운로드</a></article></div><details><summary>사용 소스 출처</summary><ul>{credit_html}</ul><p>출처를 보존했습니다. 다운로드 성공만으로 재사용 허가가 확인되는 것은 아닙니다.</p></details></section>')
         if state.get('status') == 'draft_review':
             illustrative = edit.get('source_coverage_complete') is False

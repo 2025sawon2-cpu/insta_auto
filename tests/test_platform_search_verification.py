@@ -29,12 +29,12 @@ def test_loading_home_and_search_results_are_distinct():
 
 
 @pytest.mark.parametrize('text,status',[
-    ('슬라이더를 드래그하여 퍼즐을 맞추세요','captcha'),
+    ('슬라이더를 드래그하여 퍼즐을 맞추세요','captcha_review_pending'),
     ('Log in to search','login_required'),
     ('No results found','no_results'),
 ])
-def test_visible_authentication_and_empty_search_are_distinct(text,status):
-    verify=TikTokSearchVerification('mushroom skewers')
+def test_visible_authentication_and_empty_search_are_distinct(tmp_path,text,status):
+    verify=TikTokSearchVerification('mushroom skewers',Settings(data_dir=tmp_path))
     assert verify.observe(page_for(verify,text))['status']==status
 
 
@@ -126,7 +126,7 @@ def test_busy_collection_cannot_be_opened_twice_but_lock_is_not_released(tmp_pat
 def test_query_validation_occurs_before_launch(tmp_path):
     manager=PlatformSessionManager(Settings(data_dir=tmp_path))
     with pytest.raises(ValueError):manager.start('instagram','mushroom skewers')
-    for query in ('',None,123,'x'*181):
+    for query in ('',None,123,'one two three four five six seven eight nine ten eleven'):
         with pytest.raises(ValueError):TikTokSearchVerification(query)
     assert not manager.active
 

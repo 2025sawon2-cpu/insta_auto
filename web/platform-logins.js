@@ -7,7 +7,7 @@
   const opener = document.getElementById('platform-login');
   let timer, busy = false;
   const states = {authenticated:'인증 확인', login_required:'로그인 필요',
-    verification_required:'추가 인증 필요', rate_limited:'요청 제한'};
+    captcha_review_pending:'인증 의심 화면 재검토 대기',verification_required:'추가 인증 필요', rate_limited:'요청 제한'};
   async function api(path = '', body) {
     const response = await fetch('/api/platform-session' + path, body === undefined ? {} : {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)

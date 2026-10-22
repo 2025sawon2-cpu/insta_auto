@@ -153,7 +153,7 @@ def editing_ready(item: dict) -> bool:
     return item.get('source_quality') in {'clean-source', 'light-overlay'}
 
 
-def select_valid_candidates(candidates: list, limit: int, embeddings: dict | None = None) -> list:
+def select_valid_candidates(candidates: list, limit: int, embeddings: dict | None = None, *, core_priority=False) -> list:
     embeddings = embeddings or {}
     selected = []
     for candidate in candidates:
@@ -170,6 +170,9 @@ def select_valid_candidates(candidates: list, limit: int, embeddings: dict | Non
             same_file = bool(candidate.file_sha256 and candidate.file_sha256 == prior.file_sha256)
             same_frames = frame_duplicate([int(value, 16) for value in candidate.frame_hashes or []],
                                           [int(value, 16) for value in prior.frame_hashes or []])
+            if core_priority:
+                from .source_core_priority import recording_duplicate
+                same_frames=recording_duplicate(vars(candidate),vars(prior))
             if same_file or same_frames:
                 duplicate = prior
                 break

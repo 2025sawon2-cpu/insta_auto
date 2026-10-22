@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import re
 import shutil
 import time
 import uuid
@@ -149,6 +150,9 @@ class VoiceBenchAdapter:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
+        if generation_key is not None and (not isinstance(generation_key, str)
+                or (generation_key and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', generation_key))):
+            raise ValueError('VoiceBench generation_key는 영문·숫자·밑줄·하이픈으로 100자 이하여야 합니다.')
         target = output_path.expanduser().resolve()
         data_root = self.settings.data_dir.resolve()
         if target.suffix.lower() != ".wav" or not target.is_relative_to(data_root):
@@ -189,6 +193,9 @@ class VoiceBenchAdapter:
                 if retry_failed and submitted.get('status') in {'failed', 'cancelled'}:
                     submitted = self._response_json(self._synthesis_request('post', '/v1/tts',
                         json=payload, headers=headers, timeout=timeout, safe_retry=bool(generation_key)))
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else 'unknown'
+            raise RuntimeError(f'VoiceBench가 음성 생성 요청을 거부했습니다(HTTP {status_code}). 요청 입력과 인증을 확인하세요.') from exc
         except requests.RequestException as exc:
             raise RuntimeError(
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."
@@ -204,7 +211,15 @@ class VoiceBenchAdapter:
         status = submitted
         phase = status.get('status')
         while status.get("status") not in {"succeeded", "failed", "cancelled"}:
+            from .studio_pause import active_cancel, active_receipt_hook
+            cancel = active_cancel()
+            if cancel: cancel()
             completed = int(status.get("completed_segments") or 0)
+            receipt_hook = active_receipt_hook('supervision_voice')
+            if receipt_hook:
+                receipt_hook({'request_id':request_id, 'status':status.get('status'),
+                              'completed_segments':completed,
+                              'until':time.time()+max(10, float(self.settings.voicebench_poll_interval)*3)})
             watch.observe('completed_segments', completed)
             if phase == 'queued' and status.get('status') == 'running':
                 watch.reset('VoiceBench 음성 생성 진전')

@@ -126,11 +126,11 @@ def rewrite(studio, state, job):
     if not request_id:
         from pathlib import Path
         from .reference_context import post_caption, reference_kind
-        manifest_path = Path(state.get('manifest_path', ''))
+        manifest_path = Path(state.get('source_search_manifest_path') or state.get('manifest_path', ''))
         manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.is_file() else {}
         # The preparation manifest may contain only the display title/CTA.
         # Subject resolution needs the full source caption, like the writer.
-        manifest = {**manifest, 'caption':post_caption(studio.settings,state) or manifest.get('caption','')}
+        manifest = _resolve_rewrite_manifest(studio, state, {**manifest, 'caption':post_caption(studio.settings,state) or manifest.get('caption','')})
         product = state.get('product_override') or identify_subject(manifest, state['original_text'], state.get('product') or state['title'])
         change_claimed(studio.store, job, lambda s, db: s.update(product=product))
         # Benchmark the original narration, never replace its topic with B-roll.
@@ -141,6 +141,7 @@ def rewrite(studio, state, job):
                                  'evidence_mode':'benchmark',
                                  'reference_caption':post_caption(studio.settings,state),
                                  'reference_kind':reference_kind(state),
+                                 'reference_visual_evidence':(state.get('reference_text_evidence') or {}).get('evidence'),
                                  'notes':'공통 대본 계약으로 자동 제작합니다. '
                                          + state.get('rewrite_instructions',''),
                                  'generation_key':checkpoint.get('generation_key',job['payload'].get('generation_key',''))})
@@ -187,6 +188,7 @@ def rewrite(studio, state, job):
             if state.get('automation', {}).get('protocol') == 2:
                 from .studio_top_pick import choose
                 index, evaluation = choose(studio.settings, {**state,
+                    'writing_visual_payload':remote.get('payload',{}),
                     'benchmark_analysis': remote['result'].get('benchmark',{}).get('analysis',{})}, valid)
                 item = next(item for i,item in valid if i == index)
             else:
@@ -219,6 +221,100 @@ def rewrite(studio, state, job):
     raise RuntimeError('대본 생성 대기 시간 초과. 재시도하면 기존 내장 Codex 작업을 조회합니다.')
 
 
+def _normalize_screen_text(raw) -> str:
+    if isinstance(raw, list):
+        return ' '.join(str(row.get('text', '')) if isinstance(row, dict) else str(row) for row in raw).strip()
+    return str(raw or '').strip()
+
+
+def _resolve_rewrite_manifest(studio, state, manifest):
+    from pathlib import Path
+    result = dict(manifest)
+    settings = getattr(studio, 'settings', None)
+    if settings:
+        try:
+            from .reference_context import post_caption
+            full_cap = post_caption(settings, state)
+            if full_cap and len(full_cap) > len(result.get('caption') or ''):
+                result['caption'] = full_cap
+        except Exception:
+            pass
+    if not result.get('screen_text') and state.get('transcript_path'):
+        tpath = Path(state['transcript_path'])
+        if tpath.is_file():
+            try:
+                tdata = json.loads(tpath.read_text(encoding='utf-8'))
+                result['screen_text'] = _normalize_screen_text(tdata.get('screen_text', ''))
+            except (OSError, ValueError, TypeError):
+                pass
+    def valid_visual_plan(plan):
+        if not plan.get('visual_query_evidence'):
+            return True  # Historical textual manifests retain their contract.
+        try:
+            from .source_visual_queries import plan_queries
+            from .source_quality import sha256_file
+            plan_queries(plan)
+            return (state.get('reference_video')
+                    and sha256_file(Path(state['reference_video'])) == plan['query_reference_sha256']
+                    and plan['query_evidence']['caption'] == result.get('caption','')
+                    and plan['query_evidence']['speech'] == state.get('reference_speech_text',state.get('original_text',''))
+                    and plan['query_evidence']['screen_text'] == _normalize_screen_text(result.get('screen_text','')))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+    if result.get('product_evidence') and valid_visual_plan(result['product_evidence']):
+        return result
+    result.pop('product_evidence',None)
+    shortcode = state.get('shortcode', '')
+    if settings and shortcode and getattr(settings, 'source_dir', None):
+        for candidate in sorted(Path(settings.source_dir).glob(f'{shortcode}-*/manifest.json'),
+                                key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                cdata = json.loads(candidate.read_text(encoding='utf-8'))
+                if cdata.get('product_evidence') and valid_visual_plan(cdata['product_evidence']):
+                    result['product_evidence'] = cdata['product_evidence']
+                    return result
+            except (OSError, ValueError, TypeError):
+                continue
+    speech = state.get('original_text', '')
+    fallback = state.get('product') or state.get('title', '')
+    if identify_subject(result, speech, fallback) != '원작 중심 대상 미확인':
+        return result
+    if settings and getattr(settings, 'data_dir', None):
+        try:
+            from .source_planning import QUERY_PLAN_POLICY, cached_enrich_plan
+            from .source_queries import product_query_plan
+            caption = result.get('caption', '')
+            screen_text = _normalize_screen_text(result.get('screen_text', ''))
+            speech_raw = state.get('reference_speech_text', speech)
+            ref_video = Path(state.get('reference_video', '')) if state.get('reference_video') else None
+            from .source_quality import sha256_file
+            ref_sha = sha256_file(ref_video) if ref_video and ref_video.is_file() else None
+            plans_dir = Path(settings.data_dir) / 'source-query-plans'
+            for sp in (speech_raw, speech):
+                value = {'policy': QUERY_PLAN_POLICY, 'caption': caption, 'speech': sp,
+                         'screen_text': screen_text, 'reference_sha256': ref_sha}
+                identity = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                plan_path = plans_dir / (identity + '.json')
+                if plan_path.is_file():
+                    saved = json.loads(plan_path.read_text('utf-8'))
+                    if (saved.get('input_sha256') == identity and saved.get('policy') == QUERY_PLAN_POLICY
+                            and isinstance(saved.get('plan'), dict) and valid_visual_plan(saved['plan'])):
+                        result['product_evidence'] = saved['plan']
+                        return result
+            # Equal captions cannot authorize another reference's search plan.
+            # The exact SHA-bound cache above is the only query-cache fallback.
+            if getattr(studio, '_lease', None) is not None and getattr(settings, 'source_query_model_enabled', False) and caption:
+                transcript_ev = {'speech': speech_raw, 'screen_text': screen_text}
+                base_plan = product_query_plan(caption, [], [], transcript_ev, [])
+                enriched = cached_enrich_plan(settings, base_plan, caption, transcript_ev, reference_sha256=ref_sha)
+                if isinstance(enriched, dict):
+                    result['product_evidence'] = enriched
+                    return result
+        except Exception:
+            pass
+    return result
+
+
 def identify_subject(manifest, speech, fallback):
     from .source_queries import product_query_plan
     caption = manifest.get('caption', '')
@@ -227,9 +323,7 @@ def identify_subject(manifest, speech, fallback):
     # The accepted source manifest stores reviewed frame text with its query
     # evidence; it does not duplicate screen_text at the top level.
     query_evidence = manifest.get('product_evidence',{}).get('query_evidence',{})
-    screen_text = manifest.get('screen_text') or query_evidence.get('screen_text','')
-    if isinstance(screen_text,list):
-        screen_text = ' '.join(str(row.get('text','')) if isinstance(row,dict) else str(row) for row in screen_text)
+    screen_text = _normalize_screen_text(manifest.get('screen_text') or query_evidence.get('screen_text',''))
     evidence = {'caption':caption, 'speech':speech, 'screen_text':screen_text}
     subject = primary_subject(manifest.get('product_evidence',{}).get('primary_subject'), evidence)
     if subject:
@@ -239,7 +333,7 @@ def identify_subject(manifest, speech, fallback):
     if re.search(r'진열장|장식장|진열.{0,35}(?:문|닫)|(?:문|닫).{0,35}진열', text, re.S):
         return '원목 진열장' if re.search(r'원목|대나무', text) else '진열장'
     # Direct wording takes precedence over broad visual catalog guesses.
-    direct = product_query_plan(caption, [], [], {'speech':speech}, [])['products']
+    direct = product_query_plan(caption, [], [], {'speech':speech, 'screen_text':screen_text}, [])['products']
     products = direct or [p for p in manifest.get('product_evidence', {}).get('products', [])
                           if set(p.get('sources', [])) & {'caption','speech','screen_text'}]
     if products:
@@ -254,6 +348,39 @@ def identify_subject(manifest, speech, fallback):
     return '원작 중심 대상 미확인'
 
 
+def refresh_resolved_subject(state, manifest):
+    """Replace an early display fallback only with actual reference evidence."""
+    if state.get('product_override'):return False
+    product=identify_subject(manifest,state.get('original_text',''),'')
+    if not product or product=='원작 중심 대상 미확인' or product==state.get('product'):
+        return False
+    # A separately reviewed product name is no longer an early title fallback.
+    # Replacing it with another noun from the same reference invalidates search
+    # and review receipts whose scope includes this exact label.
+    plan=manifest.get('product_evidence') or {}
+    try:
+        from .source_coverage import search_scope_for_state
+        from .source_visual_queries import plan_queries
+        from .source_search.strategy import normalize_query
+        scope=search_scope_for_state(state)
+        if (state.get('run_id') and plan.get('run_id')==state['run_id']
+                and plan.get('search_context')==scope
+                and scope.get('reference_sha256')
+                and plan.get('query_reference_sha256')==scope['reference_sha256']):
+            plan_queries(plan)
+            names=(plan.get('search_identity') or {}).get('product_terms',{}).get('ko',[])
+            if normalize_query(state.get('product','')) in {normalize_query(n) for n in names}:
+                return False
+    except (ValueError,KeyError,TypeError,OSError):
+        pass  # Unverified names never freeze a potentially incorrect fallback.
+    state.setdefault('product_resolution_history',[]).append({
+        'previous':state.get('product'),'resolved':product,'at':time.time(),
+        'primary_subject':manifest.get('product_evidence',{}).get('primary_subject'),
+        'basis':'actual_reference_without_title_fallback'})
+    state['product']=product
+    return True
+
+
 def main():
     from .config import load_settings
     from .studio import Studio
@@ -262,10 +389,15 @@ def main():
         return
     # Keep the durable consumer available even when the dashboard is closed.
     try:
-        while True:
-            time.sleep(30)
+        while not studio.stop.wait(1):
+            if studio.video_agents and studio.video_agents.restart_requested.is_set():break
     except KeyboardInterrupt:
-        studio.stop.set()
+        pass
+    finally:
+        studio.close()
+    if studio.video_agents and studio.video_agents.restart_requested.is_set():
+        import os,sys
+        os.execv(sys.executable,[sys.executable,'-X','utf8','-m','hotpost.studio_automation'])
 
 
 if __name__ == '__main__':

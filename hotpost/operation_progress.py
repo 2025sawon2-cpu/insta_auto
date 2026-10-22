@@ -13,17 +13,28 @@ class NoProgressTimeout(TimeoutError):
 
 
 class ProgressWatch:
-    def __init__(self, idle_seconds, stage='operation', clock=None):
+    def __init__(self, idle_seconds, stage='operation', clock=None, *, step='', completed=0, total=0):
         self.clock = clock or time.monotonic
         self.idle_seconds = max(1, float(idle_seconds))
         self.stage = stage
+        self.step = step
+        self.completed = int(completed or 0)
+        self.total = int(total or 0)
         self.last_progress = self.clock()
+        self.updated_at = time.time()
         self.high_water = {}
 
-    def reset(self, stage=None):
+    def reset(self, stage=None, *, step=None, completed=None, total=None):
         if stage:
             self.stage = stage
+        if step is not None:
+            self.step = step
+        if completed is not None:
+            self.completed = int(completed)
+        if total is not None:
+            self.total = int(total)
         self.last_progress = self.clock()
+        self.updated_at = time.time()
 
     def observe(self, key, value):
         """Only an increasing counter advances the watch, not duplicate data/heartbeats."""
@@ -32,6 +43,10 @@ class ProgressWatch:
             self.reset()
             return True
         return False
+
+    def stage_summary(self):
+        return {'stage': self.stage, 'step': self.step, 'completed': self.completed,
+                'total': self.total, 'updated_at': self.updated_at}
 
     def check(self):
         if self.clock() - self.last_progress >= self.idle_seconds:

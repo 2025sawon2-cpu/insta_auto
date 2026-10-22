@@ -12,9 +12,9 @@
   const shortNames = ['소스','원문','대본','음성','편집','출력'];
   const assetKeys = ['sources','transcript','script','voice','project','export'];
   const tabs = ['sources','original','script','voice','edit','results'];
-  const stageOfKind = {prepare:'sources', collect_sources:'sources', rewrite:'script', voice:'voice', edit:'edit', revision:'edit', revise:'edit', edit_request:'edit', register:'edit', export:'export'};
+  const stageOfKind = {prepare:'sources', collect_sources:'sources', rewrite:'script', voice:'voice', edit:'edit', revision:'edit', revise:'edit', edit_request:'edit', register:'edit', export:'export', quality_review:'edit', quality_reedit:'edit'};
   const stageOfStatus = {preparing:'sources', source_wait:'sources', rewriting:'script', script_review:'script', voice_generating:'voice', voice_review:'voice', editing:'edit', draft_review:'edit', quality_review:'edit', registering:'edit', exporting:'export', completed:'export'};
-  const activityNames = {prepare:'자료 준비', rewrite:'대본 재가공', voice:'음성 생성', edit:'영상 편집', revision:'편집 수정', revise:'편집 수정', edit_request:'편집 수정', register:'프로젝트 등록', export:'MP4 내보내기', collect_sources:'소스 자동 추가 수집', refresh_sources:'소스 추가 수집', proposal:'대본 수정안 생성', suggest_edit:'편집 수정안 생성'};
+  const activityNames = {prepare:'자료 준비', rewrite:'대본 재가공', voice:'음성 생성', edit:'영상 편집', revision:'편집 수정', revise:'편집 수정', edit_request:'편집 수정', register:'프로젝트 등록', export:'MP4 내보내기', collect_sources:'소스 자동 추가 수집', refresh_sources:'소스 추가 수집', proposal:'대본 수정안 생성', suggest_edit:'편집 수정안 생성', quality_review:'완성 영상 품질 검토', quality_reedit:'품질 보완 편집'};
   const stateNames = {running:'진행 중', queued:'실행 대기', review:'검토 필요', blocked:'제작 준비 필요', waiting:'제작 대기', retry:'재시도 대기', paused:'일시중지', error:'확인 필요', completed:'제작 완료', unknown:'상태 확인 필요'};
   function message(value, fallback='작업 상태를 확인하고 다시 시도해 주세요.') {
     const s=String(value||'');
@@ -72,7 +72,10 @@
     const phase=complete?'6 / 6 단계 완료':`${currentIndex+1} / 6 단계`;
     const sourceError=['failed','blocked'].includes(task.source_search?.status);
     const sourceResolved=['sources','transcript'].includes(stage)&&task.sources?.length&&/Source manifest contains no selected local videos|제작에 사용할 소스 영상/.test(task.error||'');
-    const note=sourceResolved?`직접 추가한 영상 ${task.sources.length}개가 준비됐어요. 사용할 영상을 선택하고 제작을 이어가세요.`:message(task.error||(sourceError?task.source_search.message:task.message),stateNames[state]);
+    let note=sourceResolved?`직접 추가한 영상 ${task.sources.length}개가 준비됐어요. 사용할 영상을 선택하고 제작을 이어가세요.`:message(task.error||(sourceError?task.source_search.message:task.message),stateNames[state]);
+    const owner=task.video_agent;
+    if(owner&&owner.status==='attention') note='담당 에이전트 원인 검토 · '+note;
+    else if(owner&&owner.status==='active'&&owner.last_action) note='담당 에이전트 제작 진행 · '+note;
     const nextAction=complete?'완성 영상 보기':state==='blocked'?'필요한 준비 확인하기':review?{script:'대본 검토하기',voice:'음성 들어보기',edit:'초안 검토하기'}[stage]:state==='error'?'문제 확인하기':`${columns[currentIndex][1]} 작업 열기`;
     return {stage,state,label:state==='running'&&task.automation?.paused_by_user?'진행 중 · 중지 예약':stateNames[state],running:runningJobs.length>0,primaryRunning,review,complete,steps,done,
       currentIndex,phase,total:6,stageName:taskColumns[currentIndex][1],attention:state==='error'||state==='blocked'||sourceError,

@@ -116,11 +116,57 @@ def ensure_browser(settings):
     raise RuntimeError('수집용 Chrome 연결 실패. 기존 수집 프로필 창이 다른 방식으로 열려 있는지 확인하세요.')
 
 
+def _recover_hung_cdp_pages(address: str) -> None:
+    import asyncio
+    from urllib.parse import urlparse
+    import websockets
+
+    async def _probe_and_stop():
+        with build_opener(ProxyHandler({})).open(address + '/json/list', timeout=2.0) as resp:
+            tabs = json.load(resp)
+        for tab in tabs:
+            if tab.get('type') != 'page' or not tab.get('webSocketDebuggerUrl'):
+                continue
+            ws_url = tab['webSocketDebuggerUrl']
+            hung = False
+            try:
+                async with asyncio.timeout(1.5):
+                    async with websockets.connect(ws_url) as ws:
+                        await ws.send(json.dumps({'id': 1, 'method': 'Runtime.evaluate', 'params': {'expression': '1'}}))
+                        await ws.recv()
+            except Exception:
+                hung = True
+            if hung:
+                try:
+                    async with asyncio.timeout(2.0):
+                        async with websockets.connect(ws_url) as ws:
+                            await ws.send(json.dumps({'id': 2, 'method': 'Page.stopLoading'}))
+                            await ws.recv()
+                            parsed = urlparse(tab.get('url') or '')
+                            if parsed.scheme in {'http', 'https'} and parsed.netloc:
+                                home = f'{parsed.scheme}://{parsed.netloc}/'
+                                await ws.send(json.dumps({'id': 3, 'method': 'Page.navigate', 'params': {'url': home}}))
+                                await ws.recv()
+                except Exception:
+                    pass
+
+    try:
+        asyncio.run(_probe_and_stop())
+    except Exception:
+        pass
+
+
 def attach_browser(playwright, settings):
     address = endpoint(settings)
     if not address:
         raise RuntimeError('수집용 Chrome 연결이 끊겼습니다. Chrome을 다시 열어 작업을 재개하세요.')
-    browser = playwright.chromium.connect_over_cdp(address, timeout=10000)
+    try:
+        browser = playwright.chromium.connect_over_cdp(address, timeout=10000)
+    except Exception:
+        if getattr(settings, 'source_browser_existing_window_only', False):
+            raise  # Attachment-only callers must never navigate other tabs.
+        _recover_hung_cdp_pages(address)
+        browser = playwright.chromium.connect_over_cdp(address, timeout=10000)
     if not browser.contexts:
         raise RuntimeError('수집용 Chrome 기본 세션을 찾을 수 없습니다.')
     context = browser.contexts[0]
@@ -337,7 +383,8 @@ def create_source_tab(context,settings,provider,request_id=None,*,purpose='searc
     homes={'tiktok':'https://www.tiktok.com/','youtube':'https://www.youtube.com/',
            'bilibili':'https://www.bilibili.com/','yandex-images':'https://yandex.com/images/',
            'google-lens':'https://www.google.com/','douyin':'https://www.douyin.com/',
-           'xiaohongshu':'https://www.xiaohongshu.com/','tikvideo':'https://tikvideo.app/ko'}
+           'xiaohongshu':'https://www.xiaohongshu.com/','tikvideo':'https://tikvideo.app/ko',
+           'coupang':'https://www.coupang.com/'}
     if provider not in homes:raise ValueError('unsupported_source_tab_provider')
     if purpose not in {'search','access_observation'}:raise ValueError('unsupported_source_tab_purpose')
     if not (getattr(settings,'source_browser_allow_same_window_tabs',False)
@@ -358,7 +405,7 @@ def create_source_tab(context,settings,provider,request_id=None,*,purpose='searc
             if exc.reason!='tab_missing':raise
         gate=access_record(settings.data_dir,provider)
         historical_observation=False
-        if purpose=='access_observation' and manual_required(gate) and gate.get('reason')=='captcha':
+        if purpose=='access_observation' and manual_required(gate) and gate.get('reason') in {'captcha','captcha_review_pending'}:
             import hashlib
             path=settings.data_dir/'search_cooldowns'/(provider+'.json')
             actual=hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
