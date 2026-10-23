@@ -9,5 +9,6 @@ web/thumbs/
 docs/HANDOFF.md
 docs/SESSION_HANDOFF_20261015.md
 .runtime/
+/local/
 remotion/node_modules/
 web/remotion-editor.js

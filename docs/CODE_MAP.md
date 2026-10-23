@@ -6,6 +6,7 @@
 
 | 기능 | 진입점 / 구현 | 검증 |
 |---|---|---|
+| PC별 완성 영상·현재 적용 썸네일의 날짜별 저장 | publication_export.py → local/video-storage.json + local/VIDEO_STORAGE.md(Git 제외); PostPreparation.source의 검증 완료본 읽기 | test_publication_export.py; [로컬 저장 규칙](LOCAL_VIDEO_STORAGE.md); 완료 에이전트가 저장/해시 검증 후 전달 |
 | 독립 게시용 광고·도입 감탄사 규칙 | post_media_rules.py → post_thumbnail.py/post_preparation.py; 광고 없는 본문 명시 반영/이후 body_final과 spoken_text/rules 유지 | test_post_media_rules.py/test_post_thumbnail.py; 실제 TTS271 적용·소스32 보존은 data/shelf-publication-rules-20261023/ |
 | 사용자 클릭으로 현재 썸네일/영상 첫 프레임 교체·진행 피드백 | post_thumbnail.py → post_preparation.py/post_preparation_http.py; web/post-preparation.js/css; thumbnail_jobs + active.json | test_post_thumbnail.py/test_post_preparation.py/post_preparation.test.cjs; 본문 프레임/음성 해시 검증 후 원자 공개 |
 | 게시물 준비: 다중 계정·썸네일 4문구·본문·고정댓글·제품 링크·고정 DM·20자 DM 버튼 초안과 개별 복사(업로드 없음) | web/app.js → web/post-preparation.js/css; post_preparation.py/post_preparation_http.py; post_preparation_content.py/json(확장 본문·해시태그5개·댓글2줄·DM 문구); 독립 post-preparation.sqlite3, 기존 완료 자료 읽기 전용 | test_post_preparation.py/test_post_preparation_content.py/post_preparation.test.cjs/refactor_ui_regression.test.cjs; [범위·검증](POST_PREPARATION_UI_20261022.md) |
