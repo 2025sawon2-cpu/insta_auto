@@ -6,8 +6,10 @@ import re
 from .script_rewriter import _generate
 from .studio_script_checks import refresh_local_reviews, ReviewUnavailable
 from .writing.reference_evidence import VisualEvidenceIntegrityError
+from .writing.hook_policy import INSTRUCTION as HOOK_INSTRUCTION, POLICY as HOOK_POLICY, first_sentence
+from .writing.script_style import question_ending_issues
 
-REVIEW_POLICY = 23
+REVIEW_POLICY = 24
 
 
 def wording_issues(reference, candidate):
@@ -72,6 +74,9 @@ def approved_recovery(reference,item):
 def choose(settings, state, valid):
     if not valid:
         raise ValueError('선택할 생성 대본이 없습니다.')
+    valid = [(index,item) for index,item in valid if not question_ending_issues(item['text'])]
+    if not valid:
+        raise ValueError('모든 후보에 금지 질문형(~에요?·~예요?·~이에요?)이 남아 있습니다. 원고를 보존하고 말투를 수정하세요.')
     reference=state.get('reviewed_original_text',state.get('original_text',''))
     if len(valid)==1 and valid[0][1].get('origin')=='codex_internal':
         from .writing.contract import receipt
@@ -119,12 +124,14 @@ def _choose_scored(settings, state, valid):
         if (visual_payload.get('reference_script')!=reference or not state.get('reference_video')
                 or sha256_file(Path(state['reference_video']))!=visual['source_sha256']):
             raise VisualEvidenceIntegrityError('원고 선택의 실제 원본·집필 시각 근거가 일치하지 않습니다.')
-    evidence = {'purpose':'script_selection', 'review_policy':REVIEW_POLICY, 'writing_provider':'codex', 'writing_contract':contract_receipt(), 'original_speech':reference,
+    evidence = {'purpose':'script_selection', 'review_policy':REVIEW_POLICY, 'opening_hook_policy':HOOK_POLICY,
+                'writing_provider':'codex', 'writing_contract':contract_receipt(), 'original_speech':reference,
                 'reference_kind':reference_kind(state),
                 'hook_contract':state.get('benchmark_analysis', {}).get('hook_contract', {}),
                 'original_mechanisms':state.get('benchmark_analysis',{}).get('original_mechanisms',[]),
                 'reference_visual':visual,
-                'candidates':[{'index':i,'text':v['text'], 'wording_issues':wording_issues(reference,v),
+                'candidates':[{'index':i,'text':v['text'], 'first_sentence':first_sentence(v['text']),
+                               'wording_issues':wording_issues(reference,v),
                                'variant':{k:v.get(k) for k in ('variant_type','bias','psychological_category',
                                    'changes','surface_changes','mechanism_application')},
                                'editorial_review':v.get('editorial_review', {}),
@@ -166,7 +173,7 @@ def _choose_scored(settings, state, valid):
                 media.extend([{'text':json.dumps(row,ensure_ascii=False)},
                     {'inlineData':review_frame_data(path)}])
         result = _generate(settings,
-            'Compare Korean narration using the common writing contract, reference text and supplied actual reference frames. '
+            HOOK_INSTRUCTION + 'Compare Korean narration using the common writing contract, reference text and supplied actual reference frames. '
             'Ignore source availability and ease of editing; the narration takes priority. Do not rewrite any text. '
             'Apply each candidate variant_type: transformation_a/b must use different new psychological mechanisms '
             'within the original category, redesigning conflict and sequence. Reward a successful transformation. '
@@ -177,7 +184,9 @@ def _choose_scored(settings, state, valid):
             'Follow the shared rules on direct statements. '
             'Narration score measures direct viewer address, specific everyday payoff, curiosity and spoken rhythm; '
             'do not reward source commentary such as 방법이 소개됐어요. '
-            'Scores 0..5: hook=variant-specific psychological appeal and rephrasing, grounding=text/actual visual evidence, narration=viewer experience. '
+            'Scores 0..5: hook=FIRST SENTENCE scroll-stop strength under the opening contract, grounding=text/actual visual evidence, narration=viewer experience. '
+            'Give hook at most 2 for generic habit questions or empty curiosity that depend on later sentences for product appeal. '
+            'A mechanism label, conversational tone and full-script fluency cannot compensate for a weak first sentence. '
             'Visible structure may support a product fact absent from written quotes; unseen specifications may not. '
             'Product-name omission and missing editing footage are not failures. '
             'Return {evaluations:[{index,eligible:boolean,scores:{hook,grounding,narration},reason:string,issues:[string]}]}. '
@@ -222,12 +231,12 @@ def _choose_scored(settings, state, valid):
         # candidate's critic is unavailable. choose() retains advisory fallback.
         raise ValueError('오류가 가장 적은 후보의 자동 평가를 완료하지 못했습니다.')
     acceptable = [v for v in pool if v.get('eligible') is True and v['scores']['grounding']>=3 and v['scores']['hook']>=3]
-    winner = max(acceptable or pool, key=lambda v:(-len(v['detected_issues']),v['total'],-len(v.get('issues', [])),-v['index']))
+    winner = max(acceptable or pool, key=lambda v:(v['scores']['hook'],-len(v['detected_issues']),v['total'],-len(v.get('issues', [])),-v['index']))
     evaluation = {'selected_index':winner['index'], 'reason':winner['reason'], 'evaluations':values,
                   'advisory_only':True, 'review_policy':REVIEW_POLICY,
                   'quality_status':'unresolved' if any(lowest) or winner['detected_issues'] or winner.get('issues')
                       or min(winner['scores'].values())<3 else 'checks_clear_not_guaranteed',
                   'script_priority':True, 'footage_role':'editing_only', 'review_reused':reviewed,
-                  'evidence_sha256':key, 'rubric':'대본 평가 우선 · 확보 장면은 순위와 무관'}
+                  'evidence_sha256':key, 'rubric':'첫 문장 후킹 우선 · 본문 총점으로 약한 도입 상쇄 금지 · 확보 장면은 순위와 무관'}
     receipt.write_text(json.dumps(evaluation,ensure_ascii=False,indent=2),encoding='utf-8')
     return winner['index'], evaluation

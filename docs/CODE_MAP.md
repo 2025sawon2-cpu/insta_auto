@@ -6,6 +6,7 @@
 
 | 기능 | 진입점 / 구현 | 검증 |
 |---|---|---|
+| 첫 문장 제품 후킹 우선·금지 질문형 | writing/RULES.md·hook_policy.py → variants.py/pipeline.py → studio_top_pick.py; script_style.question_ending_issues로 검사·수정안 수용·선정 fallback 경계 연결 | test_first_sentence_hook.py; 새 계약 v10/TopPick policy24, 실제 시청자 반응과 편집 평가를 구분 |
 | PC별 완성 영상·현재 적용 썸네일의 날짜별 저장 | publication_export.py → local/video-storage.json + local/VIDEO_STORAGE.md(Git 제외); PostPreparation.source의 검증 완료본 읽기 | test_publication_export.py; [로컬 저장 규칙](LOCAL_VIDEO_STORAGE.md); 완료 에이전트가 저장/해시 검증 후 전달 |
 | 독립 게시용 광고·도입 감탄사 규칙 | post_media_rules.py → post_thumbnail.py/post_preparation.py; 광고 없는 본문 명시 반영/이후 body_final과 spoken_text/rules 유지 | test_post_media_rules.py/test_post_thumbnail.py; 실제 TTS271 적용·소스32 보존은 data/shelf-publication-rules-20261023/ |
 | 사용자 클릭으로 현재 썸네일/영상 첫 프레임 교체·진행 피드백 | post_thumbnail.py → post_preparation.py/post_preparation_http.py; web/post-preparation.js/css; thumbnail_jobs + active.json | test_post_thumbnail.py/test_post_preparation.py/post_preparation.test.cjs; 본문 프레임/음성 해시 검증 후 원자 공개 |

@@ -56,7 +56,7 @@ def test_perfect_model_score_cannot_prefer_a_verbatim_hook(tmp_path, monkeypatch
            'reason':'자동 점수','issues':[]} for i in range(2)]
     monkeypatch.setattr('hotpost.studio_top_pick._generate',lambda *a,**kw:{'evaluations':rows})
     index,result=choose(SimpleNamespace(data_dir=tmp_path),{'id':'copied','sources':[],'original_text':reference},list(enumerate(drafts)))
-    assert index==1 and result['review_policy']==23
+    assert index==1 and result['review_policy']==24
     assert result['evaluations'][0]['wording_issues']
 
 

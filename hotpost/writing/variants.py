@@ -6,6 +6,7 @@ from .contract import receipt
 from .reference_evidence import COMMENT_KEYWORD, VISUAL_INSTRUCTION, visual_context
 from .script_integrity import digest
 from .mechanisms import mechanism_keys
+from .hook_policy import INSTRUCTION as HOOK_INSTRUCTION
 from ..thumbnail_copy import INSTRUCTION as THUMBNAIL_INSTRUCTION, review_copy
 
 
@@ -61,7 +62,7 @@ def generate_three(payload, directory, check, progress, *, evaluate):
         state['reference_visual'] = visual
     progress(.1,'원작 심리 후킹을 분석하고 대본 1·2·3안을 함께 작성하는 중')
     value = codex_writer.chat(
-        '원작의 심리 후킹을 분석한 뒤 항상 세 안을 한 번에 작성하세요. '
+        HOOK_INSTRUCTION + '원작의 심리 후킹을 분석한 뒤 항상 세 안을 한 번에 작성하세요. '
         '1안 transformation_a와 2안 transformation_b는 원작의 같은 주된 카테고리 안에서 '
         '원작이 사용하지 않은 서로 다른 편향·심리효과로 도입·갈등·정보 순서·마무리를 새로 설계하세요. '
         '이름만 붙이지 말고 mechanism_application에 실제 작동하는 문구·갈등을 설명하세요. '
