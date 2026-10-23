@@ -6,7 +6,7 @@
 
 | 기능 | 진입점 / 구현 | 검증 |
 |---|---|---|
-| 첫 문장 제품 후킹 우선·금지 질문형 | writing/RULES.md·hook_policy.py → variants.py/pipeline.py → studio_top_pick.py; script_style.question_ending_issues로 검사·수정안 수용·선정 fallback 경계 연결 | test_first_sentence_hook.py; 새 계약 v10/TopPick policy24, 실제 시청자 반응과 편집 평가를 구분 |
+| 첫 문장의 구체적 의문·점진적 해소·금지 질문형 | writing/RULES.md·hook_policy.py → variants.py/pipeline.py → studio_top_pick.py; script_style.question_ending_issues로 검사·수정안 수용·선정 fallback 경계 연결 | test_first_sentence_hook.py; 계약 v11/TopPick policy25, 정체 조기 공개와 후킹을 구분하고 실제 시청자 반응 측정으로 간주하지 않음 |
 | PC→WireGuard→Android 폰 원격 릴스 게시(로컬 CLI) | mobile_reels_cli.py → mobile_device.py(ADB/장치·화면) / mobile_reels.py(패키지·호환 영상·폰 소유권·단일 공유) | test_mobile_reels.py; MOBILE_REELS_WIREGUARD.md; 실폰 IP/포트 미확보로 라이브 검증 미실행 |
 | 메인 전체 보기·완성·제작 중 버튼과 검색/조건 결합 | web/index.html/style.css; app.js visiblePosts → 기존 productionState; 상태 갱신 시 선택 목록 동기화 | refactor_ui_regression.test.cjs/discovery_model.test.cjs; 모바일390px 확인 |
 | 제작실 없는 게시용 서버·레퍼런스 계정 등록/현재 목록 갱신 | publication_server.py → account_registry_http.py → accounts.AccountRegistry; 게시물 준비는 post_preparation_http.py 재사용 | test_publication_accounts.py/test_account_git_sync.py/test_post_preparation.py; 신규 수집·제작은 시작하지 않음 |

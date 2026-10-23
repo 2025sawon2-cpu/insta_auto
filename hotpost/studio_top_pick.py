@@ -9,7 +9,7 @@ from .writing.reference_evidence import VisualEvidenceIntegrityError
 from .writing.hook_policy import INSTRUCTION as HOOK_INSTRUCTION, POLICY as HOOK_POLICY, first_sentence
 from .writing.script_style import question_ending_issues
 
-REVIEW_POLICY = 24
+REVIEW_POLICY = 25
 
 
 def wording_issues(reference, candidate):
@@ -185,7 +185,8 @@ def _choose_scored(settings, state, valid):
             'Narration score measures direct viewer address, specific everyday payoff, curiosity and spoken rhythm; '
             'do not reward source commentary such as 방법이 소개됐어요. '
             'Scores 0..5: hook=FIRST SENTENCE scroll-stop strength under the opening contract, grounding=text/actual visual evidence, narration=viewer experience. '
-            'Give hook at most 2 for generic habit questions or empty curiosity that depend on later sentences for product appeal. '
+            'Give hook at most 2 for generic habit questions, vague bait or an opening that explains away its entire question. '
+            'Reward the concrete unresolved question that motivates watching the next scene, not immediate product identification. '
             'A mechanism label, conversational tone and full-script fluency cannot compensate for a weak first sentence. '
             'Visible structure may support a product fact absent from written quotes; unseen specifications may not. '
             'Product-name omission and missing editing footage are not failures. '
@@ -237,6 +238,6 @@ def _choose_scored(settings, state, valid):
                   'quality_status':'unresolved' if any(lowest) or winner['detected_issues'] or winner.get('issues')
                       or min(winner['scores'].values())<3 else 'checks_clear_not_guaranteed',
                   'script_priority':True, 'footage_role':'editing_only', 'review_reused':reviewed,
-                  'evidence_sha256':key, 'rubric':'첫 문장 후킹 우선 · 본문 총점으로 약한 도입 상쇄 금지 · 확보 장면은 순위와 무관'}
+                  'evidence_sha256':key, 'rubric':'첫 문장의 구체적인 미해결 의문 우선 · 제품 정답 조기 공개를 보상하지 않음 · 본문 총점으로 약한 도입 상쇄 금지'}
     receipt.write_text(json.dumps(evaluation,ensure_ascii=False,indent=2),encoding='utf-8')
     return winner['index'], evaluation

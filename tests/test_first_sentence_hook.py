@@ -39,13 +39,16 @@ def test_later_fluency_cannot_beat_a_stronger_first_sentence(tmp_path, monkeypat
     monkeypatch.setattr('hotpost.studio_top_pick.refresh_local_reviews', lambda settings, reference, valid: valid)
     def assess(settings, instruction, evidence):
         assert 'FIRST SENTENCE' in instruction and 'generic habit questions' in instruction
-        assert evidence['candidates'][0]['first_sentence'] == '기다릴 때 손이 심심하세요?'
+        assert 'curiosity, not explaining the product identity' in instruction
+        assert 'progressively resolve' in instruction
+        assert evidence['candidates'][0]['first_sentence'] == '가방에 달린 귤, 진짜로 껍질이 벗겨져요.'
+        assert evidence['candidates'][1]['first_sentence'] == '귤 하나를 계속 까는데, 먹을 차례가 안 와요.'
         return {'evaluations':[
-            {'index':0,'eligible':True,'scores':{'hook':3,'grounding':5,'narration':5},'reason':'본문은 유창하지만 도입이 약함','issues':[]},
-            {'index':1,'eligible':True,'scores':{'hook':5,'grounding':4,'narration':3},'reason':'제품에 관한 첫 문장의 반전','issues':[]}]}
+            {'index':0,'eligible':True,'scores':{'hook':2,'grounding':5,'narration':5},'reason':'기능을 설명해 의문이 끝남','issues':[]},
+            {'index':1,'eligible':True,'scores':{'hook':5,'grounding':4,'narration':2},'reason':'왜 먹지 못하는지 구체적 의문이 남음','issues':[]}]}
     monkeypatch.setattr('hotpost.studio_top_pick._generate', assess)
-    candidates = [(0,{'text':'기다릴 때 손이 심심하세요? 제품을 자세히 설명해요.'}),
-                  (1,{'text':'이 조명은 선을 꽂을 곳이 없어요. 바닥에 놓으면 켜져요.'})]
+    candidates = [(0,{'text':'가방에 달린 귤, 진짜로 껍질이 벗겨져요. 손뜨개 키링을 설명해요.'}),
+                  (1,{'text':'귤 하나를 계속 까는데, 먹을 차례가 안 와요. 껍질을 다시 덮어요.'})]
     _, result = choose(SimpleNamespace(data_dir=tmp_path), {'id':'opening','original_text':'원작 제품 설명'}, candidates)
     assert result['evaluations'][0]['total'] > result['evaluations'][1]['total']
     assert result['selected_index'] == 1

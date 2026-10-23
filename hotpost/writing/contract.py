@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 
-VERSION = 'internal-codex-three-variants-20261024-v10-first-sentence-hook'
+VERSION = 'internal-codex-three-variants-20261024-v11-curiosity-hook'
 
 
 def snapshot(mode=None):
