@@ -191,3 +191,23 @@ def test_delivery_failure_keeps_previous_publication(ready,monkeypatch):
     service.start_thumbnail('post',{'revision':1})
     assert wait(service)['status']=='failed'
     assert pointer.read_bytes()==before
+
+
+def test_newer_publication_with_same_body_is_not_overwritten(ready, monkeypatch):
+    service, _ = ready
+    service.start_thumbnail('post', {'revision': 1})
+    assert wait(service)['status'] == 'completed'
+    pointer = service.root/'post-preparations/post/active.json'
+    newer = json.loads(pointer.read_text('utf8'))
+    newer['version'] = 'f' * 32
+    encode = thumbnails.encode_delivery
+
+    def change_during_render(*args):
+        result = encode(*args)
+        pointer.write_text(json.dumps(newer), 'utf8')
+        return result
+
+    monkeypatch.setattr(thumbnails, 'encode_delivery', change_during_render)
+    service.start_thumbnail('post', {'revision': 1})
+    assert wait(service)['status'] == 'failed'
+    assert json.loads(pointer.read_text('utf8')) == newer

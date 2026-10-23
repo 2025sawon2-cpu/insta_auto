@@ -1,0 +1,24 @@
+# 개발과 지침 유지보수
+
+## 코드 확인
+
+- Python 설정은 `hotpost/config.py`의 Settings와 config.json/HOTPOST_* 우선순위를 확인한다. PC별 설정을 다른 PC에 덮어쓰지 않는다.
+- `web/data.js`는 `hotpost/report.py`의 생성물이다. 데이터 계약 변경은 생성 코드와 화면을 함께 검토한다.
+- API 변경은 해당 HTTP handler와 web 요청·표시·다운로드를 함께 확인한다. 게시용 서버가 제작실/큐/수집 실행기를 import하지 않는 회귀를 유지한다.
+- Python은 지원 최소 3.10과 실제 환경을 고려한다. worktree에 venv가 없으면 원래 clone의 Python을 사용하되 cwd/PYTHONPATH는 수정 중인 worktree로 둔다. 운영 data/config를 테스트 fixture로 사용하지 않는다.
+- 관련 검사: `python -m pytest -q tests/<관련 파일>`, JS는 `node --test tests/<관련 파일>.test.cjs`와 `node --check <변경 파일>`. 정적 확인은 `git diff --check`.
+- 격리 테스트·소형 합성 fixture를 사용한다. 실제 외부 검색·모델·GPU·전체 영상 재제작을 일반 회귀 검사에 끼워 넣지 않는다.
+
+## 지침 구조
+
+항상 읽는 AGENTS는 6KB 이하, 현재 작업 경계는 WORKFLOW, 세부 규칙은 작업별 단일 원본으로 관리한다. 개별 영상 진행·일시적 PID/주소/완료 건수는 로컬 인계에 적는다. 날짜를 붙여 같은 규칙을 반복 추가하지 말고 현재 규칙을 직접 수정한다.
+
+`python tools/check_guidance.py`는 AGENTS 용량·필수 원본·상대 링크·폐기된 지시의 재유입을 검사한다. CI도 같은 검사를 수행한다. 이 검사는 사람이 실제로 문서를 읽었는지나 의미를 완전히 보존했는지 증명하지 않으므로 변경 diff와 관련 계약 테스트를 함께 본다.
+
+재개 메모는 `local/SESSION.md`에 목적, 브랜치/기준 커밋, 읽은 원본 경로/SHA, 변경·검증, 다음 단계, 보류 사유, 내용 소실 동의 범위를 적는다. `local/`은 Git 제외이며 비밀값은 넣지 않는다. worktree의 로컬 인계가 없으면 원래 clone의 인계를 확인한다.
+
+## 역사 조회와 보존
+
+정리 전 AGENTS 원문은 `git show e470bd1:AGENTS.md`로 조회한다. 과거 지시·영상 ID·운영 관측은 이력으로 보존하며 현재 읽기 목록에서 제외했다. 현행 규칙의 이동 위치는 [정리 보고서](GUIDANCE_AUDIT_20261024.md)에 기록한다.
+
+기존 제작실·사진 제작·수동 제품 실험은 저장된 작업 및 테스트가 참조하므로 미사용이라는 추측만으로 삭제하지 않는다. 삭제 후보는 진입점/호출자/저장된 계약/회귀 확인을 먼저 기록한다. 현재 개발은 독립 게시용 경로와 공통 계약에서 시작한다.

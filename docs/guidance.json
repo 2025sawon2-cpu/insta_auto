@@ -1,0 +1,23 @@
+{
+  "documents": {
+    "AGENTS.md": 6000,
+    "docs/DEVELOPMENT.md": 8000,
+    "docs/WORKFLOW.md": 12000,
+    "docs/SOURCE_WORKFLOW.md": 12000,
+    "docs/CODE_MAP.md": 8000
+  },
+  "required_routes": [
+    "docs/COLLABORATION.md",
+    "docs/WORKFLOW.md",
+    "hotpost/writing/RULES.md",
+    "docs/SOURCE_WORKFLOW.md",
+    "docs/TTS_TRUNCATION_RECOVERY.md",
+    "docs/LOCAL_VIDEO_STORAGE.md"
+  ],
+  "forbidden_root_phrases": [
+    "Do not commit unless the user asks.",
+    "Read `SESSION_HANDOFF.md` completely.",
+    "ego-lite/ego-browser",
+    "현재 승인: 사용자가 오전 7시 예약"
+  ]
+}

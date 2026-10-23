@@ -1,5 +1,4 @@
 """Explicit thumbnail replacement, independent of the retired production runner."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,7 @@ import uuid
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 import psutil
 from .post_media_rules import DISCLOSURE_VERSION, disclosure_layer, mark_cover
+from .source_quality import sha256_file
 
 _admission = threading.Lock()
 _execution = threading.Lock()
@@ -34,17 +34,26 @@ def active_assets(service, code, edit_id):
 def job_status(service, code):
     with service.connect() as db:
         row = db.execute('SELECT * FROM thumbnail_jobs WHERE shortcode=? ORDER BY created DESC LIMIT 1', (code,)).fetchone()
+        return _job_status(db, row)
+
+
+def _job_status(db, row):
     if row is None:
         return {'status': 'idle', 'message': ''}
     row = dict(row)
     if row['status'] in ACTIVE:
         try:
             alive = abs(psutil.Process(row['owner_pid']).create_time() - row['owner_birth']) < .01
-        except psutil.Error:
+        except psutil.NoSuchProcess:
             alive = False
+        except psutil.Error:
+            # An inaccessible process is not evidence that its render stopped.
+            alive = True
         if not alive:
-            update(service, row['id'], 'failed', '썸네일 반영이 중단됐어요. 기존 영상은 유지됐습니다. 다시 반영해 주세요.')
-            row.update(status='failed', message='썸네일 반영이 중단됐어요. 기존 영상은 유지됐습니다. 다시 반영해 주세요.')
+            db.execute("UPDATE thumbnail_jobs SET status='failed',message=?,updated=? "
+                       "WHERE id=? AND status IN ('queued','running')",
+                       ('썸네일 반영이 중단됐어요. 현재 공개 결과를 확인한 뒤 다시 반영해 주세요.', time.time(), row['id']))
+            row = dict(db.execute('SELECT * FROM thumbnail_jobs WHERE id=?', (row['id'],)).fetchone())
     return {key: row[key] for key in ('id', 'status', 'message', 'text', 'created', 'updated')}
 
 
@@ -227,10 +236,26 @@ def start(service, code, payload):
         job = uuid.uuid4().hex
         now = time.time()
         with service.connect() as db:
+            # Both publication servers share this DB. Process-local locks alone
+            # allow duplicate renders and simultaneous work on different videos.
+            db.execute('BEGIN IMMEDIATE')
+            for row in db.execute("SELECT * FROM thumbnail_jobs WHERE status IN ('queued','running')").fetchall():
+                active = _job_status(db, row)
+                if active['status'] in ACTIVE:
+                    if row['shortcode'] == code:
+                        return active
+                    raise DraftConflict('다른 영상의 썸네일을 반영 중입니다. 완료 후 다시 반영해 주세요.')
+            saved = db.execute('SELECT revision FROM drafts WHERE shortcode=?', (code,)).fetchone()
+            if (saved['revision'] if saved else 0) != payload['revision']:
+                raise DraftConflict('문구가 변경됐어요. 초안을 저장한 뒤 다시 반영해 주세요.')
             db.execute('INSERT INTO thumbnail_jobs VALUES (?,?,?,?,?,?,?,?,?)',
                        (job, code, 'queued', '새 썸네일을 준비하고 있어요…', text, now, now, os.getpid(), psutil.Process().create_time()))
-        threading.Thread(target=_work, args=(service, code, job, text, source), daemon=True,
-                         name='post-thumbnail-'+code).start()
+        try:
+            threading.Thread(target=_work, args=(service, code, job, text, source), daemon=True,
+                             name='post-thumbnail-'+code).start()
+        except Exception:
+            update(service, job, 'failed', '썸네일 작업을 시작하지 못했습니다. 다시 반영해 주세요.')
+            raise
         return job_status(service, code)
 
 
@@ -261,13 +286,14 @@ def _work(service, code, job, text, source):
                         'body_final': str(base), 'master_final': str(master), 'rules': rules,
                         'spoken_text': source.get('spoken_text', ''),
                         'version': job, 'checks': checks, 'updated': time.time(),
-                        'sha256': hashlib.sha256(final.read_bytes()).hexdigest()}
+                        'sha256': sha256_file(final)}
             temporary = folder / (job+'.json')
             temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), 'utf8')
             with service.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current = service.source(code)
-                if current['edit_id'] != source['edit_id'] or current['base_final'] != source['base_final']:
+                if (current['edit_id'] != source['edit_id'] or current['base_final'] != source['base_final']
+                        or current.get('media_version') != source.get('media_version')):
                     raise ValueError('작업 중 영상이 수정되어 교체하지 않았습니다. 다시 반영해 주세요.')
                 os.replace(temporary, folder/'active.json')
                 db.execute('UPDATE thumbnail_jobs SET status=?,message=?,updated=? WHERE id=?',

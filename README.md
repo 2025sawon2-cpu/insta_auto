@@ -4,7 +4,19 @@
 
 새 Windows PC에서 네 저장소를 함께 설치하려면 [Windows 통합 설치 가이드](docs/windows-install.md)를 먼저 읽는다. Git에는 수집 DB·인증 세션·모델·편집 초안이 포함되지 않는다.
 
-## 빠른 시작
+## 현재 게시물 준비 경로
+
+현재 기본 경로는 제작실·수집 실행기를 시작하지 않는 독립 게시용 서버다.
+
+```powershell
+python -m hotpost.publication_server --port 8776
+```
+
+운영 서비스 시작/재시작은 해당 요청 범위에서만 수행한다. 개발 검증은 별도 data/포트를 사용한다.
+기존 제작실은 참고용 보존이며 아래 수집/구형 서버 명령은 별도 명시 요청에서만 사용한다.
+현재 경계는 [WORKFLOW](docs/WORKFLOW.md), 개발 진입점은 [AGENTS](AGENTS.md)를 따른다.
+
+## 수집 기능의 기존 시작 방법 (별도 실행 승인)
 
 ```bash
 # 1) 의존성 (최초 1회)
@@ -31,7 +43,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `python -m hotpost run --only 계정1 계정2` | 일부 계정만 |
 | `python -m hotpost run --source demo` | 샘플 데이터로 화면 확인 (별도 DB 사용, 화면은 덮어쓰므로 실데이터로 되돌리려면 `analyze`) |
 | `python -m hotpost analyze` | 수집 없이 리포트만 재생성 (기준값 바꿨을 때) |
-| `python -m hotpost serve` | 웹페이지만 열기 |
+| `python -m hotpost serve` | 구형 통합 서버 시작(제작실 포함, 기본 사용 중단) |
 | `python -m hotpost sources SHORTCODE` | 릴스 장면 분석 → 공개 소스 후보 탐색·검증·ZIP 생성 |
 | `python -m hotpost import dump.json` | 브라우저 덤프(`tools/browser_dump.js`) 가져오기 |
 | `python -m hotpost list` | 인플루언서 목록 파싱 확인 |
