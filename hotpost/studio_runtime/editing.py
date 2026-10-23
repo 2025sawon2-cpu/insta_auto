@@ -283,6 +283,9 @@ class EditingMixin:
                 raise EditorialWindowGap(data.get('error', '원본 연속 구간 추가 필요'),
                                          data.get('diagnostics') or data.get('selection_diagnostics') or {})
             raise RuntimeError(data.get("error", "편집 실행 실패"))
+        if action in {'render', 'revise', 'caption-export'}:
+            from ..studio_disclosure import apply_render_disclosure
+            data = apply_render_disclosure(data, folder)
         data['_artifact_hashes'] = self._process_artifacts(data)
         _atomic_json(result, data)
         return data
@@ -617,6 +620,22 @@ class EditingMixin:
         plan = json.loads(Path(edit["plan_path"]).read_text(encoding="utf-8"))
         from ..source_diversity import require_body_minimum, policy_for_state
         require_body_minimum(plan, expected_policy=policy_for_state(state))
+        if job['payload'].get('disclosure_only'):
+            from ..studio_disclosure import apply_render_disclosure
+            video = edit.get('export_path') or edit['preview_path']
+            if (digest(video) != job['payload']['render_sha256']
+                    or digest(edit['plan_path']) != job['payload']['plan_sha256']):
+                raise Conflict('광고 표시 작업의 실제 영상·계획이 변경되었습니다.')
+            self.store.assert_owned(job)
+            folder = self.folder(state['id']) / job['id']
+            folder.mkdir(exist_ok=True)
+            base = {k: edit[k] for k in ('plan_path','preview_path','export_path','cover_path',
+                'clean_preview_path','portable_draft_path','duration') if k in edit}
+            with self.render_lock:
+                result = apply_render_disclosure(base, folder)
+            self.store.assert_owned(job)
+            return {'id': job['id'], 'script_id': edit['script_id'], 'voice_id': edit['voice_id'],
+                    'parent_id': edit['id'], 'created': time.time(), 'review_count': 0, **result}
         if job['payload'].get('thumbnail_only'):
             from ..studio_thumbnail import render_thumbnail
             preserved_id=job['payload'].get('preserved_thumbnail_from')

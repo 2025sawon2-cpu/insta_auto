@@ -31,6 +31,7 @@ class QualitySceneGap(ValueError):
         self.thumbnail_lines=thumbnail_lines
 
 REVIEW_INSTRUCTION = (
+    'The intentional upper-right [광고] publishing disclosure is not a creator watermark; keep it visible. '
     'Output boundary contract v1: inspect supplied exact k-1,k,k+1 frames at every cut and mask boundary, '
     'including the cover transition. A single exposed creator watermark or inserted source subtitle is a defect. '
     'Review ONLY the supplied actual rendered video frames in temporal order and separately labelled actual first-frame cover. '

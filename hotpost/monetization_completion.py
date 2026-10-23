@@ -9,8 +9,8 @@ import time
 
 def _digest(path):
     try:
-        with Path(path).open('rb') as stream:
-            return hashlib.file_digest(stream, 'sha256').hexdigest()
+        from .source_quality import sha256_file
+        return sha256_file(Path(path))
     except (OSError, TypeError):
         return None
 

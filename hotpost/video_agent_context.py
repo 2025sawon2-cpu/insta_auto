@@ -819,7 +819,8 @@ def inspect_artifact(studio,state,action,*,_full_text=False):
                     'scope':'registered original frame; diagnostic evidence, not product approval'}
     if path not in allowed and not path.is_relative_to(root):raise ValueError('해당 영상의 증거 파일만 읽을 수 있습니다.')
     if path.is_file() and path in allowed and path.suffix.lower() in {'.mp4','.mov','.wav','.mp3','.png','.jpg','.jpeg'}:
-        with path.open('rb') as stream:sha=hashlib.file_digest(stream,'sha256').hexdigest()
+        from .source_quality import sha256_file
+        sha=sha256_file(path)
         return {'status':'completed','path':str(path),'sha256':sha,'bytes':path.stat().st_size}
     if not path.is_file() or path.suffix.lower() not in {'.json','.txt','.log','.md','.srt','.vtt'}:
         raise ValueError('텍스트 증거 파일을 지정하세요.')

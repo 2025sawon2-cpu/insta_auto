@@ -200,6 +200,9 @@ class CommandsMixin:
             return self.public(own)  # Wrapper enrolls; production state/approvals stay authoritative.
         if action == 'recheck-quality':
             return self._command_recheck_quality(task_id, data)
+        if action == 'apply-disclosure':
+            from ..studio_disclosure import queue_disclosure
+            return queue_disclosure(self, task_id, data)
         if (own.get('creation_mode') == 'photo_post' and not self.settings.photo_production_enabled
                 and action in {'start-auto', 'resume-auto', 'retry', 'reproduce', 'make-video',
                                'revise-edit', 'request-edit', 'export-edit', 'export-overlays', 'export-thumbnail', 'approve-voice'}):
