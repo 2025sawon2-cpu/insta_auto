@@ -1,5 +1,7 @@
 # Hotpost 작업 가이드
 
+- 2026-10-23 사용자 확정 — TTS 잘림은 대본 표현 일부 교정 후 재합성: [docs/TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md)를 따른다. 같은 개인 목소리·Seed로 전체 대본을 한 번에 합성하고, 전체/끝문장 발화를 확인한다. 분할 합성·끝문장 덧붙이기·품질 완화는 하지 않는다. 문서 규칙과 자동 실행기 구현 여부는 구분한다.
+
 ## 협업 규칙 읽기
 
 협업 규칙의 원본은 [docs/COLLABORATION.md](docs/COLLABORATION.md)다. 협업 절차는 이 문서를 따르며 아래의 일반적인 커밋/push 대기 지침보다 우선한다.
