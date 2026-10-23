@@ -68,10 +68,17 @@ def test_real_render_replaces_current_media_and_keeps_audio_and_body_frames(read
     manifest=json.loads((service.root/'post-preparations/post/active.json').read_text('utf8'))
     assert manifest['checks']['body_frames_identical']
     assert manifest['checks']['audio_identical']
+    assert manifest['checks']['verified_asset']=='master_final'
+    assert manifest['checks']['delivery']['profile']=='Main'
+    assert manifest['checks']['delivery']['audio_bitstream_identical']
+    delivered=thumbnails.probe(Path(manifest['final']))
+    assert delivered['streams'][0]['profile']=='Main'
+    assert delivered['streams'][0]['pix_fmt']=='yuv420p'
+    assert thumbnails.hashes(original,audio=True)==thumbnails.hashes(Path(manifest['final']),audio=True)
     assert manifest['rules']['advertising_disclosure']=='upper-right-gray-v1'
     assert Path(manifest['body_final']).name=='disclosed-body.mp4'
     # The overlay survives the whole body; outside its area the decoded frames match.
-    assert thumbnails.hashes(original,crop='crop=200:ih:0:0')[1:] == thumbnails.hashes(Path(manifest['final']),crop='crop=200:ih:0:0')[1:]
+    assert thumbnails.hashes(original,crop='crop=200:ih:0:0')[1:] == thumbnails.hashes(Path(manifest['master_final']),crop='crop=200:ih:0:0')[1:]
     assert all(a!=b for a,b in zip(thumbnails.hashes(original,crop='crop=120:80:200:0'),
                                   thumbnails.hashes(Path(manifest['final']),crop='crop=120:80:200:0')))
     assert thumbnails.hashes(original)[0] != thumbnails.hashes(Path(manifest['final']))[0]
@@ -92,6 +99,21 @@ def test_failed_render_does_not_replace_existing_result(ready,monkeypatch):
     assert wait(service)['status']=='failed'
     assert service.get('post')['media']['final']==before
     assert not (service.root/'post-preparations/post/active.json').exists()
+
+
+def test_mobile_transfer_delivers_main_profile_and_preserves_original_audio(ready):
+    from hotpost.mobile_reels import phone_video
+    service, original = ready
+    before = hashlib.sha256(original.read_bytes()).hexdigest()
+    output = service.root / 'phone-delivery.mp4'
+    result = phone_video(original, output)
+    assert result['profile'] == 'Main'
+    assert result['delivery']['level'] == '4.0'
+    assert result['delivery']['full_decode_passed']
+    assert result['delivery']['audio_bitstream_identical']
+    assert result['pix_fmt'] == 'yuv420p'
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == before
+    assert thumbnails.hashes(original, audio=True) == thumbnails.hashes(output, audio=True)
 
 
 def test_changed_revision_cannot_render_stale_words(ready):
@@ -135,7 +157,7 @@ def test_later_thumbnail_keeps_previously_edited_body(ready):
     assert wait(service)['status']=='completed'
     current=json.loads(pointer.read_text('utf8'))
     assert current['body_final']==str(edited)
-    assert thumbnails.hashes(Path(current['final']))[1:]==thumbnails.hashes(edited)[1:]
+    assert thumbnails.hashes(Path(current['master_final']))[1:]==thumbnails.hashes(edited)[1:]
     assert thumbnails.hashes(Path(current['final']))[1:]!=thumbnails.hashes(original)[1:]
 
 
@@ -155,3 +177,17 @@ def test_later_thumbnail_keeps_disclosure_and_corrected_audio(ready):
     assert second['spoken_text']==first['spoken_text']
     assert thumbnails.hashes(Path(first['final']),audio=True)==thumbnails.hashes(Path(second['final']),audio=True)
     assert thumbnails.hashes(Path(first['final']))[1:]==thumbnails.hashes(Path(second['final']))[1:]
+
+
+def test_delivery_failure_keeps_previous_publication(ready,monkeypatch):
+    service,_=ready
+    service.start_thumbnail('post',{'revision':1})
+    assert wait(service)['status']=='completed'
+    pointer=service.root/'post-preparations/post/active.json'
+    before=pointer.read_bytes()
+    def fail(*args):
+        raise ValueError('모바일 호환 검증 실패')
+    monkeypatch.setattr(thumbnails,'encode_delivery',fail)
+    service.start_thumbnail('post',{'revision':1})
+    assert wait(service)['status']=='failed'
+    assert pointer.read_bytes()==before

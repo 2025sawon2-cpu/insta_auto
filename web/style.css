@@ -79,6 +79,11 @@ h2 { font-size: 18px; font-weight: 700; }
 .chip .n { font-size: 12px; color: var(--muted); font-weight: 600; }
 .chip.on .n { color: rgba(255,255,255,.85); }
 .chip.kw { border-style: dashed; }
+.production-filters { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;width:min(100%,390px);padding:5px;margin-bottom:18px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px; }
+.production-filters button { min-height:44px;padding:9px 14px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:14px;font-weight:650;cursor:pointer;transition:background .15s,color .15s; }
+.production-filters button:hover { color:var(--text);background:var(--panel); }
+.production-filters button[aria-pressed="true"] { background:var(--accent);color:#fff;box-shadow:0 2px 6px #0001; }
+.production-filters button:focus-visible { outline:2px solid var(--accent);outline-offset:3px; }
 
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
 .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }

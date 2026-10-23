@@ -1,5 +1,23 @@
 # 영상 제작 중 문제 기록
 
+## 2026-10-23 Android에서 완성 영상 코덱 미지원 — 현재 다운로드 교체
+
+수납선반 DesTrP8SwOa의 최신273 음성 반영본은 H.264 High 4:4:4 Predictive(avc1.f40028), yuv420p/1080×1920/30fps/499프레임/16.633초였다. `libx264 -qp 0` 무손실 설정은 픽셀 포맷이 yuv420p여도 이 프로파일을 만든다. PC 디코드·픽셀 동일 검증만으로 Android 재생 호환성을 확인했다고 판단한 것이 누락 원인이다. [Android 공식 형식 안내](https://developer.android.com/media/platform/supported-formats)의 AVC Baseline/Main 및 AAC-LC, MP4 faststart 조건을 참고했다.
+
+현재 파일을 H.264 Main@4.0/yuv420p 8bit/CRF18/12Mbps 상한/+faststart로 별도 인코딩하고 AAC-LC는 비트스트림 복사했다. 해상도·길이·499프레임·음성 데이터 동일, 전체 디코드 통과, SSIM0.997267. 원본64,107,678바이트는 보존했고 현재 전달본8,596,735바이트/SHA cb8055fbba8f92aef4866375f188ba4ff8491b93dde10f9a8db04166a2371405, active834196a4503444dbb521cdabe685e350이다. 광고·표지·소스32 확대·자막·273 음성·본문 초안·body_final을 유지했으며 영상 재압축을 픽셀 무손실이라고 표현하지 않는다. 실제 Android폰 재생은 아직 사용자 확인이 필요하다.
+
+post_thumbnail은 무손실 master.mp4의 첫 프레임 외 픽셀/음성 검증을 유지한 뒤 별도 Main 프로파일 final.mp4를 전달한다. 실패 시 기존 active 유지, manifest에 master_final과 delivery 검증을 구분한다. 관련 Python41/Node10검사 통과. 두 Cloudflare 주소의 전체 다운로드 SHA/200/Range206/첨부 헤더 및 Chrome 재생을 확인했다. 기존 다른 작업 변경은 보존했고 새 커밋/푸시는 하지 않았다.
+
+운영 적용 시 8776을 base Python312로 시작해 PIL 누락/일시502가 발생했으며 원인은 가상환경 실행 경로 누락이다. 프로젝트 `.venv/Scripts/python.exe`로 복구했고 새 썸네일 출력 코드도 이 메인 서버에 적용했다. 8775 재시작 명령은 자동 승인 검토에서 차단되어 재시도하지 않았고, 기존 서버를 유지했다. 현재 두 주소의 다운로드는 동일한 새 active를 정상 제공하지만 보조8775의 향후 썸네일 코드 재로드까지 완료했다고 간주하지 않는다. 기존 터널·설정·계정 목록·Studio DB·리포트·초안은 보존했으며 production_workers/collection_workers=0, 제작·수집·예약/폰 제어·게시 재개0. 증거 `data/shelf-android-playback-20261023/`.
+
+## 2026-10-23 레퍼런스 계정 등록이 조회 서버의 전체 쓰기 차단에 걸림 — 수정
+
+데스크톱8776의 임시 서버는 썸네일 외 POST를 모두 ‘업로드 및 제작 기능은 연결하지 않았습니다.’로 거절했고, 이전 모바일8775는 모든 쓰기를 ‘조회용 웹페이지입니다. 제작·수집 중지를 유지합니다.’로 거절했다. 계정 추가도 같은 POST여서 차단됐다. 또한8776은 계정 GET을 시작 시점 스냅샷에서 반환해 저장 경로만 고쳐도 새 계정이 보이지 않을 수 있었다.
+
+독립 publication_server/account_registry_http를 추가해 정확한 계정 GET/POST/DELETE만 기존 AccountRegistry에 연결했다. GET은 현재 목록을 읽고 변경은 기존 공유 파일/로컬 메모 저장 경로를 사용한다. 입력 오류·교차 출처 쓰기는 거부하며 제작/수집/정리 등의 쓰기는 계속405다. Studio/JobQueue/Collector import 없이 시작한다. 기존 두 서버를 유휴 확인 후 이 모듈로 교체했고 원래 두 Cloudflare 터널과 주소는 유지했다. 과거 임시 실행 스크립트는 현재 진입점이 아니다.
+
+실제 UI로 bongsallim 등록, 총40개·중복0·게시물 수집 전, 두 외부 주소 API와 모바일390px에서 확인했다. 기존 게시물571개/Studio DB/리포트/현재 영상 포인터/설정은 보존했고 예약 HotpostDailyCollect Disabled를 확인했다. 근거 data/account-registration-fix-20261023/{verification,preserved-before,passive-snapshot}.json, desktop.jpg/mobile.jpg. 운영 신규 수집이나 제작은 시작하지 않았다.
+
 ## 2026-10-23 쉼 축소 체감 개선 없음 — 사용자 지정 어구로 새 합성
 
 사용자는 앞선0.118초 쉼 축소 적용에도 전혀 달라지지 않았다고 평가했다. 해당 패치를 자연스러운 연결 해결로 간주하지 않는다. 새 명시 문구 `청소용품 하나 늘어날 때마다`를 반영하고 나머지 대본·개인 참조·모델/엔진/Seed13·실제 worker 설정은 유지하여 VoiceBench273을 생성했다. 한 세그먼트/한 시도, reused=false, 자동QA 경고/재시도0. 실제 설정 영수증 비교와 도입 ASR의 ‘늘어날 때마다’를 확인했으나 이를 사용자의 청감 합격으로 대체하지 않는다.
