@@ -10,6 +10,7 @@ import requests
 
 from hotpost.post_preparation import PostPreparation, DraftConflict
 from hotpost.post_preparation_http import PostPreparationHTTP
+from hotpost.post_preparation_content import DM_MESSAGE
 
 
 @pytest.fixture
@@ -67,6 +68,47 @@ def test_drafts_persist_are_separate_and_reject_stale_save(service):
     with pytest.raises(DraftConflict):
         service.save('post', {'revision': 0, 'draft': draft})
     assert service.get('post')['revision'] == 1
+
+
+def test_old_draft_is_hydrated_without_rewriting_or_losing_saved_fields(service):
+    draft = service.get('DesTrP8SwOa')['draft']
+    draft.pop('dm_message'); draft.pop('dm_button_text')
+    draft.update(caption='내 본문', pinned_comment='내 댓글', product_link='https://example.com/item',
+                 selected_accounts=['mr.salrim'], selected_thumbnail='hook')
+    stored = json.dumps(draft, ensure_ascii=False)
+    with service.connect() as db:
+        db.execute('INSERT INTO drafts VALUES (?,?,?,?)', ('DesTrP8SwOa', 7, stored, 123))
+    result = service.get('DesTrP8SwOa')
+    assert result['revision'] == 7
+    assert result['updated'] == 123
+    assert all(result['draft'][key] == value for key, value in draft.items())
+    assert result['draft']['dm_message'] == DM_MESSAGE
+    assert '변기' in result['draft']['dm_button_text']
+    with service.connect() as db:
+        assert db.execute('SELECT value FROM drafts').fetchone()[0] == stored
+    result['draft']['dm_button_text'] = '욕실 수납의 빈자리 찾기'
+    service.save('DesTrP8SwOa', {'revision': 7, 'draft': result['draft']})
+    # A previously opened old client may save old fields, but cannot erase the new hook.
+    service.save('DesTrP8SwOa', {'revision': 8, 'draft': draft})
+    assert service.get('DesTrP8SwOa')['draft']['dm_button_text'] == '욕실 수납의 빈자리 찾기'
+
+
+@pytest.mark.parametrize('key,value', [('dm_button_text', '가'*21), ('dm_button_text', ''),
+    ('dm_button_text', ' \t '), ('dm_button_text', '두\n줄'), ('dm_button_text', '끝줄\n'),
+    ('dm_button_text', '줄\u2028바꿈'), ('dm_button_text', []), ('dm_message', '다른 안내')])
+def test_invalid_dm_fields_never_change_saved_draft(service, key, value):
+    draft = service.get('post')['draft']
+    draft[key] = value
+    with pytest.raises(ValueError):
+        service.save('post', {'revision': 0, 'draft': draft})
+    assert service.get('post')['revision'] == 0
+
+
+def test_twenty_unicode_character_button_round_trips(service):
+    draft = service.get('post')['draft']
+    draft['dm_button_text'] = '가'*19 + '👇'
+    service.save('post', {'revision': 0, 'draft': draft})
+    assert service.get('post')['draft']['dm_button_text'] == draft['dm_button_text']
 
 
 def test_caption_keeps_cta_sentence_together(service):

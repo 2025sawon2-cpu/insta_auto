@@ -1,9 +1,10 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const {parseHTML}=require('../remotion/node_modules/linkedom');
+const {parseHTML}=require(process.env.HOTPOST_TEST_DOM || '../remotion/node_modules/linkedom');
 const code=fs.readFileSync(require('node:path').join(__dirname,'../web/post-preparation.js'),'utf8');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function fixture(){return {accounts:['mr.salrim','__ariddaum__'],revision:0,draft:{selected_accounts:[],thumbnail_options:{recommended:'기존 표지',hook:'후킹',curiosity:'궁금증',benefit:'이득'},selected_thumbnail:'recommended',caption:'우리 대본 ✨',pinned_comment:'댓글',product_link:''},media:{final:'/final.mp4',reference:'/ref.mp4',cover:'/cover.jpg'}};}
-function harness(fetch){const {document,window}=parseHTML('<html><body><div id="root"></div></body></html>');let timer;vm.runInNewContext(code,{window,document,fetch,AbortController,setTimeout:fn=>(timer=fn,1),clearTimeout:()=>{},console});return {root:document.querySelector('#root'),window,timer:()=>timer?.()};}
+const dm='본 포스팅은 쿠팡파트너스 활동의\n일환으로 제품 구매시 일정액의 수수료를\n지급 받습니다!\n👇👇👇👇👇👇👇👇';
+function fixture(){return {accounts:['mr.salrim','__ariddaum__'],revision:0,draft:{selected_accounts:[],thumbnail_options:{recommended:'기존 표지',hook:'후킹',curiosity:'궁금증',benefit:'이득'},selected_thumbnail:'recommended',caption:'우리 대본 ✨',pinned_comment:'댓글',product_link:'',dm_message:dm,dm_button_text:'변기 위 빈자리, 수납으로 바꾸기'},media:{final:'/final.mp4',reference:'/ref.mp4',cover:'/cover.jpg'}};}
+function harness(fetch,navigator={}){const {document,window}=parseHTML('<html><body><div id="root"></div></body></html>');let timer;vm.runInNewContext(code,{window,document,navigator,fetch,AbortController,setTimeout:fn=>(timer=fn,1),clearTimeout:()=>{},console});return {root:document.querySelector('#root'),window,timer:()=>timer?.()};}
 const response=(data,status=200)=>({ok:status<400,status,json:async()=>structuredClone(data)});
 test('four editable choices, both accounts and draft inputs survive a save without replacing DOM',async()=>{
  const puts=[],d=fixture();const h=harness(async(url,options={})=>{if(options.method==='PUT'){puts.push(JSON.parse(options.body));return response({revision:puts.length});}return response(d);});
@@ -70,4 +71,40 @@ test('thumbnail start failure keeps existing media and offers another attempt',a
  assert.match(h.root.querySelector('[data-thumbnail-status]').textContent,/저장한 문구/);
  assert.equal(h.root.querySelector('video').getAttribute('src'),'/final.mp4');
  assert.equal(h.root.querySelector('[data-apply-thumbnail]').disabled,false);
+});
+
+test('every text area copies its current value without saving or submitting a thumbnail',async()=>{
+ const copies=[],writes=[];const h=harness(async(url,o={})=>{writes.push(o.method||'GET');return response(fixture());},{clipboard:{writeText:async text=>copies.push(text)}});
+ h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
+ const fields=[['prep-caption','인스타 게시물 내용'],['prep-comment','고정댓글'],['prep-dm','DM으로 보낼 메시지'],['prep-dm-button','DM 버튼 문구'],['prep-link','쿠팡 인플루언서 제품 링크']];
+ for(const [name,label] of fields){
+  const field=h.root.querySelector(`[name="${name}"]`);
+  if(name!=='prep-dm')field.value='저장 전 '+label;
+  h.root.querySelector(`[aria-label="${label} 복사"]`).click();await tick();
+  assert.equal(copies.at(-1),field.value);assert.match(field.closest('section').querySelector('[data-copy-status]').textContent,/복사했어요/);
+ }
+ assert.equal(h.root.querySelector('[name=prep-dm]').value,dm);
+ assert.equal(h.root.querySelector('[name=prep-dm]').hasAttribute('readonly'),true);
+ assert.equal(h.root.querySelector('[name=prep-dm-button]').getAttribute('maxlength'),'20');
+ assert.equal(h.root.querySelectorAll('[data-copy-text]').length,9);
+ h.root.querySelector('[data-copy="hook"]').value='새 썸네일 문구';
+ h.root.querySelector('[aria-label="후킹 강한 문구 복사"]').click();await tick();
+ assert.equal(copies.at(-1),'새 썸네일 문구');assert.deepEqual(writes,['GET']);
+});
+
+test('DM button edits are counted and saved with fixed message and existing caption',async()=>{
+ let saved;const h=harness(async(url,o={})=>{if(o.method==='PUT'){saved=JSON.parse(o.body);return response({revision:1});}return response(fixture());});
+ h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
+ const field=h.root.querySelector('[name=prep-dm-button]');field.value='욕실 수납의 빈자리 찾기';field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
+ assert.equal(h.root.querySelector('[data-dm-button-count]').textContent,Array.from(field.value).length+' / 20');
+ h.timer();await tick();assert.equal(saved.draft.dm_button_text,field.value);assert.equal(saved.draft.dm_message,dm);assert.equal(saved.draft.caption,fixture().draft.caption);
+});
+
+test('missing clipboard and permission rejection select the field with honest fallback feedback',async()=>{
+ for(const navigator of [{},{clipboard:{writeText:async()=>{throw Error('denied');}}}]){
+  const h=harness(async()=>response(fixture()),navigator);h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
+  const field=h.root.querySelector('[name=prep-dm]');let selected=0;field.focus=()=>{};field.select=()=>selected++;
+  const button=h.root.querySelector('[aria-label="DM으로 보낼 메시지 복사"]');button.click();await tick();
+  assert.equal(selected,1);assert.equal(button.disabled,false);assert.match(field.closest('section').querySelector('[data-copy-status]').textContent,/직접 복사/);
+ }
 });

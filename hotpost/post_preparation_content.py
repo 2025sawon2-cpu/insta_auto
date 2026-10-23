@@ -5,6 +5,20 @@ import re
 
 CTA = '💬 댓글에 "나도" 남겨주세요.'
 CONTENT = Path(__file__).with_suffix('.json')
+DM_MESSAGE = ('본 포스팅은 쿠팡파트너스 활동의\n'
+              '일환으로 제품 구매시 일정액의 수수료를\n'
+              '지급 받습니다!\n'
+              '👇👇👇👇👇👇👇👇')
+
+
+def build_dm_copy(code, topic=''):
+    entry = json.loads(CONTENT.read_text('utf-8')).get(code, {})
+    button = entry.get('dm_button_text')
+    if not button:
+        # Unknown posts use only their saved subject, without adding product claims.
+        subject = ' '.join(topic.split()).strip()
+        button = subject if len(subject) <= 20 else subject[:19].rstrip() + '…'
+    return {'dm_message': DM_MESSAGE, 'dm_button_text': button or '자세한 내용 확인하기'}
 
 
 def fallback_tags(text):

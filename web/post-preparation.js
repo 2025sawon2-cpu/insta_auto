@@ -18,6 +18,8 @@
         selected_thumbnail: root.querySelector('[name="prep-thumbnail"]:checked').value,
         caption: root.querySelector('[name="prep-caption"]').value,
         pinned_comment: root.querySelector('[name="prep-comment"]').value,
+        dm_message: root.querySelector('[name="prep-dm"]').value,
+        dm_button_text: root.querySelector('[name="prep-dm-button"]').value,
         product_link: root.querySelector('[name="prep-link"]').value
       };
     }
@@ -48,6 +50,7 @@
       root.querySelectorAll('.prep-option').forEach(el => el.classList.toggle('is-selected', el.querySelector('input').checked));
       const caption = root.querySelector('[name="prep-caption"]');
       root.querySelector('[data-caption-count]').textContent = caption.value.length + ' / 2,200';
+      root.querySelector('[data-dm-button-count]').textContent = Array.from(draftCache.dm_button_text).length + ' / 20';
       status(conflict ? '다른 화면에서 변경됐어요. 입력을 복사한 뒤 다시 열어 주세요.' : '저장 전 변경사항', conflict);
       clearTimeout(timer); if (!conflict) timer = setTimeout(save, 700);
       thumbnailFeedback();
@@ -107,8 +110,25 @@
         applying=false;thumbnailFeedback();pollThumbnail();
       } catch (error) { applying=false;data.thumbnail={...data.thumbnail,status:'failed',message:error.message};thumbnailFeedback(); }
     }
+    async function copyText(button) {
+      const section = button.closest('.prep-section, .prep-option');
+      const field = section.querySelector('textarea, input[type="text"]');
+      const notice = section.querySelector('[data-copy-status]');
+      button.disabled = true;
+      try {
+        await navigator.clipboard.writeText(field.value);
+        if (!closed) { notice.textContent = '복사했어요.'; notice.classList.remove('is-error'); }
+      } catch (_) {
+        if (!closed) {
+          field.focus(); field.select();
+          notice.textContent = '복사 권한을 확인하거나 선택된 내용을 직접 복사해 주세요.';
+          notice.classList.add('is-error');
+        }
+      } finally { button.disabled = false; }
+    }
     function render() {
       const d = data.draft, media = data.media;
+      const copyControl = label => `<div class="prep-copy-actions"><span data-copy-status role="status" aria-live="polite"></span><button class="prep-copy-button" type="button" data-copy-text aria-label="${esc(label)} 복사">복사</button></div>`;
       const player = (key, title) => `<section class="prep-media"><h3>${title}</h3>${media[key]
         ? `<video controls playsinline preload="metadata" ${key==='final' && media.cover ? `poster="${esc(media.cover)}"` : ''} src="${esc(media[key])}"></video>${key==='final' ? `<a class="prep-download" href="${esc(downloadUrl(media[key]))}" download>완성 영상 다운로드 ↓</a>` : ''}`
         : `<div class="prep-media-empty">${key==='final' ? '완성 영상이 아직 없어요.' : '저장된 레퍼런스 영상이 없어요.'}</div>`}</section>`;
@@ -121,11 +141,22 @@
           <section class="prep-section"><h3><span>03</span> 인스타 게시물 내용</h3><p class="prep-help">${d.caption?'생활 속 활용과 장점을 자세히 담았어요. 마지막에는 관련 해시태그 5개가 있어요.':'저장된 제작 대본이 없어 비워뒀어요. 직접 입력할 수 있어요.'}</p><textarea name="prep-caption" aria-label="인스타 게시물 내용" maxlength="2200" rows="12" placeholder="게시물 내용을 입력하세요">${esc(d.caption)}</textarea><small class="prep-count" data-caption-count>${d.caption.length} / 2,200</small></section>
           <section class="prep-section"><h3><span>04</span> 고정댓글</h3><p class="prep-help">장점 한 줄 + 댓글 안내 한 줄로 준비했어요.</p><textarea name="prep-comment" aria-label="고정댓글" maxlength="2200" rows="3" placeholder="✨ 장점 한 줄&#10;💬 댓글에 &quot;나도&quot; 남겨주세요.">${esc(d.pinned_comment)}</textarea></section>
           <section class="prep-section"><h3><span>05</span> 쿠팡 인플루언서 제품 링크</h3><p class="prep-help">링크를 적어둘 수 있는 공간이에요. 연결 기능은 추후 추가해요.</p><input name="prep-link" type="text" inputmode="url" aria-label="쿠팡 인플루언서 제품 링크" maxlength="2048" placeholder="제품 링크를 입력하세요" value="${esc(d.product_link)}"></section>
+          <section class="prep-section"><h3><span>06</span> DM으로 보낼 메시지</h3><p class="prep-help">모든 게시물에 공통으로 사용하는 고정 안내 문구예요.</p><textarea name="prep-dm" aria-label="DM으로 보낼 메시지" rows="5" readonly>${esc(d.dm_message)}</textarea></section>
+          <section class="prep-section"><h3><span>07</span> DM 버튼 문구</h3><p class="prep-help">주제를 후킹하는 20자 이내 한 줄이에요. 원하는 문구로 수정할 수 있어요.</p><input name="prep-dm-button" type="text" aria-label="DM 버튼 문구" maxlength="20" required value="${esc(d.dm_button_text)}"><small class="prep-count" data-dm-button-count>${Array.from(d.dm_button_text || '').length} / 20</small></section>
           <footer class="prep-footer"><div><span data-save-status role="status">${data.revision?'저장된 초안':'새 초안 · 수정하면 자동 저장'}</span><small>현재는 초안 준비만 가능해요.</small></div><button type="submit">초안 저장</button></footer>
         </form></div></div>`;
       Object.keys(labels).forEach(key => { root.querySelector('[data-copy="'+key+'"]').value = d.thumbnail_options[key]; });
       root.querySelector('[name="prep-caption"]').value = d.caption;
       root.querySelector('[name="prep-comment"]').value = d.pinned_comment;
+      root.querySelector('[name="prep-dm"]').value = d.dm_message || '';
+      root.querySelector('[name="prep-dm-button"]').value = d.dm_button_text || '';
+      // Each button reads its own current input, including changes not saved yet.
+      root.querySelectorAll('.prep-option').forEach(option => option.insertAdjacentHTML('beforeend', copyControl(option.querySelector('textarea').getAttribute('aria-label'))));
+      root.querySelectorAll('.prep-section').forEach(section => {
+        const field = section.querySelector('[name^="prep-"]:is(textarea, input[type="text"])');
+        if (field) section.insertAdjacentHTML('beforeend', copyControl(field.getAttribute('aria-label')));
+      });
+      root.querySelectorAll('[data-copy-text]').forEach(button => button.addEventListener('click', () => copyText(button)));
       root.querySelectorAll('video').forEach(player => player.addEventListener('play', () => {
         root.querySelectorAll('video').forEach(other => { if (other !== player) other.pause(); });
       }));

@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
-from .post_preparation_content import build_copy
+from .post_preparation_content import build_copy, build_dm_copy, DM_MESSAGE
 from .post_media_rules import without_opening_interjection
 
 ACCOUNTS = ('mr.salrim', '__ariddaum__')
@@ -131,7 +131,7 @@ class PostPreparation:
                 pass
         copy = build_copy(code, source['script'], options['benefit'])
         return {'selected_accounts': [], 'thumbnail_options': options, 'selected_thumbnail': 'recommended',
-                **copy,
+                **copy, **build_dm_copy(code, source['cover_text'] or source['script']),
                 'product_link': ''}
 
     def get(self, code):
@@ -140,6 +140,9 @@ class PostPreparation:
         with self.connect() as db:
             row = db.execute('SELECT * FROM drafts WHERE shortcode=?', (code,)).fetchone()
         draft = json.loads(row['value']) if row else self.defaults(code, source)
+        # Hydrate old drafts in memory; never rewrite the user's other saved fields.
+        draft = {**build_dm_copy(code, source['cover_text'] or source['script']), **draft,
+                 'dm_message': DM_MESSAGE}
         from .post_thumbnail import job_status
         thumbnail = {**job_status(self, code), 'ready': source['thumbnail_ready'], 'applied_text': source['cover_text']}
         suffix = '?v=' + source['media_version'] if source['media_version'] else ''
@@ -158,8 +161,15 @@ class PostPreparation:
         if type(revision) is not int or revision < 0 or not isinstance(value, dict):
             raise ValueError('올바른 초안 버전이 필요합니다.')
         fields = {'selected_accounts', 'thumbnail_options', 'selected_thumbnail', 'caption', 'pinned_comment', 'product_link'}
-        if set(value) != fields:
+        if not fields <= set(value) or set(value) - fields - {'dm_message', 'dm_button_text'}:
             raise ValueError('초안의 입력 항목을 확인하세요.')
+        if 'dm_message' in value and value['dm_message'] != DM_MESSAGE:
+            raise ValueError('DM 안내 메시지는 지정된 고정 문구를 사용하세요.')
+        if 'dm_button_text' in value:
+            button = value['dm_button_text']
+            if (not isinstance(button, str) or not button.strip() or len(button) > 20
+                    or re.search(r'[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]', button)):
+                raise ValueError('DM 버튼 문구는 20자 이내 한 줄로 입력하세요.')
         accounts = value['selected_accounts']
         if not isinstance(accounts, list) or any(not isinstance(a, str) or a not in ACCOUNTS for a in accounts):
             raise ValueError('등록된 업로드 계정을 선택하세요.')
@@ -174,11 +184,19 @@ class PostPreparation:
             if not isinstance(value[key], str) or len(value[key]) > limit:
                 raise ValueError(f'{key} 입력 길이를 확인하세요.')
         value = {**value, 'selected_accounts': [a for a in ACCOUNTS if a in accounts]}
+        dm_defaults = None
+        if 'dm_button_text' not in value:
+            source = self.source(code)
+            dm_defaults = build_dm_copy(code, source['cover_text'] or source['script'])
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute('SELECT revision FROM drafts WHERE shortcode=?', (code,)).fetchone()
+            row = db.execute('SELECT revision, value FROM drafts WHERE shortcode=?', (code,)).fetchone()
             if (row['revision'] if row else 0) != revision:
                 raise DraftConflict('다른 화면에서 초안이 변경됐어요. 입력을 복사한 뒤 다시 열어 주세요.')
+            if 'dm_button_text' not in value:
+                previous = json.loads(row['value']) if row else {}
+                value['dm_button_text'] = previous.get('dm_button_text', dm_defaults['dm_button_text'])
+            value['dm_message'] = DM_MESSAGE
             now = time.time()
             db.execute('INSERT OR REPLACE INTO drafts VALUES (?,?,?,?)',
                        (code, revision + 1, json.dumps(value, ensure_ascii=False), now))
