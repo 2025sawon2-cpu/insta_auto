@@ -111,7 +111,7 @@
       } catch (error) { applying=false;data.thumbnail={...data.thumbnail,status:'failed',message:error.message};thumbnailFeedback(); }
     }
     async function copyText(button) {
-      const section = button.closest('.prep-section, .prep-option');
+      const section = button.closest('.prep-section');
       const field = section.querySelector('textarea, input[type="text"]');
       const notice = section.querySelector('[data-copy-status]');
       button.disabled = true;
@@ -151,7 +151,6 @@
       root.querySelector('[name="prep-dm"]').value = d.dm_message || '';
       root.querySelector('[name="prep-dm-button"]').value = d.dm_button_text || '';
       // Each button reads its own current input, including changes not saved yet.
-      root.querySelectorAll('.prep-option').forEach(option => option.insertAdjacentHTML('beforeend', copyControl(option.querySelector('textarea').getAttribute('aria-label'))));
       root.querySelectorAll('.prep-section').forEach(section => {
         const field = section.querySelector('[name^="prep-"]:is(textarea, input[type="text"])');
         if (field) section.insertAdjacentHTML('beforeend', copyControl(field.getAttribute('aria-label')));

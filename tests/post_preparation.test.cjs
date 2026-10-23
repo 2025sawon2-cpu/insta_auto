@@ -73,7 +73,7 @@ test('thumbnail start failure keeps existing media and offers another attempt',a
  assert.equal(h.root.querySelector('[data-apply-thumbnail]').disabled,false);
 });
 
-test('every text area copies its current value without saving or submitting a thumbnail',async()=>{
+test('publication fields copy current values while thumbnail choices have no copy buttons',async()=>{
  const copies=[],writes=[];const h=harness(async(url,o={})=>{writes.push(o.method||'GET');return response(fixture());},{clipboard:{writeText:async text=>copies.push(text)}});
  h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
  const fields=[['prep-caption','인스타 게시물 내용'],['prep-comment','고정댓글'],['prep-dm','DM으로 보낼 메시지'],['prep-dm-button','DM 버튼 문구'],['prep-link','쿠팡 인플루언서 제품 링크']];
@@ -86,10 +86,11 @@ test('every text area copies its current value without saving or submitting a th
  assert.equal(h.root.querySelector('[name=prep-dm]').value,dm);
  assert.equal(h.root.querySelector('[name=prep-dm]').hasAttribute('readonly'),true);
  assert.equal(h.root.querySelector('[name=prep-dm-button]').getAttribute('maxlength'),'20');
- assert.equal(h.root.querySelectorAll('[data-copy-text]').length,9);
- h.root.querySelector('[data-copy="hook"]').value='새 썸네일 문구';
- h.root.querySelector('[aria-label="후킹 강한 문구 복사"]').click();await tick();
- assert.equal(copies.at(-1),'새 썸네일 문구');assert.deepEqual(writes,['GET']);
+ assert.equal(h.root.querySelectorAll('[data-copy-text]').length,5);
+ assert.equal(h.root.querySelectorAll('.prep-option [data-copy-text]').length,0);
+ assert.equal(h.root.querySelectorAll('.prep-option textarea').length,4);
+ assert.ok(h.root.querySelector('[data-apply-thumbnail]'));
+ assert.deepEqual(writes,['GET']);
 });
 
 test('DM button edits are counted and saved with fixed message and existing caption',async()=>{
