@@ -175,6 +175,37 @@ def verify(original, updated):
     return {'frames': len(left), 'body_frames_identical': True, 'audio_identical': audio}
 
 
+def encode_delivery(original, output):
+    """Keep lossless editing masters private; deliver hardware-decodable AVC."""
+    before = probe(original)
+    audio = [s for s in before['streams'] if s['codec_type'] == 'audio']
+    copy_audio = all(s['codec_name'] == 'aac' and s.get('profile') == 'LC'
+                     and int(s['sample_rate']) <= 48000 and s['channels'] <= 2 for s in audio)
+    audio_args = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
+    command([shutil.which('ffmpeg') or 'ffmpeg', '-v', 'error', '-y', '-i', str(original),
+             '-map', '0:v:0', '-map', '0:a?', '-map_metadata', '0',
+             '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-profile:v', 'main',
+             '-level:v', '4.0', '-pix_fmt', 'yuv420p', '-maxrate', '12M', '-bufsize', '24M',
+             '-fps_mode', 'passthrough', *audio_args, '-movflags', '+faststart', str(output)])
+    after = probe(output)
+    first = next(s for s in before['streams'] if s['codec_type'] == 'video')
+    second = next(s for s in after['streams'] if s['codec_type'] == 'video')
+    if (second['codec_name'], second.get('profile'), second.get('pix_fmt'), second.get('level')) != ('h264', 'Main', 'yuv420p', 40):
+        raise ValueError('휴대폰 재생용 영상 코덱 검증에 실패했습니다.')
+    for key in ('width', 'height', 'nb_frames', 'avg_frame_rate'):
+        if first.get(key) != second.get(key) or first.get(key) is None:
+            raise ValueError('휴대폰 재생용 변환 중 영상 크기·프레임이 달라졌습니다.')
+    if abs(float(before['format']['duration']) - float(after['format']['duration'])) > .05:
+        raise ValueError('휴대폰 재생용 변환 중 영상 길이가 달라졌습니다.')
+    if audio and copy_audio and hashes(original, audio=True) != hashes(output, audio=True):
+        raise ValueError('휴대폰 재생용 변환 중 음성이 달라졌습니다.')
+    command([shutil.which('ffmpeg') or 'ffmpeg', '-v', 'error', '-xerror', '-i', str(output), '-f', 'null', '-'])
+    return {'codec': 'h264', 'profile': 'Main', 'level': '4.0', 'pix_fmt': 'yuv420p',
+            'frames': int(second['nb_frames']), 'duration': float(after['format']['duration']),
+            'audio_bitstream_identical': bool(audio) and copy_audio, 'full_decode_passed': True,
+            'lossy_video_delivery': True, 'phone_playback_verified': False}
+
+
 def start(service, code, payload):
     from .post_preparation import DraftConflict
     if not isinstance(payload, dict) or set(payload) != {'revision'} or type(payload['revision']) is not int:
@@ -210,7 +241,7 @@ def _work(service, code, job, text, source):
             folder = service.root / 'post-preparations' / code
             output = folder / job
             output.mkdir(parents=True, exist_ok=False)
-            cover, final = output/'cover.png', output/'final.mp4'
+            cover, final, master = output/'cover.png', output/'final.mp4', output/'master.mp4'
             paint_cover(source['thumbnail_background'], source['thumbnail_font'], text, cover, source['thumbnail_style'])
             base = source['base_final']
             rules = dict(source.get('publication_rules', {}))
@@ -220,11 +251,14 @@ def _work(service, code, job, text, source):
                 add_disclosure(source['base_final'], base, source['thumbnail_font'])
                 rules['advertising_disclosure'] = DISCLOSURE_VERSION
             update(service, job, 'running', '새 썸네일을 완성 영상의 첫 화면에 반영하고 있어요…')
-            replace_first_frame(base, cover, final)
+            replace_first_frame(base, cover, master)
             update(service, job, 'running', '영상과 음성이 그대로 유지됐는지 확인하고 있어요…')
-            checks = verify(base, final)
+            checks = verify(base, master)
+            checks['verified_asset'] = 'master_final'
+            update(service, job, 'running', '휴대폰에서 재생할 수 있는 다운로드 영상을 준비하고 있어요…')
+            checks['delivery'] = encode_delivery(master, final)
             manifest = {'source_edit_id': source['edit_id'], 'text': text, 'cover': str(cover), 'final': str(final),
-                        'body_final': str(base), 'rules': rules,
+                        'body_final': str(base), 'master_final': str(master), 'rules': rules,
                         'spoken_text': source.get('spoken_text', ''),
                         'version': job, 'checks': checks, 'updated': time.time(),
                         'sha256': hashlib.sha256(final.read_bytes()).hexdigest()}

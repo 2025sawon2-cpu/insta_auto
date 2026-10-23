@@ -81,7 +81,7 @@
   // ---------- 상태 ----------
   let saved;
   try {saved=await window.HotpostDisplay.load();} catch(e){saved={...window.HotpostDisplay.defaults};window.HotpostNotices.show($('#banner'),{title:'저장된 화면 설정을 불러오지 못해 기본 조건을 표시합니다.',tone:'warning',solution:'설정 페이지에서 서버 연결과 저장된 조건을 확인한 뒤 다시 열어 주세요.',actions:[{label:'설정 확인',href:'settings.html'}]});}
-  const state={...saved,q:'',topic:null};
+  const state={...saved,q:'',topic:null,production:'all'};
   const linkedAccount=new URLSearchParams(location.search).get('account');if(linkedAccount)state.account=linkedAccount;
   function currentSettings(){
     const c=R.criteria.values;
@@ -100,7 +100,12 @@
   function showSearch(open){$('#search-box').hidden=!open;$('#search-toggle').setAttribute('aria-expanded',String(open));$('#search-toggle').setAttribute('aria-label',open?'검색창 닫기':'검색창 열기');if(open)$('#q').focus();}
   $('#search-toggle').onclick=()=>{const open=$('#search-box').hidden;showSearch(open);if(!open){$('#q').value='';state.q='';renderAll();}};
   $('#q').addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();showSearch(false);$('#q').value='';state.q='';renderAll();$('#search-toggle').focus();}});
-  let qt;$('#q').addEventListener('input',e=>{clearTimeout(qt);qt=setTimeout(()=>{state.q=e.target.value.trim().toLowerCase();renderAll();},150);});
+  let qt;$('#q').addEventListener('input',e=>{const query=e.target.value.trim().toLowerCase();clearTimeout(qt);qt=setTimeout(()=>{state.q=query;renderAll();},150);});
+  $$('[data-production-filter]').forEach(button=>button.addEventListener('click',()=>{
+    state.production=button.dataset.productionFilter;
+    $$('[data-production-filter]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
+    renderAll();
+  }));
   // Query rules are independent of rendering and can be tested without a browser.
   const discovery=window.HotpostDiscovery.create(window.HotpostDetection);
   const topicsEl = $('#topics');
@@ -211,6 +216,10 @@
     try {
       const data = responses[1].status==='fulfilled'?responses[1].value:null;
       for (const item of data?.productions||[]) productionByCode.set(item.shortcode, item);
+      if(state.production!=='all'){
+        const next=visiblePosts(discovery.baseFiltered(POSTS,state));
+        if(next.length!==current.length||next.some((post,i)=>post.shortcode!==current[i]?.shortcode))renderAll();
+      }
       $$('#cards .card').forEach(card => {
         const code=card.dataset.code, status=productionState(code), badge=$('.production-status',card);
         if(!badge)return;
@@ -264,15 +273,21 @@
     </article>`;
   }
   let current = [];
+  function visiblePosts(base){
+    return discovery.filtered(base,state).filter(post=>state.production==='all'||
+      (isVideo(post)&&productionState(post.shortcode).state===state.production));
+  }
   function render() {
     const base = discovery.baseFiltered(POSTS,state);
-    current = discovery.filtered(base,state);
+    current = visiblePosts(base);
     $('#cards').innerHTML = current.map(card).join('');
     const emp = $('#empty'); emp.hidden = current.length > 0;
     if (!current.length) emp.textContent = state.detection === 'today' ? '오늘 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 오늘은 한국 시간 00시부터입니다.' : '선택한 기간에 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 설정에서 발견 기간이나 다른 조건을 확인하세요.';
+    if(!current.length&&state.production!=='all')emp.textContent=!studioLoaded?'영상 제작 상태를 확인하고 있어요…':
+      state.production==='completed'?'현재 조건에 맞는 완성 영상이 없습니다.':'현재 조건에 맞는 제작 중 영상이 없습니다.';
     $('#result-count').textContent = current.length;
     $('#result-count').setAttribute('aria-label',`현재 표시 게시물 ${current.length}개`);
-    const context=[state.topic,state.q?`검색: ${state.q}`:'',state.account?'@'+state.account:'',state.assessment!=='all'?{confirmed:'성과 확인',provisional:'잠정 후보'}[state.assessment]:''].filter(Boolean).join(' · ');
+    const context=[state.production!=='all'?{completed:'완성',working:'제작 중'}[state.production]:'',state.topic,state.q?`검색: ${state.q}`:'',state.account?'@'+state.account:'',state.assessment!=='all'?{confirmed:'성과 확인',provisional:'잠정 후보'}[state.assessment]:''].filter(Boolean).join(' · ');
     $('#result-context').textContent=context;$('#result-context').hidden=!context;
     return base;
   }

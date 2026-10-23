@@ -6,6 +6,9 @@
 
 | 기능 | 진입점 / 구현 | 검증 |
 |---|---|---|
+| PC→WireGuard→Android 폰 원격 릴스 게시(로컬 CLI) | mobile_reels_cli.py → mobile_device.py(ADB/장치·화면) / mobile_reels.py(패키지·호환 영상·폰 소유권·단일 공유) | test_mobile_reels.py; MOBILE_REELS_WIREGUARD.md; 실폰 IP/포트 미확보로 라이브 검증 미실행 |
+| 메인 전체 보기·완성·제작 중 버튼과 검색/조건 결합 | web/index.html/style.css; app.js visiblePosts → 기존 productionState; 상태 갱신 시 선택 목록 동기화 | refactor_ui_regression.test.cjs/discovery_model.test.cjs; 모바일390px 확인 |
+| 제작실 없는 게시용 서버·레퍼런스 계정 등록/현재 목록 갱신 | publication_server.py → account_registry_http.py → accounts.AccountRegistry; 게시물 준비는 post_preparation_http.py 재사용 | test_publication_accounts.py/test_account_git_sync.py/test_post_preparation.py; 신규 수집·제작은 시작하지 않음 |
 | PC별 완성 영상·현재 적용 썸네일의 날짜별 저장 | publication_export.py → local/video-storage.json + local/VIDEO_STORAGE.md(Git 제외); PostPreparation.source의 검증 완료본 읽기 | test_publication_export.py; [로컬 저장 규칙](LOCAL_VIDEO_STORAGE.md); 완료 에이전트가 저장/해시 검증 후 전달 |
 | 독립 게시용 광고·도입 감탄사 규칙 | post_media_rules.py → post_thumbnail.py/post_preparation.py; 광고 없는 본문 명시 반영/이후 body_final과 spoken_text/rules 유지 | test_post_media_rules.py/test_post_thumbnail.py; 실제 TTS271 적용·소스32 보존은 data/shelf-publication-rules-20261023/ |
 | 사용자 클릭으로 현재 썸네일/영상 첫 프레임 교체·진행 피드백 | post_thumbnail.py → post_preparation.py/post_preparation_http.py; web/post-preparation.js/css; thumbnail_jobs + active.json | test_post_thumbnail.py/test_post_preparation.py/post_preparation.test.cjs; 본문 프레임/음성 해시 검증 후 원자 공개 |

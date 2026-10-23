@@ -1,0 +1,6 @@
+{
+  "phone_ip": "",
+  "adb_port": 0,
+  "vpn_network": "10.9.0.0/24",
+  "android_serial": ""
+}
