@@ -1,4 +1,4 @@
-"""Check small, linked current instructions without loading operational history."""
+"""Check current instruction files, routes, and relative links."""
 import argparse
 import json
 from pathlib import Path
@@ -11,15 +11,12 @@ def check(root):
     root = Path(root).resolve()
     config = json.loads((root / 'docs/guidance.json').read_text(encoding='utf-8'))
     errors = []
-    for name, budget in config['documents'].items():
+    for name in config['documents']:
         path = root / name
         if not path.is_file():
             errors.append(f'{name}: missing document')
             continue
-        raw = path.read_bytes()
-        text = raw.decode('utf-8')
-        if budget is not None and len(raw) > budget:
-            errors.append(f'{name}: {len(raw)} bytes exceeds {budget}')
+        text = path.read_text(encoding='utf-8')
         for target in re.findall(r'\[[^\]\n]+\]\(([^)\n]+)\)', text):
             target = target.strip().strip('<>')
             parsed = urlsplit(target)
@@ -51,7 +48,7 @@ def main():
     for error in errors:
         print(error, file=sys.stderr)
     if not errors:
-        print('Guidance size, routes and current-document links passed.')
+        print('Guidance files, routes and current-document links passed.')
     return bool(errors)
 
 

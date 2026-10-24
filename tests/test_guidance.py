@@ -14,7 +14,7 @@ class GuidanceTests(unittest.TestCase):
         (self.root / 'docs').mkdir()
         (self.root / 'docs/rules.md').write_text('# Rules\n', encoding='utf-8')
         (self.root / 'docs/guidance.json').write_text(json.dumps({
-            'documents': {'AGENTS.md': 100},
+            'documents': ['AGENTS.md'],
             'required_routes': ['docs/rules.md'],
             'forbidden_root_phrases': ['retired-command'],
         }), encoding='utf-8')
@@ -24,16 +24,13 @@ class GuidanceTests(unittest.TestCase):
     def test_valid_routes_pass(self):
         self.assertEqual(check(self.root), [])
 
-    def test_budget_counts_utf8_bytes(self):
-        self.agents.write_text(self.agents.read_text() + '가' * 30, encoding='utf-8')
-        self.assertTrue(any('exceeds' in error for error in check(self.root)))
-
-    def test_unlimited_document_still_checks_links(self):
+    def test_large_documents_still_check_links(self):
+        self.agents.write_text(self.agents.read_text() + '가' * 5000, encoding='utf-8')
         workflow = self.root / 'docs/WORKFLOW.md'
         workflow.write_text('[Rules](rules.md)\n' + '가' * 5000, encoding='utf-8')
         config = self.root / 'docs/guidance.json'
         settings = json.loads(config.read_text(encoding='utf-8'))
-        settings['documents']['docs/WORKFLOW.md'] = None
+        settings['documents'].append('docs/WORKFLOW.md')
         config.write_text(json.dumps(settings), encoding='utf-8')
         self.assertEqual(check(self.root), [])
         workflow.write_text('[Missing](missing.md)\n' + '가' * 5000, encoding='utf-8')

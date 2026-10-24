@@ -1,11 +1,11 @@
 {
-  "documents": {
-    "AGENTS.md": 6000,
-    "docs/DEVELOPMENT.md": 8000,
-    "docs/WORKFLOW.md": null,
-    "docs/SOURCE_WORKFLOW.md": 12000,
-    "docs/CODE_MAP.md": 8000
-  },
+  "documents": [
+    "AGENTS.md",
+    "docs/DEVELOPMENT.md",
+    "docs/WORKFLOW.md",
+    "docs/SOURCE_WORKFLOW.md",
+    "docs/CODE_MAP.md"
+  ],
   "required_routes": [
     "docs/COLLABORATION.md",
     "docs/WORKFLOW.md",
