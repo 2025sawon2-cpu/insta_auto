@@ -15,10 +15,14 @@ duration and word timestamps as its timeline clock.
 `script_from_transcript` copies only `speech` segments into `words.txt`.
 `screen_text` remains OCR evidence and is never silently converted into spoken
 subtitles. All assets passed by the adapter must live under `data/`.
-Final editing rejects `source_quality=unknown` and detected text overlays by
-default. A Windows compatibility spike may opt into unclassified footage
-explicitly, but that override is not a claim that the footage is clean or
-licensed.
+The legacy adapter rejects `source_quality=unknown` and detected text overlays by
+default. The current production masking rule is scoped to original source-script
+captions and source watermarks; it does not require blanket masking of product
+labels or other incidental text. If a legacy rejection treats those as the same
+kind of overlay, record the implementation mismatch and correct that path
+separately rather than claiming the current output passed. A Windows compatibility
+spike may opt into unclassified footage explicitly, but that override is not a
+claim that the footage is clean or licensed.
 
 `hotpost.voicebench_adapter.VoiceBenchAdapter` sends the spoken script to the
 separate VoiceBench HTTP API, polls the returned request ID without resubmitting,
@@ -90,7 +94,11 @@ VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
 동작을 유지한다. 선택은 해당 문장에 검토된 후보 안에서만 수행하며 부족한 길이와
 반복량을 기록한다. 실제 다양성 감사는 파생 클립 개수가 아니라 원본 SHA-256과
 원본 시간 오프셋으로 합산한다. 수동 소스 재제작에서도 기존 음성 해시·대본·자막
-시계를 보존하고 새 수정본만 추가한다.
+시계를 보존하고 새 수정본만 추가한다. 영상 컷의 역할 이름이나 길이로 자막 문구와
+표시 시각을 다시 만들지 않는다. 음성 또는 대본을 실제로 바꾼 경우에만 해당 버전의
+단어 시각에 맞춰 자막을 갱신하고, 컷을 바꾼 뒤에도 최종 MP4에서 발화·자막의
+문구와 순서를 여러 시점에서 직접 확인한다. 오디오·비디오 시작 시각의 일치만으로
+문장별 싱크가 맞는다고 판정하지 않는다.
 
 사용자가 비교 후 승인한 `tight` 쉼 처리를 신규 제작실 편집에 기본 적용한다.
 VoiceBench의 원본 복제 음성 WAV와 voice ID는 보존한다. 별도 처리 WAV를
