@@ -1,5 +1,7 @@
 # Studio 런타임 코드 지도
 
+> 보존된 제작실·자동 실행기 구현 설명입니다. 현재 신규 제작·검색·중지·완료 기준은 [WORKFLOW](WORKFLOW.md), [SOURCE_WORKFLOW](SOURCE_WORKFLOW.md), [대본 규칙](../hotpost/writing/RULES.md)을 따릅니다. 아래 과거 기본값·예약·병렬 처리·재시도 예시는 현재 실행 지시가 아니며, 기존 run과 구현 이력은 보존합니다.
+
 외부 진입점은 계속 `from hotpost.studio import Studio`다. HTTP 경로, DB 상태 형식,
 작업 ID, 체크포인트, 기존 영상 경로는 변경하지 않았다. `studio.py`는 작업 디렉터리,
 DB, 프로세스 잠금 및 워커 소유권을 초기화하고 아래 책임을 조립한다.

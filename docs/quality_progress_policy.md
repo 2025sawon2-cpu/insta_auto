@@ -1,5 +1,11 @@
 # 품질 진전 기반 제작 중단 계약
 
+현재 한 편의 진전 판단·무진전 보류에는 이 문서의 원칙을 적용한다.
+아래 SQLite/큐/worker/`quality_prepare_only`는 보존된 자동 실행기의 구현 설명이며
+현재 [WORKFLOW](WORKFLOW.md)의 독립 제작 경로를 대체하지 않는다.
+신규 전담 제작자는 같은 task/run에 결함·수정 가설·실제 전후 근거와 보류를
+기록한다. 이 원칙을 지키려고 Studio를 재가동하거나 과거 작업을 재제작하지 않는다.
+
 2026-10-13부터 자동 품질 보완은 고정 3회 상한 대신 실제 결함과 수정 근거로 진행한다.
 `daily_quality.policy`는 기존 검토 계약을 유지하며, 하위 `progress_policy.policy`는
 `quality-progress-20261013-v1`이다. 누적 `repair_round`, `render_accounting`, 기존

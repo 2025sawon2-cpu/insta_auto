@@ -1,5 +1,7 @@
 # 제작 파이프라인 안내
 
+> 보존된 제작실·자동 실행기 구현 설명입니다. 현재 신규 제작·검색·중지·완료 기준은 [WORKFLOW](WORKFLOW.md), [SOURCE_WORKFLOW](SOURCE_WORKFLOW.md), [대본 규칙](../hotpost/writing/RULES.md)을 따릅니다. 아래 과거 기본값·예약·병렬 처리·재시도 예시는 현재 실행 지시가 아니며, 기존 run과 구현 이력은 보존합니다.
+
 insta_auto가 후보 선정·자료 확보와 내장 Codex 집필을 맡고, VoiceBench가 음성, auto_capcut이 편집을 맡는다.
 
 `start-local.cmd`는 Codex 실행 파일을 확인하고 음성·Hotpost 서비스를 시작한다. script_auto 서버는 시작하지 않는다. 새 PC 준비는 [설치 안내](windows-install.md), 집필 규칙과 작업 큐는 [내장 집필](writing.md)을 따른다. VoiceBench의 기본 목소리와 개인 녹음은 기존 설정을 보존한다.

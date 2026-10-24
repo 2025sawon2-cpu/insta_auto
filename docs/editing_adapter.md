@@ -1,5 +1,12 @@
 # Editing adapter
 
+현재 실행 경계는 [WORKFLOW](WORKFLOW.md), 편집 품질은
+[제품 매력 기준](editorial_montage_policy.md), 글꼴·표지는
+[RULES](../hotpost/writing/RULES.md)를 따른다. 아래 production UI/Studio 연결과
+2026-10-07 나눔고딕 스타일은 보존된 구현 설명이다. 신규 제작에서 제작실을
+켜거나 현재 본문 십대·표지 도현을 이전 글꼴로 바꾸라는 지시가 아니다.
+프로세스·버전 JSON 경계와 아래 음성/자막 시간축 원칙은 계속 적용한다.
+
 `insta_auto` and `auto_capcut` remain separate processes even when their Git
 repositories are later combined. `hotpost.editing_adapter.AutoCapcutAdapter`
 writes a versioned request under `data/editing_jobs/<job_id>/` and invokes the
