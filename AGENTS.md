@@ -15,6 +15,7 @@
 - 기존 제작실 UI/API/Studio 실행기는 **outdated / 참고용 보존**이다. 신규 기본 경로로 쓰거나 정리 목적으로 코드·데이터를 삭제/이동하지 않는다. 현재 게시용 경로는 `hotpost.publication_server`다.
 - 영상은 한 편씩 준비부터 현재 파일에 결속한 최종 QA까지 완료한다. 실패/보류/중지는 완료가 아니며 다음 영상으로 자동 건너뛰지 않는다.
 - 영상 시작·재개 시 [현재 작업 경계](docs/WORKFLOW.md)의 전담 제작자·별도 읽기 전용 감시자 결속과 완료 후 감시 Markdown 독립 검증을 확인한다.
+- 신규 제작·중단 재개·레퍼런스 현황은 각각 저장소 `skills/hotpost-new-production`, `skills/hotpost-resume-production`, `skills/hotpost-reference-status`를 진입점으로 사용한다. 실제 규칙과 상태 계약은 WORKFLOW·REFERENCE_STATUS가 원본이다.
 - `data/`, `local/`, `.runtime/`, 세션·쿠키·음성·모델·미디어·로컬 인계는 보존하고 커밋하지 않는다. 비밀값을 출력하지 않는다.
 - 브라우저·수집은 기존 로그인 Chrome 세션, 결과 전달은 검증된 Cloudflare HTTPS다. 접근 차단을 우회하지 않는다.
 - VoiceBench는 HTTP API, Auto CapCut은 버전 JSON·별도 프로세스 경계를 유지한다. 개인 목소리·참조·Seed·사용자 선택 대본을 임의 대체하지 않는다.
@@ -28,6 +29,7 @@
 | 음성·잘림 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
 | 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md) |
 | 영상 시작·완료·썸네일 완료 | [LOCAL_VIDEO_STORAGE.md](docs/LOCAL_VIDEO_STORAGE.md) + 원래 clone의 `local/VIDEO_STORAGE.md`, `local/video-storage.json` |
+| 신규 제작 선정·중단 재개·레퍼런스 현황 | [REFERENCE_STATUS.md](docs/REFERENCE_STATUS.md), [WORKFLOW.md](docs/WORKFLOW.md) |
 | 게시물 문구·썸네일 반영 | [POST_COPY_RULES.md](docs/POST_COPY_RULES.md), [게시물 준비 계약](docs/POST_PREPARATION_UI_20261022.md) |
 | 폰 제어·게시 | [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md) |
 | 개발 검증·지침 유지보수 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) |

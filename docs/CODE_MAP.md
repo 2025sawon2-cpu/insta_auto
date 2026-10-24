@@ -14,6 +14,7 @@
 | 대본 계약·3안·후킹·금지 표현 | hotpost/writing/RULES.md → contract.py, variants.py, hook_policy.py, script_style.py, pipeline.py | test_first_sentence_hook.py, test_writing_variants.py, test_internal_writing.py |
 | VoiceBench HTTP 연동 | hotpost/voicebench_adapter.py | test_voicebench_adapter.py |
 | 수집·분석·리포트(별도 실행 승인) | hotpost/cli.py → collectors/, storage.py, analyze.py, report.py | test_collection_control.py, hot_detection.test.cjs |
+| 레퍼런스 순위·게시물별 제작 상태 | hotpost/reference_registry.py, data/reference-status.json | test_reference_registry.py |
 | 설정 | hotpost/config.py, config.json, HOTPOST_* | 설정을 변경하는 기능의 계약 테스트 |
 | 지침 용량·경로 | tools/check_guidance.py, docs/guidance.json | .github/workflows/guidance.yml |
 
