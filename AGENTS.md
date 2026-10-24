@@ -17,7 +17,7 @@
 - 영상 시작·재개 시 [현재 작업 경계](docs/WORKFLOW.md)의 전담 제작자·별도 읽기 전용 감시자 결속과 완료 후 감시 Markdown 독립 검증을 확인한다.
 - 신규 제작·중단 재개·레퍼런스 현황은 각각 저장소 `skills/hotpost-new-production`, `skills/hotpost-resume-production`, `skills/hotpost-reference-status`를 진입점으로 사용한다. 실제 규칙과 상태 계약은 WORKFLOW·REFERENCE_STATUS가 원본이다.
 - `data/`, `local/`, `.runtime/`, 세션·쿠키·음성·모델·미디어·로컬 인계는 보존하고 커밋하지 않는다. 비밀값을 출력하지 않는다.
-- 브라우저·수집은 기존 로그인 Chrome 세션, 결과 전달은 검증된 Cloudflare HTTPS다. 접근 차단을 우회하지 않는다.
+- 브라우저·수집은 기존 로그인 Chrome 세션을 사용한다. 사용자에게 링크를 줄 때는 [WORKFLOW](docs/WORKFLOW.md)의 검증된 Cloudflare HTTPS 전달 규칙을 따른다. 접근 차단을 우회하지 않는다.
 - VoiceBench는 HTTP API, Auto CapCut은 버전 JSON·별도 프로세스 경계를 유지한다. 개인 목소리·참조·Seed·사용자 선택 대본을 임의 대체하지 않는다.
 
 ## 작업별 원본
