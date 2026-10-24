@@ -133,6 +133,19 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
     if state == "completed":
         if not qa_evidence or not final_sha256 or not re.fullmatch(r"[0-9a-fA-F]{64}", final_sha256):
             raise ValueError("Completion requires final QA evidence and final file SHA-256")
+        if current["state"] != "in_progress":
+            raise ValueError("Only the current in-progress video can be completed")
+        if not all(current.get(key) for key in ("task_id", "run_id", "owner", "monitor")):
+            raise ValueError("Completion requires the bound task/run and producer/monitor")
+        if current["owner"] == current["monitor"]:
+            raise ValueError("Producer and monitor must be distinct")
+        for key, supplied in (("task_id", task_id), ("run_id", run_id), ("owner", owner), ("monitor", monitor)):
+            if supplied is not None and supplied != current[key]:
+                raise ValueError(f"Completion cannot change the bound {key}")
+        from .final_qa import validate
+        qa = validate(qa_evidence, video_id=code, task_id=current["task_id"],
+                      run_id=current["run_id"], producer=current["owner"],
+                      final_sha256=final_sha256)
     changed_at = datetime.now(KST).isoformat()
     updated = dict(current)
     updated.update({"state": state, "stage": stage if stage is not None else current.get("stage"),
@@ -148,8 +161,10 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
     if new_over_paused:
         updated["new_over_paused"] = sorted(new_over_paused)
     if state == "completed":
-        updated["qa_evidence"] = qa_evidence
-        updated["final_sha256"] = final_sha256.lower()
+        updated["qa_evidence"] = qa["record_path"]
+        updated["qa_record_sha256"] = qa["record_sha256"]
+        updated["final_sha256"] = qa["video"]["sha256"]
+        updated["cover_sha256"] = qa["cover"]["sha256"]
     registry["posts"][code]["production"] = updated
     return registry
 

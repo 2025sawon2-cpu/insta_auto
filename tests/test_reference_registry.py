@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
@@ -70,6 +71,49 @@ def test_completion_needs_qa_and_read_only_view_does_not_write(tmp_path, capsys)
     sync(registry, report(post("a", 24, 1)), report_path)
     with pytest.raises(ValueError, match="Completion requires"):
         mark(registry, "a", "completed", "Rendered file", expected="unknown")
-    mark(registry, "a", "completed", "Final QA verified", expected="unknown",
-         qa_evidence="qa/report.json", final_sha256="a" * 64)
-    assert registry["posts"]["a"]["production"]["final_sha256"] == "a" * 64
+    mark(registry, "a", "in_progress", "One bound production", expected="unknown",
+         task_id="task-a", run_id="run-a", owner="producer", monitor="watcher")
+    video, cover = tmp_path / "final.mp4", tmp_path / "cover.png"
+    video.write_bytes(b"reviewed video")
+    cover.write_bytes(b"reviewed cover")
+    sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    record = {
+        "schema_version": 1, "video_id": "a", "task_id": "task-a", "run_id": "run-a",
+        "edit_id": "edit-a", "producer": "producer", "reviewed_at": "2026-10-25T09:00:00+09:00",
+        "artifacts": {
+            **{key: {"id": key + "-a", "sha256": "a" * 64} for key in ("script", "voice", "plan")},
+            "video": {"path": str(video), "sha256": sha(video)},
+            "cover": {"path": str(cover), "sha256": sha(cover)},
+        },
+        "checks": {key: {"status": "충족", "evidence": [{"asset": asset,
+                   "location": "00:02 or opening sentence", "observation": "Current output checked"}]}
+                   for key, asset in (("script", "script"), ("visual", "video"),
+                                      ("audio_captions", "video"), ("cover_delivery", "cover"))},
+    }
+    qa = tmp_path / "final-qa.json"
+    qa.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="must be an existing file"):
+        mark(registry, "a", "completed", "Fake QA", expected="in_progress",
+             qa_evidence=tmp_path / "missing.json", final_sha256=sha(video))
+    with pytest.raises(ValueError, match="completion request"):
+        mark(registry, "a", "completed", "Wrong hash", expected="in_progress",
+             qa_evidence=qa, final_sha256="a" * 64)
+    record["checks"]["visual"]["status"] = "수정 필요"
+    qa.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match="visual is not confirmed"):
+        mark(registry, "a", "completed", "Needs fix", expected="in_progress",
+             qa_evidence=qa, final_sha256=sha(video))
+    record["checks"]["visual"]["status"] = "충족"
+    qa.write_text(json.dumps(record), encoding="utf-8")
+    cover.write_bytes(b"changed cover")
+    with pytest.raises(ValueError, match="cover bytes changed"):
+        mark(registry, "a", "completed", "Stale cover", expected="in_progress",
+             qa_evidence=qa, final_sha256=sha(video))
+    record["artifacts"]["cover"]["sha256"] = sha(cover)
+    qa.write_text(json.dumps(record), encoding="utf-8")
+    mark(registry, "a", "completed", "Final QA verified", expected="in_progress",
+         qa_evidence=qa, final_sha256=sha(video))
+    production = registry["posts"]["a"]["production"]
+    assert production["final_sha256"] == sha(video)
+    assert production["cover_sha256"] == sha(cover)
+    assert production["qa_record_sha256"] == sha(qa)

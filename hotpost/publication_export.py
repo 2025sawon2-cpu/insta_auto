@@ -107,7 +107,7 @@ def validate_video(path):
         raise ValueError('게시용 영상의 음성은 AAC여야 합니다.')
 
 
-def save_current(service, code, *, topic=None, config=None, now=None):
+def save_current(service, code, *, topic=None, config=None, now=None, qa_record=None):
     from .post_preparation import shortcode
     code = shortcode(code)
     destination, rules = read_rules(config)
@@ -115,6 +115,9 @@ def save_current(service, code, *, topic=None, config=None, now=None):
     video, cover = source['media']['final'], source['media']['cover']
     if not source['run_id'] or not source['edit_id'] or not video or not cover:
         raise ValueError('검증된 완성 영상과 실제 적용 썸네일이 모두 있어야 저장할 수 있습니다.')
+    from .final_qa import validate as validate_final_qa
+    qa = validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
+                           edit_id=source['edit_id'], video=video, cover=cover)
     topic = short_topic(topic or rules.get('topics', {}).get(code, ''))
     validate_video(video)
     hashes = [digest(video), digest(cover)]
@@ -139,6 +142,8 @@ def save_current(service, code, *, topic=None, config=None, now=None):
             stem = base + (f'_{number:02}' if number > 1 else '')
             targets = [day / (stem + '.mp4'), day / (stem + '_썸네일' + suffix)]
             if all(path.is_file() for path in targets) and [digest(path) for path in targets] == hashes:
+                validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
+                                  edit_id=source['edit_id'], video=video, cover=cover)
                 return {'status': 'already_saved', 'video': str(targets[0]), 'thumbnail': str(targets[1]), 'sha256': hashes}
             if any(path.exists() for path in targets):
                 continue
@@ -154,6 +159,10 @@ def save_current(service, code, *, topic=None, config=None, now=None):
                 if (current['media'] != source['media'] or current['edit_id'] != source['edit_id']
                         or current.get('media_version') != source.get('media_version')):
                     raise ValueError('저장 중 현재 완성본이 변경됐습니다. 최신 결과로 다시 저장하세요.')
+                validated = validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
+                                              edit_id=source['edit_id'], video=video, cover=cover)
+                if validated['record_sha256'] != qa['record_sha256']:
+                    raise ValueError('저장 중 최종 QA 기록이 변경됐습니다. 다시 검토하세요.')
                 for temporary, target in zip(staged, targets):
                     # Exclusive creation protects unrelated files even from non-cooperating writers.
                     with target.open('xb') as output, temporary.open('rb') as input_file:
@@ -175,6 +184,7 @@ def main():
     save = commands.add_parser('save')
     save.add_argument('shortcode')
     save.add_argument('--topic', help='Short subject, without a date or file extension')
+    save.add_argument('--qa-record', type=Path, required=True, help='Producer final QA JSON for the current video and cover')
     args = parser.parse_args()
     try:
         if args.command == 'configure':
@@ -182,7 +192,8 @@ def main():
         else:
             from .config import load_settings
             from .post_preparation import PostPreparation
-            result = save_current(PostPreparation(load_settings()), args.shortcode, topic=args.topic, config=args.config)
+            result = save_current(PostPreparation(load_settings()), args.shortcode, topic=args.topic,
+                                  config=args.config, qa_record=args.qa_record)
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, str(error) + '\n')

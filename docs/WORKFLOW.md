@@ -49,6 +49,14 @@
 
 `수정 필요`나 `확인 불가`가 남은 현재 파일은 완료 조건을 충족했다고 기록하지 않는다. 제작자는 확인된 부분을 수정하고 영향받은 항목과 새 파일을 다시 QA한다. 무진전 반복과 불필요한 전체 재제작은 위 보류·최소 수리 원칙을 따른다. 후속 감시·검증에서 필수 완료 항목의 결함이 확인되면 그 파일을 품질 합격본으로 계속 보고하지 않고 [공통 상태](REFERENCE_STATUS.md)의 완료 근거를 정정한다. 기존 파일·이력은 보존하며 허용된 같은 영상의 수정본을 해당 항목부터 다시 QA한다. 이전 파일의 통과 근거를 새 파일에 그대로 적용하지 않는다.
 
+### 현재 파일에 결속한 제작자 QA 기록
+
+판정 기준은 위 Markdown 규칙이다. 제작 에이전트는 실제 파일을 보고 판단한 뒤, 같은 Git 제외 task/run 폴더에 UTF-8 JSON 기록을 남긴다. `schema_version=1`, `video_id`(shortcode), `task_id`, `run_id`, `edit_id`, `producer`, 시간대가 있는 ISO `reviewed_at`이 필요하다. `artifacts`의 `script`·`voice`·`plan`에는 각각 현재 선택본의 `id`와 SHA-256을, `video`·`cover`에는 각각 현재 최종 파일의 절대 `path`와 실제 SHA-256을 기록한다. 입력 세 항목의 ID·해시는 제작자가 원래 작업 자료와 대조해 기록하며, 코드가 그 내용 자체를 판단했다고 보고하지 않는다.
+
+`checks`에는 `script`, `visual`, `audio_captions`, `cover_delivery` 네 항목을 모두 둔다. 각 항목은 `status`를 `충족 / 수정 필요 / 확인 불가` 중 하나로 기록하고, `evidence` 배열에 실제 관찰의 `asset`·`location`(문장·시간 구간·프레임 등)·`observation`을 남긴다. 대본 항목은 `script`, 화면·음성/자막 항목은 `video`, 표지·전달 항목은 `cover`에 대한 근거를 각각 포함한다. 예: `"visual": {"status": "충족", "evidence": [{"asset": "video", "location": "00:03.2–00:05.1", "observation": "처리 과정 뒤 양말의 변화가 보임"}]}`. 빈 근거나 `수정 필요`·`확인 불가`가 있으면 완료로 표시하지 않는다.
+
+`hotpost.final_qa.validate`는 기록의 형식·task/run·제작자 결속과 현재 영상·표지의 파일 존재/해시를 검사한다. 관찰 내용의 진실성·후킹·청감·마스킹 품질을 자동 보증하지 않는다. `reference_registry mark ... --state completed`와 `publication_export save ... --qa-record <이 JSON>`은 같은 검사를 거친다. 썸네일 반영 작업의 `completed`는 기술 작업의 종료이며 영상 품질 완료가 아니다. 반영 후 영상/표지 바이트가 달라졌다면 그 파일을 새로 검토해 QA 기록을 갱신한다. 과거 제작실 DB의 완료 이력은 읽기용으로 보존하고 새 QA 합격으로 소급 해석하지 않는다.
+
 ## 콘텐츠·서비스 경계
 
 - 대본은 `writing/RULES.md`가 단일 원본이다. 세 안, 첫 문장의 미해결 의문, 도입 감탄사·금지 질문형, 짧은 '나도' 종결과 사용자 선택안을 보존한다. 선택 원고를 원본 전사로 대체하지 않는다.
