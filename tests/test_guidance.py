@@ -28,6 +28,17 @@ class GuidanceTests(unittest.TestCase):
         self.agents.write_text(self.agents.read_text() + '가' * 30, encoding='utf-8')
         self.assertTrue(any('exceeds' in error for error in check(self.root)))
 
+    def test_unlimited_document_still_checks_links(self):
+        workflow = self.root / 'docs/WORKFLOW.md'
+        workflow.write_text('[Rules](rules.md)\n' + '가' * 5000, encoding='utf-8')
+        config = self.root / 'docs/guidance.json'
+        settings = json.loads(config.read_text(encoding='utf-8'))
+        settings['documents']['docs/WORKFLOW.md'] = None
+        config.write_text(json.dumps(settings), encoding='utf-8')
+        self.assertEqual(check(self.root), [])
+        workflow.write_text('[Missing](missing.md)\n' + '가' * 5000, encoding='utf-8')
+        self.assertTrue(any('broken/local-only link' in error for error in check(self.root)))
+
     def test_deleted_original_is_reported(self):
         (self.root / 'docs/rules.md').unlink()
         self.assertTrue(any('broken/local-only' in error for error in check(self.root)))

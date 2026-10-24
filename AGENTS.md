@@ -27,7 +27,7 @@
 | 집필·수정·대본 검사 | [writing/RULES.md](hotpost/writing/RULES.md) |
 | 소스 검색·검토·검색 기록 | [SOURCE_WORKFLOW.md](docs/SOURCE_WORKFLOW.md), [SOURCE_SEARCH_LOG.md](docs/SOURCE_SEARCH_LOG.md) |
 | 음성·잘림 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
-| 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md), [FINAL_QA.md](docs/FINAL_QA.md) |
+| 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md) |
 | 영상 시작·완료·썸네일 완료 | [LOCAL_VIDEO_STORAGE.md](docs/LOCAL_VIDEO_STORAGE.md) + 원래 clone의 `local/VIDEO_STORAGE.md`, `local/video-storage.json` |
 | 신규 제작 선정·중단 재개·레퍼런스 현황 | [REFERENCE_STATUS.md](docs/REFERENCE_STATUS.md), [WORKFLOW.md](docs/WORKFLOW.md) |
 | 게시물 문구·썸네일 반영 | [POST_COPY_RULES.md](docs/POST_COPY_RULES.md), [게시물 준비 계약](docs/POST_PREPARATION_UI_20261022.md) |

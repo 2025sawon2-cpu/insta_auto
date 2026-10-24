@@ -21,7 +21,7 @@
 | `blocked` | 실제 필수 단계 또는 품질/접근 보류. 진전 근거 없는 재호출 금지. |
 | `completed` | 현재 최종 파일의 QA 근거와 SHA-256으로 완료 확인. 게시 완료를 뜻하지 않는다. |
 
-상태 변경은 `python -m hotpost.reference_registry mark <video_id> --expected-state <현재값> --state <새값> --evidence <근거>`로 한다. 변경 전 `show`와 실제 작업 자료를 다시 확인한다. `in_progress`에는 task/run·서로 다른 제작자/감시자가 필요하고 다른 영상이 진행 중이면 거부한다. 다른 `paused/blocked` 영상이 있으면, 사용자가 현황을 보고 **기존 영상 재개 또는 새 영상**을 선택한 기록·이유와 `--new-over-paused <ID>`를 함께 남겨야 새 영상으로 전환할 수 있다. 기존 중단 상태·자료는 유지하고 병행 제작하지 않는다. `completed`에는 `--qa-evidence`와 현재 최종 파일의 `--final-sha256`이 필수다. `--qa-evidence`는 [현재 파일 최종 QA](FINAL_QA.md)의 실제 기록을 가리켜야 하며 임의의 합격 문구나 과거 후보 기록으로 대신하지 않는다. 상태값이나 SHA만 바꿔 실제 QA를 대신하지 않는다.
+상태 변경은 `python -m hotpost.reference_registry mark <video_id> --expected-state <현재값> --state <새값> --evidence <근거>`로 한다. 변경 전 `show`와 실제 작업 자료를 다시 확인한다. `in_progress`에는 task/run·서로 다른 제작자/감시자가 필요하고 다른 영상이 진행 중이면 거부한다. 다른 `paused/blocked` 영상이 있으면, 사용자가 현황을 보고 **기존 영상 재개 또는 새 영상**을 선택한 기록·이유와 `--new-over-paused <ID>`를 함께 남겨야 새 영상으로 전환할 수 있다. 기존 중단 상태·자료는 유지하고 병행 제작하지 않는다. `completed`에는 `--qa-evidence`와 현재 최종 파일의 `--final-sha256`이 필수다. `--qa-evidence`는 [현재 파일 최종 QA](WORKFLOW.md#제작자의-완료-전-최종-qa)의 실제 기록을 가리켜야 하며 임의의 합격 문구나 과거 후보 기록으로 대신하지 않는다. 상태값이나 SHA만 바꿔 실제 QA를 대신하지 않는다.
 
 ## 스킬이 읽는 순서
 

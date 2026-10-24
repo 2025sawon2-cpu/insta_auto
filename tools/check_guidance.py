@@ -18,7 +18,7 @@ def check(root):
             continue
         raw = path.read_bytes()
         text = raw.decode('utf-8')
-        if len(raw) > budget:
+        if budget is not None and len(raw) > budget:
             errors.append(f'{name}: {len(raw)} bytes exceeds {budget}')
         for target in re.findall(r'\[[^\]\n]+\]\(([^)\n]+)\)', text):
             target = target.strip().strip('<>')
