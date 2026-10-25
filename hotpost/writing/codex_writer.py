@@ -19,6 +19,7 @@ from jsonschema import Draft202012Validator
 
 ENVELOPE = {'type': 'object', 'properties': {'text': {'type': 'string'}},
             'required': ['text'], 'additionalProperties': False}
+SCRIPT_MODEL = 'gpt-6-sol'
 
 
 def executable():
@@ -35,10 +36,11 @@ def executable():
     return value
 
 
-def command(binary, directory, schema, output, *, allow_web=False):
+def command(binary, directory, schema, output, *, allow_web=False, model=None):
     # Isolate user MCP/hooks/config from the text writer; authentication stays
     # with the official CLI. No shell, web search, project instructions or edits.
-    return [binary, 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
+    return [binary, 'exec', *(['--model', model] if model else []),
+            '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
             '--sandbox', 'read-only', '--disable', 'shell_tool',
             '-c', 'web_search="live"' if allow_web else 'web_search="disabled"', '-c', 'approval_policy="never"',
             '-c', 'project_doc_max_bytes=0', '-C', str(directory), '--json', '--color', 'never',
@@ -196,6 +198,7 @@ def _chat_permitted(system,prompt,schema,check,state,timeout,images,*,allow_web,
             + json.dumps(schema, ensure_ascii=False) if schema else
             'text 필드에 요청된 완성 텍스트만 담으세요.')
     purpose=state.get('purpose')
+    requested_model = SCRIPT_MODEL if purpose == 'script_writing' else None
     mode=('영상 담당 에이전트의 다음 도구 호출을 JSON으로 결정하세요. 호스트가 검증 후 실행하고 결과를 다음 턴에 제공합니다. CLI 도구를 직접 실행하지 마세요. ' if purpose=='video_agent' else
           '코드 수정의 독립 검토입니다. 제공된 변경 내용과 테스트 증거를 검토해 JSON 판정을 반환하세요. CLI 도구를 직접 실행하지 마세요. ' if purpose=='repair_review' else
           '제품 조사 전용 작업입니다. 웹 검색만 사용하고 파일·셸 도구는 사용하지 마세요. ' if allow_web else
@@ -209,7 +212,10 @@ def _chat_permitted(system,prompt,schema,check,state,timeout,images,*,allow_web,
     spec.write_text(json.dumps(ENVELOPE), encoding='utf-8')
     receipt = {'provider': 'codex', 'status': 'starting', 'call_id': folder.name,
                'request_sha256': hashlib.sha256(request.encode()).hexdigest(),
-                'model_selection': 'codex_cli_default', 'fallback': False, 'web_research':allow_web}
+                'model_selection': 'explicit' if requested_model else 'codex_cli_default',
+                'fallback': False, 'web_research':allow_web}
+    if requested_model:
+        receipt['requested_model'] = requested_model
     state['calls'].append(receipt)
     def save():
         (folder/'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), 'utf-8')
@@ -231,7 +237,10 @@ def _chat_permitted(system,prompt,schema,check,state,timeout,images,*,allow_web,
                     from .owner_session import command as owner_command
                     args=owner_command(binary,cwd,spec,output,owner_context['thread_id'])
                 else:
-                    args = command(binary, cwd, spec, output, allow_web=True) if allow_web else command(binary, cwd, spec, output)
+                    options = {'allow_web': True} if allow_web else {}
+                    if requested_model:
+                        options['model'] = requested_model
+                    args = command(binary, cwd, spec, output, **options)
                 for image in image_inputs:
                     args[-1:-1] = ['--image', str(image)]
                 process = subprocess.Popen(args, stdin=stdin,

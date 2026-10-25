@@ -38,6 +38,52 @@ def test_inner_schema_is_validated():
         codex_writer.decode(json.dumps({'text': '{"text":1}'}), schema)
 
 
+@pytest.mark.parametrize('purpose', ['script_writing', 'repair_review', None])
+def test_script_model_is_explicit_through_format_repair_without_changing_other_calls(tmp_path, monkeypatch, purpose):
+    original = codex_writer.command
+    launched = []
+
+    def transport(binary, directory, schema, output, **options):
+        launched.append(original(binary, directory, schema, output, **options))
+        # First response needs JSON encoding repair; the second is valid.
+        value = '{"text":"ok",}' if len(launched) == 1 else '{"text":"ok"}'
+        code = ('import json;'
+                f'open({str(output)!r},"w").write(json.dumps({{"text":{value!r}}}));'
+                'print(json.dumps({"type":"turn.completed"}),flush=True)')
+        return [sys.executable, '-c', code]
+
+    monkeypatch.setattr(codex_writer, 'executable', lambda: sys.executable)
+    monkeypatch.setattr(codex_writer, 'command', transport)
+    state = {'directory':tmp_path, 'calls':[], 'purpose':purpose}
+    schema = {'type':'object', 'properties':{'text':{'type':'string'}}, 'required':['text']}
+    assert codex_writer.chat('rules', 'data', schema, lambda:None, state) == {'text':'ok'}
+    assert len(launched) == 2
+    for args, receipt in zip(launched, state['calls']):
+        if purpose == 'script_writing':
+            assert args[args.index('--model')+1] == 'gpt-6-sol'
+            assert receipt['model_selection'] == 'explicit'
+            assert receipt['requested_model'] == 'gpt-6-sol'
+        else:
+            assert '--model' not in args
+            assert receipt['model_selection'] == 'codex_cli_default'
+            assert 'requested_model' not in receipt
+        assert receipt['fallback'] is False
+
+
+def test_unavailable_script_model_fails_without_default_model_retry(tmp_path, monkeypatch):
+    requests = []
+    def transport(binary, directory, schema, output, **options):
+        requests.append(options)
+        return [sys.executable, '-c', 'import json,sys;print(json.dumps({"type":"turn.failed","error":{"message":"model unavailable"}}),flush=True);sys.exit(1)']
+    monkeypatch.setattr(codex_writer, 'executable', lambda:sys.executable)
+    monkeypatch.setattr(codex_writer, 'command', transport)
+    state = {'directory':tmp_path, 'calls':[], 'purpose':'script_writing'}
+    with pytest.raises(RuntimeError, match='완료되지'):
+        codex_writer.chat('rules', 'data', None, lambda:None, state)
+    assert requests == [{'model':'gpt-6-sol'}]
+    assert state['calls'][0]['status'] == 'failed'
+
+
 def test_timeout_terminates_only_spawned_child_and_records_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_writer, 'executable', lambda: sys.executable)
     monkeypatch.setattr(codex_writer, 'command', lambda *a: [sys.executable, '-c', 'import time;time.sleep(30)'])
