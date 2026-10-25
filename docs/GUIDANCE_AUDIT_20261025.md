@@ -32,10 +32,16 @@
 
 이 검증은 코드 계약과 지침 일관성에 관한 것이다. 스킬로 만든 실제 한 편의 품질 성공은 제작자의 현재 파일 QA와 완료 후 감시 보고서·독립 확인이 끝나야 판단한다. 과거 완료 영상의 이전 QA는 새 계약 통과로 소급하지 않는다. 이 감사 기록을 운영 재개·실제 게시 지시로 사용하지 않는다.
 
-## 2026-10-25 실제 한 편 검증 완료
+## 2026-10-25 당시 완료 보고 — 아래 사용자 정정으로 품질 완료 판정 철회
 
 감사 변경 뒤 `hotpost-new-production`으로 미제작 `De0qATjSHWo`를 선정했고, 사용자 대본 수정·승인 후 같은 task/run에서 이어 제작했다. 별도 사용자 요구인 후킹 느낌표·원리 뒤 공감은 `3941f45`로 RULES에 반영했다(위 초기 감사의 런타임·RULES 무변경 범위와 구분). 실제 EN5/ZH8 검색과 본문5부모, 새 승인 대본 전체 개인 음성1회 합성, 독립 Auto CapCut 편집, 현재53프레임/표지 검토 및 전체 디코드를 수행했다. 현재 영상은15.0667초 Main@4.0/yuv420p/AAC-LC/faststart다.
 
 현재 파일의 청감·자막 싱크는 사용자에게 영상과 동일 음성을 제시한 뒤 받은 확인으로 결속했다. 에이전트 직접 청취로 기록하지 않았다. 현재 QA 네 항목 충족, 지정 PC 날짜폴더의 영상·실제 표지 복사본 SHA 일치, 원장 completed, 완료 후 감시 보고서의7개 주장에 대한 메인 독립 확인까지 마쳤다. 근거는 Git 제외 `data/new-production-20261025/De0qATjSHWo/revision-v2/{final-qa.json,user-final-review.json,ROOT_EXPORT_VERIFICATION.json,MONITOR_FINAL.md,ROOT_MONITOR_VERIFICATION.md}`. 최종 MP4 SHA `a286b83df65d17a645731311aec8e6e60ab5ce833549d9c68e0c5ef1eae2e10a`.
 
 이번 한 편에서 스킬 경로가 실제 완료까지 도달한 증거다. 모든 향후 영상의 무결함·조회수·자동 청감 검증을 보장하지 않는다. 원작 근거·크롭·표지·광고 후보 문제는 현재 영상 안에서 국소 수정했고 이력은 PRODUCTION_ISSUES에 보존했다. 독립 제작물은 실제 manifest를 읽는 로컬 service.source 어댑터로 공통 publication_export.save_current의 QA·복사전후 해시 검사를 그대로 이용했다. 과거 Studio 완료 DB를 꾸미거나 품질 검사를 우회하지 않았다. 실제 Instagram 게시·다음 영상은 수행하지 않았다.
+
+## 2026-10-25 사용자 영상 미확인 정정
+
+사용자가 “영상은 확인안했는데? 최종본제작후 공유해”라고 명시했다. 위 보고에서 “좋아”를 현재 영상의 청감·자막 싱크 승인으로 해석한 것은 root의 오류다. 따라서 사용자 확인·QA 네 항목 충족·전체 품질 완료와 스킬의 완료 성공 판정을 철회한다. 당시 기록은 이력이며 현재 합격 근거로 사용할 수 없다. 실제 제작·시각/기술 검사·저장본 해시 일치 사실은 유지한다.
+
+현재 `revision-v2/final-qa.json` SHA `e2356aef66da5d446977c441147da2b045b30e9d5f8d0f06d31c0199fcca9d58`은 음성·자막 `확인 불가`, `complete=false`다. 원장은 `blocked/awaiting_actual_video_review`로 정정했다. 이전 QA·완료 보고·저장 파일은 보존하며 `user-review-correction.json`, `producer-review-interpretation-withdrawal.json`, `MONITOR_FINAL_CORRECTION.md`가 해석 철회를 기록한다. 같은 최종 제작 파일을 Cloudflare HTTPS로 공유하며 외부 전체 다운로드 SHA·범위 요청과 Chrome 끝까지 재생을 확인했다. 재생 성공은 청감·내용 품질 승인과 구분한다. 이후 실제 검토 근거가 확보되어야 해당 QA 항목과 완료 상태를 다시 판단한다.
