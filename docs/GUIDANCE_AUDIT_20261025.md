@@ -31,3 +31,11 @@
 변경은 문서와 지침 검사 목록뿐이다. 런타임 Python·집필 프롬프트 RULES·DB·모델·사용자 config·기존 완료 파일을 수정하지 않았다. 지침 검사 대상을5개에서40개로 확대하고 전체 통과, VoiceBench 공통 COLLABORATION 원문 일치, `git diff --check` 통과를 확인했다. 기존 지침/상태 원장/저장/세 안 집필/내장 집필 회귀 **53개 통과**.
 
 이 검증은 코드 계약과 지침 일관성에 관한 것이다. 스킬로 만든 실제 한 편의 품질 성공은 제작자의 현재 파일 QA와 완료 후 감시 보고서·독립 확인이 끝나야 판단한다. 과거 완료 영상의 이전 QA는 새 계약 통과로 소급하지 않는다. 이 감사 기록을 운영 재개·실제 게시 지시로 사용하지 않는다.
+
+## 2026-10-25 실제 한 편 검증 완료
+
+감사 변경 뒤 `hotpost-new-production`으로 미제작 `De0qATjSHWo`를 선정했고, 사용자 대본 수정·승인 후 같은 task/run에서 이어 제작했다. 별도 사용자 요구인 후킹 느낌표·원리 뒤 공감은 `3941f45`로 RULES에 반영했다(위 초기 감사의 런타임·RULES 무변경 범위와 구분). 실제 EN5/ZH8 검색과 본문5부모, 새 승인 대본 전체 개인 음성1회 합성, 독립 Auto CapCut 편집, 현재53프레임/표지 검토 및 전체 디코드를 수행했다. 현재 영상은15.0667초 Main@4.0/yuv420p/AAC-LC/faststart다.
+
+현재 파일의 청감·자막 싱크는 사용자에게 영상과 동일 음성을 제시한 뒤 받은 확인으로 결속했다. 에이전트 직접 청취로 기록하지 않았다. 현재 QA 네 항목 충족, 지정 PC 날짜폴더의 영상·실제 표지 복사본 SHA 일치, 원장 completed, 완료 후 감시 보고서의7개 주장에 대한 메인 독립 확인까지 마쳤다. 근거는 Git 제외 `data/new-production-20261025/De0qATjSHWo/revision-v2/{final-qa.json,user-final-review.json,ROOT_EXPORT_VERIFICATION.json,MONITOR_FINAL.md,ROOT_MONITOR_VERIFICATION.md}`. 최종 MP4 SHA `a286b83df65d17a645731311aec8e6e60ab5ce833549d9c68e0c5ef1eae2e10a`.
+
+이번 한 편에서 스킬 경로가 실제 완료까지 도달한 증거다. 모든 향후 영상의 무결함·조회수·자동 청감 검증을 보장하지 않는다. 원작 근거·크롭·표지·광고 후보 문제는 현재 영상 안에서 국소 수정했고 이력은 PRODUCTION_ISSUES에 보존했다. 독립 제작물은 실제 manifest를 읽는 로컬 service.source 어댑터로 공통 publication_export.save_current의 QA·복사전후 해시 검사를 그대로 이용했다. 과거 Studio 완료 DB를 꾸미거나 품질 검사를 우회하지 않았다. 실제 Instagram 게시·다음 영상은 수행하지 않았다.
