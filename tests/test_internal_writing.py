@@ -73,6 +73,42 @@ def test_repair_bounded_and_worse_copy_does_not_replace_original(tmp_path,monkey
     assert len(calls)==4 and result['scripts'][0]['text']==DRAFT
     assert audit['repair']['attempted'] and not audit['repair']['accepted']
 
+
+@pytest.mark.parametrize('mode', ['benchmark', 'self_shot'])
+def test_flexible_structure_reaches_generation_review_repair_and_comparison(tmp_path, monkeypatch, mode):
+    # Four sentences merge hook/context and resolution/empathy. The contract
+    # must reach every model stage without code splitting or padding the draft.
+    draft = ('꺼내 둔 물건이 늘었는데 조리대는 넓어졌어요! '
+             '시트에 자석 수납함을 붙이니 바로 집어 쓸 수 있어서 편한 거 있죠? '
+             '좋은 점을 다시 말해요. 댓글에 나도 남겨주세요.')
+    revised = draft.replace('좋은 점을 다시 말해요. ', '')
+    replies = iter([{'text': draft},
+                    {'issues': [{'quote': '좋은 점을 다시 말해요.', 'reason': '공감 뒤 반복 삭제'}]},
+                    {'text': revised}, {'preferred': 1, 'reason': '반복 제거', 'issues': []}])
+    contract = snapshot('self_shot' if mode == 'self_shot' else None)
+    calls = []
+    def chat(instruction, data, schema, check, state):
+        calls.append(instruction)
+        assert contract['prompt'] in instruction
+        assert '후킹 → 상황 설정 → 문제 해소 → 공감 → CTA' in instruction
+        assert '별도 문장 없이 문제 해소로 넘어간다' in instruction
+        assert '욕구 충족과 후킹에서 생긴 의문의 해소' in instruction
+        assert '고정된 갈등·전개 순서를 강제하지 않는다' not in instruction
+        assert '원작의 메커니즘·흐름을 유지' not in instruction
+        return next(replies)
+    monkeypatch.setattr(pipeline.codex_writer, 'chat', chat)
+    monkeypatch.setattr(pipeline, 'review', lambda text, *args, **kwargs: {
+        'text': text, 'integrity_review': {'issues': []},
+        'naturalness_review': {'issues': []}, 'quality_summary': {'issues': []}})
+    result = pipeline._generate_single({
+        'reference_script': '자석 수납함을 붙일 수 있는 시트',
+        'generation_mode': mode, 'writing_contract': contract},
+        tmp_path, lambda: None, lambda *args: None)
+    assert len(calls) == 4
+    assert result['scripts'][0]['text'] == revised
+    audit = json.loads((tmp_path/'writing-audit.json').read_text('utf-8'))
+    assert audit['initial_text'] == draft and audit['repair']['accepted']
+
 def test_review_failure_is_advisory_and_retains_text(tmp_path,monkeypatch):
     result,calls,_=run(tmp_path,monkeypatch,[{'text':DRAFT},RuntimeError('offline')])
     assert len(calls)==2 and result['scripts'][0]['text']==DRAFT

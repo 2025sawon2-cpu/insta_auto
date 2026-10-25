@@ -64,9 +64,9 @@ def generate_three(payload, directory, check, progress, *, evaluate):
     value = codex_writer.chat(
         HOOK_INSTRUCTION + '원작의 심리 후킹을 분석한 뒤 항상 세 안을 한 번에 작성하세요. '
         '1안 transformation_a와 2안 transformation_b는 원작의 같은 주된 카테고리 안에서 '
-        '원작이 사용하지 않은 서로 다른 편향·심리효과로 도입·갈등·정보 순서·마무리를 새로 설계하세요. '
+        '원작이 사용하지 않은 서로 다른 편향·심리효과로 공통 구성 안의 상황·갈등·단서와 해결을 새로 설계하세요. '
         '이름만 붙이지 말고 mechanism_application에 실제 작동하는 문구·갈등을 설명하세요. '
-        '3안 surface_substitution만 원작 메커니즘·전개 흐름을 유지하며 의미 있는 요소를 '
+        '3안 surface_substitution은 원작 심리 메커니즘을 유지하되 전개는 공통 다섯 단계에 맞게 재배치하고 의미 있는 요소를 '
         '2~3개 바꿔 surface_changes에 적으세요. 제품 사실·매력은 유지하지만 특징적 설명 묶음은 복사하지 않습니다. '
         '각 안의 변화 한 줄, 두 줄 썸네일 문구와 심리 적용을 함께 작성하세요. 썸네일은 원작 후킹을 '
         '다르게 적용하며 그 제품에 대해 궁금해지는 구체적인 갈등·차이를 만듭니다. '
@@ -96,7 +96,7 @@ def generate_three(payload, directory, check, progress, *, evaluate):
         value = codex_writer.chat(
             '세 안의 계약 검사에 실패했습니다. 아래 오류를 고치고 항상 세 안을 함께 반환하세요. '
             '원작과 겹치거나 1·2안끼리 같은 효과는 별칭으로 바꾸지 말고, 다른 미사용 효과가 '
-            '실제로 작동하도록 해당 안의 도입·갈등·정보 순서·마무리와 썸네일을 재설계하세요. '
+            '실제로 작동하도록 공통 구성 안의 해당 안 상황·갈등·단서와 해결 및 썸네일을 재설계하세요. '
             '문제 없는 안의 원고는 보존하세요. 1·2안은 각각 하나의 주된 효과 이름만 bias에 적습니다. '
             '같은 주 카테고리 유지, 3안의 의미 있는 표면 치환 2~3곳, 제품 사실 유지·원문 복사 금지 '
             '계약도 지키세요. 보유 소스 수는 집필에 넣지 않습니다.\n\n'+contract['prompt']+'\n\n'+THUMBNAIL_INSTRUCTION+visual_instruction,

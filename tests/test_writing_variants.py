@@ -23,6 +23,10 @@ def test_public_pipeline_generates_three_and_reviews_each_with_peer_context(tmp_
     calls=[]
     def chat(instruction,data,schema,check,state):
         value=json.loads(data);calls.append(value)
+        assert snapshot()['prompt'] in instruction
+        assert '후킹 → 상황 설정 → 문제 해소 → 공감 → CTA' in instruction
+        assert '원작 메커니즘·전개 흐름을 유지' not in instruction
+        assert '원작의 메커니즘·흐름을 유지' not in instruction
         if len(calls)==1:return triplet()
         context=value['variant_context']
         assert len(context['other_variants'])==2
