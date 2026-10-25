@@ -32,7 +32,17 @@ python -m hotpost.publication_export save POST_SHORTCODE --topic '간단한주�
 
 Git worktree의 개발용 data 폴더에는 운영 완료 자료가 없을 수 있다. 실제 완료 자료를 보유한 원래 작업 폴더의 Python 환경에서 저장하거나 명시적으로 그 data 경로를 지정한다. 빈 개발용 DB를 완성본으로 대신하지 않는다.
 
-## 2026-10-23 적용·검증
+## 미확인 항목이 남은 검토본 보관
+
+검토본은 `save-review`로 현재 영상·표지·QA 스냅샷을 함께 보관한다. 기존 `save`와 완료 전환의 전체 QA 충족 조건은 그대로 유지한다. 독립 제작의 현재 task/run 자료에서 파일·run/edit를 확인한 뒤 명시한다.
+
+```powershell
+python -m hotpost.publication_export save-review <shortcode> --topic '간단한 주제' --video <현재.mp4> --cover <현재.png> --qa-record <현재QA.json> --run-id <run> --edit-id <edit>
+```
+
+저장 위치는 해당 PC 설정 아래 `검토본/YYYY-MM-DD/`, 파일명에는 `_검토본`을 붙인다. 같은 파일과 같은 QA는 중복 저장하지 않고 변경본은 번호를 붙여 보존한다. SHA 결속·QA 증거·복사 검사는 수행하되 `quality_complete=false`와 미확인 항목을 QA 스냅샷에 남긴다. 이 성공은 보관 성공이며 원장 `completed`, 청감 합격, 완료 후 감시 보고서를 만들지 않는다. 기존 완료 폴더의 파일을 이동·삭제하지 않는다. 향후 전체 QA 충족 뒤 정상 완료 저장은 별도로 수행한다.
+
+## 2026-10-23 적용·검증 기록
 
 작업 브랜치 `feat/local-video-storage-20261023`, 기준 main `0d70439`. 같은 버전의 `COLLABORATION.md` 원문을 확인하고 기존 미커밋 작업을 보존했다. 저장 경로는 이 PC의 Git 제외 로컬 파일에만 기록했다. 검증된 현재 완성본 한 건과 실제 적용 썸네일을 개인 저장소에 복사하고 SHA256 일치를 확인했다. 반복 실행은 `already_saved`, 다른 내용의 동일 이름은 기존 파일을 보존하는 번호 추가로 처리한다.
 

@@ -11,7 +11,7 @@
 | 소스 검색·검토 | 기존 로그인 Chrome, 실제 입력/결과 기록 | [수집 규칙](SOURCE_WORKFLOW.md) |
 | 개인 음성 | `voicebench_adapter` → 별도 VoiceBench HTTP API | [잘림 복구](TTS_TRUNCATION_RECOVERY.md) |
 | 편집 | 명시 요청된 독립 편집 경로, Auto CapCut과 버전 JSON·별도 프로세스 경계 | [전체 매력·몽타주](editorial_montage_policy.md) |
-| 전달·저장 | `post_thumbnail` → `publication_export` | [저장 절차](LOCAL_VIDEO_STORAGE.md), 아래 완료 기준 |
+| 전달·저장 | 독립 제작은 `production_delivery`, 기존 썸네일 반영은 `post_thumbnail` → `publication_export` | [독립 전달](PRODUCTION_DELIVERY.md), [저장 절차](LOCAL_VIDEO_STORAGE.md), 아래 완료 기준 |
 | 휴대폰 게시 | 명시 요청된 `mobile_reels_cli` | [폰 제어](MOBILE_REELS_WIREGUARD.md) |
 
 기존 제작실 UI·API·Studio 실행기·종속 자동 제작은 **outdated / 참고용 보존**이다. 신규 작업의 기본 실행·복구·개선 경로로 사용하지 않는다. 코드·테스트·작업 자료는 보존하며, 별도 명시 지시 없이 재사용·활성화·수정하지 않는다. `python -m hotpost serve`를 게시용 서버 대신 실행하지 않는다. 독립 게시용 서버는 `python -m hotpost.publication_server`이며 개발 검증은 임시 data·포트에서 한다. 서비스 시작 자체는 운영 재개 허가가 아니다.
@@ -50,6 +50,8 @@
 `수정 필요`나 `확인 불가`가 남은 현재 파일은 완료 조건을 충족했다고 기록하지 않는다. 제작자는 확인된 부분을 수정하고 영향받은 항목과 새 파일을 다시 QA한다. 무진전 반복과 불필요한 전체 재제작은 위 보류·최소 수리 원칙을 따른다. 후속 감시·검증에서 필수 완료 항목의 결함이 확인되면 그 파일을 품질 합격본으로 계속 보고하지 않고 [공통 상태](REFERENCE_STATUS.md)의 완료 근거를 정정한다. 기존 파일·이력은 보존하며 허용된 같은 영상의 수정본을 해당 항목부터 다시 QA한다. 이전 파일의 통과 근거를 새 파일에 그대로 적용하지 않는다.
 
 ### 현재 파일에 결속한 제작자 QA 기록
+
+사용자 반응은 바로 앞의 대상·맥락·명시한 확인 범위에만 적용한다. 대본 확인이나 단순 진행 동의인 “좋아”를 영상 재생·청감·문장별 싱크 확인으로 넓히지 않는다. 음성을 실제 들을 수 없으면 `확인 불가`를 유지한다. 사용자 검토를 근거로 쓸 때에는 해당 evidence에 `method=human_user_review`, `user_quote`(실제 발언), `review_context`(제시한 대상과 질문), `reviewed_checks`(확인된 항목), `video_sha256`을 남긴다. 코드가 범위·현재 파일 결속을 검사하더라도 발언 의미를 대신 판단하지 않는다.
 
 판정 기준은 위 Markdown 규칙이다. 제작 에이전트는 실제 파일을 보고 판단한 뒤, 같은 Git 제외 task/run 폴더에 UTF-8 JSON 기록을 남긴다. `schema_version=1`, `video_id`(shortcode), `task_id`, `run_id`, `edit_id`, `producer`, 시간대가 있는 ISO `reviewed_at`이 필요하다. `artifacts`의 `script`·`voice`·`plan`에는 각각 현재 선택본의 `id`와 SHA-256을, `video`·`cover`에는 각각 현재 최종 파일의 절대 `path`와 실제 SHA-256을 기록한다. 입력 세 항목의 ID·해시는 제작자가 원래 작업 자료와 대조해 기록하며, 코드가 그 내용 자체를 판단했다고 보고하지 않는다.
 

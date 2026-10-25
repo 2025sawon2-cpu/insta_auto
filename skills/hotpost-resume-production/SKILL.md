@@ -5,6 +5,8 @@ description: Resume one explicitly identified paused or blocked insta_auto Hotpo
 
 # 중단 영상 재개
 
+기존 계획의 스타일을 보존하며 명시된 스타일 변경에만 `docs/PRODUCTION_DELIVERY.md`의 `style-plan`을 적용한다. 새 독립 원본 렌더는 같은 문서의 `finalize`를 거쳐 전달한다. 기존 전달 후보를 중복 후처리하지 않는다. 최종 QA와 검토본/완료본 저장 구분은 `docs/WORKFLOW.md`, `docs/LOCAL_VIDEO_STORAGE.md`를 따른다.
+
 1. 사용자가 지정한 Instagram shortcode `video_id`를 받는다. 순위 번호만 받았다면 `$hotpost-reference-status`로 고정 ID를 확인한 뒤 대상이 확정될 때까지 실행하지 않는다.
 2. 현재 clone의 `AGENTS.md`, `docs/COLLABORATION.md`, `docs/WORKFLOW.md`, `docs/REFERENCE_STATUS.md`와 단계별 원본을 다시 읽고, 공통 원장 `show <video_id>`를 실행 직전에 확인한다. 원래 task/run·담당자·인계·대본·음성·소스·최종 파일과 실제 중지 사유를 대조한다. 원장과 원본이 충돌하면 먼저 근거를 확인한다.
 3. `paused/blocked`인 그 영상에 대한 새 명시 재개 지시인지 확인한다. 무진전 보류는 새 근거 없이 풀지 않는다. `completed`·`unknown`·`not_started`를 재개 작업으로 바꾸지 않고, 다른 영상이 진행 중이면 병행하지 않는다.

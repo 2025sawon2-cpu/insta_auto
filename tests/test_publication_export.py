@@ -45,6 +45,61 @@ def setup(tmp_path, monkeypatch):
     return service, source, config, destination, now
 
 
+def test_review_copy_preserves_unconfirmed_evidence_without_completion(setup):
+    service, source, config, destination, now = setup
+    path = source['qa_record']
+    record = json.loads(path.read_text('utf8'))
+    record['checks']['audio_captions']['status'] = '확인 불가'
+    path.write_text(json.dumps(record), 'utf8')
+    result = exports.save_review(service, 'post', topic='선반', config=config, now=now, qa_record=path)
+    assert Path(result['video']).parent == destination / '검토본/2026-10-23'
+    assert result['quality_complete'] is False
+    assert result['unresolved'] == ['audio_captions']
+    snapshot = json.loads(Path(result['qa_snapshot']).read_bytes())
+    assert snapshot['original_qa'] == record
+    assert snapshot['quality_complete'] is False
+    assert exports.save_review(service, 'post', topic='선반', config=config, now=now, qa_record=path)['status'] == 'already_saved'
+    with pytest.raises(ValueError, match='audio_captions is not confirmed'):
+        exports.save_current(service, 'post', topic='선반', config=config, now=now, qa_record=path)
+    source['media']['final'].write_bytes(b'changed after review')
+    with pytest.raises(ValueError, match='bytes changed'):
+        exports.save_review(service, 'post', topic='선반', config=config, now=now, qa_record=path)
+
+
+def test_human_evidence_requires_current_file_and_explicit_scope(setup):
+    from hotpost.final_qa import validate
+    _, source, _, _, _ = setup
+    path = source['qa_record']
+    record = json.loads(path.read_text('utf8'))
+    row = record['checks']['audio_captions']['evidence'][0]
+    row.update(method='human_user_review', user_quote='좋아', review_context='대본을 제시함',
+               reviewed_checks=['script'], video_sha256=exports.digest(source['media']['final']))
+    path.write_text(json.dumps(record), 'utf8')
+    with pytest.raises(ValueError, match='outside the human review scope'):
+        validate(path, video_id='post')
+    row.update(user_quote='영상을 보고 음성과 자막 싱크까지 확인했어', review_context='현재 영상 전체를 제시함',
+               reviewed_checks=['audio_captions'], video_sha256='b' * 64)
+    path.write_text(json.dumps(record), 'utf8')
+    with pytest.raises(ValueError, match='another video'):
+        validate(path, video_id='post')
+    row['video_sha256'] = exports.digest(source['media']['final'])
+    path.write_text(json.dumps(record), 'utf8')
+    validate(path, video_id='post')
+
+
+def test_review_copy_preserves_prior_versions_and_qa_changes(setup):
+    service, source, config, _, now = setup
+    path = source['qa_record']
+    first = exports.save_review(service, 'post', topic='선반', config=config, now=now, qa_record=path)
+    record = json.loads(path.read_text('utf8'))
+    record['checks']['visual']['status'] = '수정 필요'
+    path.write_text(json.dumps(record), 'utf8')
+    second = exports.save_review(service, 'post', topic='선반', config=config, now=now, qa_record=path)
+    assert first['video'] != second['video']
+    assert Path(first['video']).is_file()
+    assert second['unresolved'] == ['visual']
+
+
 def test_configure_creates_personal_folder_and_retains_other_local_preferences(tmp_path):
     config = tmp_path / 'local/video-storage.json'
     config.parent.mkdir()

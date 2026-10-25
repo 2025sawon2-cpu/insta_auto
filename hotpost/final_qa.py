@@ -50,6 +50,17 @@ def validate(record_path, *, video_id, task_id=None, run_id=None, producer=None,
     them independently (publication export). The registry can use the paths
     in the record, but still checks their real bytes.
     """
+    result = inspect_record(record_path, video_id=video_id, task_id=task_id,
+                            run_id=run_id, producer=producer, edit_id=edit_id,
+                            video=video, cover=cover, final_sha256=final_sha256)
+    if result['unresolved']:
+        raise ValueError(f"Final QA {result['unresolved'][0]} is not confirmed")
+    return result
+
+
+def inspect_record(record_path, *, video_id, task_id=None, run_id=None, producer=None,
+                   edit_id=None, video=None, cover=None, final_sha256=None):
+    """Check identity and evidence for review storage; never authorize completion."""
     if not record_path:
         raise ValueError("Final QA record path is required")
     try:
@@ -113,8 +124,8 @@ def validate(record_path, *, video_id, task_id=None, run_id=None, producer=None,
         raise ValueError("Final QA checks are required")
     for name, asset in CHECK_ASSETS.items():
         check = checks.get(name)
-        if not isinstance(check, dict) or check.get("status") != "충족":
-            raise ValueError(f"Final QA {name} is not confirmed")
+        if not isinstance(check, dict) or check.get("status") not in ("충족", "수정 필요", "확인 불가"):
+            raise ValueError(f"Final QA {name} has an invalid status")
         evidence = check.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             raise ValueError(f"Final QA {name} needs specific evidence")
@@ -125,9 +136,18 @@ def validate(record_path, *, video_id, task_id=None, run_id=None, producer=None,
                 raise ValueError(f"Final QA {name} evidence names an unknown asset")
             _text(row.get("location"), f"{name} evidence location")
             _text(row.get("observation"), f"{name} evidence observation")
+            if row.get('method') == 'human_user_review':
+                _text(row.get('user_quote'), f'{name} user quote')
+                _text(row.get('review_context'), f'{name} review context')
+                scope = row.get('reviewed_checks')
+                if not isinstance(scope, list) or name not in scope or any(item not in CHECK_ASSETS for item in scope):
+                    raise ValueError(f'Final QA {name} is outside the human review scope')
+                if row.get('video_sha256') != verified['video']['sha256']:
+                    raise ValueError(f'Final QA {name} human review names another video')
         if not any(row["asset"] == asset for row in evidence):
             raise ValueError(f"Final QA {name} needs evidence from {asset}")
     return {"record_path": str(path), "record_sha256": hashlib.sha256(raw).hexdigest(),
             "video": verified["video"], "cover": verified["cover"],
             "task_id": record["task_id"], "run_id": record["run_id"],
-            "producer": record["producer"], "edit_id": record["edit_id"]}
+            "producer": record["producer"], "edit_id": record["edit_id"],
+            "unresolved": [name for name in CHECK_ASSETS if checks[name]['status'] != '충족']}

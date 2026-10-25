@@ -9,6 +9,7 @@
 | 게시물 초안·현재 완료본 조회 | hotpost/post_preparation.py, web/post-preparation.js | test_post_preparation.py, post_preparation.test.cjs |
 | 본문·댓글·DM 준비 문구 | hotpost/post_preparation_content.py/json | test_post_preparation_content.py |
 | 명시 썸네일 반영·AVC 전달·서버 간 실행권 | hotpost/post_thumbnail.py, post_media_rules.py | test_post_thumbnail.py, test_thumbnail_admission.py, test_post_media_rules.py |
+| 독립 계획 스타일·광고 전달·검토본 보관 | hotpost/production_delivery.py, publication_export.py | test_production_delivery.py, test_publication_export.py |
 | 제작자 최종 QA 결속·완료 전환·현재 영상/표지 저장 | hotpost/final_qa.py → reference_registry.py, publication_export.py | test_reference_registry.py, test_publication_export.py |
 | 로컬 폰 제어·명시 게시 | hotpost/mobile_reels_cli.py → mobile_device.py, mobile_reels.py | test_mobile_reels.py |
 | 대본 계약·3안·후킹·금지 표현 | hotpost/writing/RULES.md → contract.py, variants.py, hook_policy.py, script_style.py, pipeline.py | test_first_sentence_hook.py, test_writing_variants.py, test_internal_writing.py |

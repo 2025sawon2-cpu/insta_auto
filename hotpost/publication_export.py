@@ -108,6 +108,15 @@ def validate_video(path):
 
 
 def save_current(service, code, *, topic=None, config=None, now=None, qa_record=None):
+    return _save(service, code, topic=topic, config=config, now=now, qa_record=qa_record, review=False)
+
+
+def save_review(service, code, *, topic=None, config=None, now=None, qa_record=None):
+    """Archive an identified review candidate without promoting its quality state."""
+    return _save(service, code, topic=topic, config=config, now=now, qa_record=qa_record, review=True)
+
+
+def _save(service, code, *, topic, config, now, qa_record, review):
     from .post_preparation import shortcode
     code = shortcode(code)
     destination, rules = read_rules(config)
@@ -116,11 +125,23 @@ def save_current(service, code, *, topic=None, config=None, now=None, qa_record=
     if not source['run_id'] or not source['edit_id'] or not video or not cover:
         raise ValueError('검증된 완성 영상과 실제 적용 썸네일이 모두 있어야 저장할 수 있습니다.')
     from .final_qa import validate as validate_final_qa
+    if review:
+        from .final_qa import inspect_record as validate_final_qa
     qa = validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
                            edit_id=source['edit_id'], video=video, cover=cover)
     topic = short_topic(topic or rules.get('topics', {}).get(code, ''))
     validate_video(video)
     hashes = [digest(video), digest(cover)]
+    snapshot = None
+    if review:
+        snapshot = json.dumps({'quality_complete': False, 'kind': 'review_copy',
+                               'unresolved': qa['unresolved'], 'binding': qa,
+                               'original_qa': json.loads(Path(qa_record).read_bytes())},
+                              ensure_ascii=False, indent=2).encode('utf8')
+        if digest(qa_record) != qa['record_sha256']:
+            raise ValueError('저장 중 최종 QA 기록이 변경됐습니다. 다시 검토하세요.')
+        hashes.append(hashlib.sha256(snapshot).hexdigest())
+        destination = destination / '검토본'
     when = now or datetime.now(KST)
     if when.tzinfo is None:
         raise ValueError('저장 시각에는 시간대가 필요합니다.')
@@ -128,6 +149,8 @@ def save_current(service, code, *, topic=None, config=None, now=None, qa_record=
     day = destination / when.strftime('%Y-%m-%d')
     day.mkdir(parents=True, exist_ok=True)
     base = when.strftime('%Y%m%d') + '_' + topic
+    if review:
+        base += '_검토본'
     suffix = cover.suffix.lower()
     if suffix not in ('.png', '.jpg', '.jpeg', '.webp'):
         raise ValueError('지원하는 썸네일 이미지 파일이 필요합니다.')
@@ -141,10 +164,17 @@ def save_current(service, code, *, topic=None, config=None, now=None, qa_record=
         for number in range(1, 10000):
             stem = base + (f'_{number:02}' if number > 1 else '')
             targets = [day / (stem + '.mp4'), day / (stem + '_썸네일' + suffix)]
+            if review:
+                targets.append(day / (stem + '_QA.json'))
             if all(path.is_file() for path in targets) and [digest(path) for path in targets] == hashes:
-                validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
+                current = service.source(code)
+                if current != source:
+                    raise ValueError('저장 중 현재 완성본이 변경됐습니다. 최신 결과로 다시 저장하세요.')
+                validated = validate_final_qa(qa_record, video_id=code, run_id=source['run_id'],
                                   edit_id=source['edit_id'], video=video, cover=cover)
-                return {'status': 'already_saved', 'video': str(targets[0]), 'thumbnail': str(targets[1]), 'sha256': hashes}
+                if validated['record_sha256'] != qa['record_sha256']:
+                    raise ValueError('저장 중 최종 QA 기록이 변경됐습니다. 다시 검토하세요.')
+                return _save_result('already_saved', targets, hashes, qa, review)
             if any(path.exists() for path in targets):
                 continue
             # Verify the pair before exposing final filenames on a network drive.
@@ -154,6 +184,9 @@ def save_current(service, code, *, topic=None, config=None, now=None, qa_record=
                     shutil.copyfile(original, temporary)
                     if digest(temporary) != expected or digest(original) != expected:
                         raise ValueError('복사 중 파일이 바뀌었거나 검증에 실패했습니다. 완료로 처리하지 않았습니다.')
+                if review:
+                    staged.append(Path(staging) / 'review-qa.json')
+                    staged[-1].write_bytes(snapshot)
                 # Refresh current source after I/O so a changed applied cover cannot be mislabeled.
                 current = service.source(code)
                 if (current['media'] != source['media'] or current['edit_id'] != source['edit_id']
@@ -169,10 +202,18 @@ def save_current(service, code, *, topic=None, config=None, now=None, qa_record=
                         shutil.copyfileobj(input_file, output)
                     if digest(target) != digest(temporary):
                         raise ValueError('저장 파일 검증에 실패했습니다. 완료로 처리하지 않았습니다.')
-            return {'status': 'saved', 'video': str(targets[0]), 'thumbnail': str(targets[1]), 'sha256': hashes}
+            return _save_result('saved', targets, hashes, qa, review)
         raise ValueError('같은 날짜와 주제의 저장 파일이 너무 많습니다. 주제명을 구체화하세요.')
     finally:
         lock.rmdir()
+
+
+def _save_result(status, targets, hashes, qa, review):
+    result = {'status': status, 'video': str(targets[0]), 'thumbnail': str(targets[1]), 'sha256': hashes[:2]}
+    if review:
+        result.update(kind='review_copy', quality_complete=False, unresolved=qa['unresolved'],
+                      qa_snapshot=str(targets[2]), qa_snapshot_sha256=hashes[2])
+    return result
 
 
 def main():
@@ -185,10 +226,26 @@ def main():
     save.add_argument('shortcode')
     save.add_argument('--topic', help='Short subject, without a date or file extension')
     save.add_argument('--qa-record', type=Path, required=True, help='Producer final QA JSON for the current video and cover')
+    review = commands.add_parser('save-review', help='Store explicit independent candidate, never mark completed')
+    review.add_argument('shortcode')
+    review.add_argument('--topic')
+    review.add_argument('--qa-record', type=Path, required=True)
+    review.add_argument('--video', type=Path, required=True)
+    review.add_argument('--cover', type=Path, required=True)
+    review.add_argument('--run-id', required=True)
+    review.add_argument('--edit-id', required=True)
     args = parser.parse_args()
     try:
         if args.command == 'configure':
             print(json.dumps({'destination': str(configure(args.destination, args.config))}, ensure_ascii=False))
+        elif args.command == 'save-review':
+            from types import SimpleNamespace
+            service = SimpleNamespace(source=lambda code: {
+                'run_id': args.run_id, 'edit_id': args.edit_id,
+                'media': {'final': args.video.resolve(), 'cover': args.cover.resolve()}})
+            result = save_review(service, args.shortcode, topic=args.topic, config=args.config,
+                                 qa_record=args.qa_record)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             from .config import load_settings
             from .post_preparation import PostPreparation
