@@ -1,21 +1,28 @@
 """Shared editorial contract for title generation, repair and visual review."""
 import re
 
-POLICY = 'subject-specific-natural-copy-20261017-v2'
+POLICY = 'representative-image-independent-hook-20261025-v3'
 INSTRUCTION = (
-    'Thumbnail appeal contract v2. Choose the headline from this product and this script, not a reusable layout formula. '
+    'Thumbnail appeal contract v3; editorial source: hotpost/writing/RULES.md, thumbnail section. '
+    'The image represents the product or use scene; the headline earns attention and interest in watching. '
+    'Do not require a literal image description, the same benefit to be visibly proved in the cover, '
+    'or the same opening sentence, conflict or psychological mechanism as the narration. '
+    'Keep a representative image when its only alleged defect is not depicting the headline payoff. '
     'Two lines are typography only: neither line has to name the product or end in a question. '
-    'First explain the relationship between the observed reference image, its actual headline (if supplied), '
-    'the viewer situation/desire and the payoff in the script. Never call narration or a video opening an observed feed cover. '
-    'Possible motives include a recognizable inconvenience, a desirable look, a concrete benefit, '
-    'a surprising change of use or a specific unresolved detail. Choose what this evidence supports; do not force a hidden secret. '
-    'A clearly visible benefit can still give a strong reason to watch. Showing a feature does not by itself spoil the headline. '
-    'Use short natural Korean with a concrete stake. Avoid generic product-label + why/reason/question endings, '
-    'vague claims that something is special, artificial suspense, criteria lessons and unsupported popularity/price promises. '
-    'Questions are allowed when their specific answer matters to this viewer and the script actually delivers it. '
-    'For multiple candidates use genuinely different angles and sentence structures, not noun swaps in the same template. '
-    'Evaluate the actual image and copy together: what does the viewer recognize, want, gain or discover by watching? '
-    'Keep all factual claims within the supplied script/reference evidence. Never copy another product headline as a claim. '
+    'Use observed reference covers only as evidence, not a copying template; never call narration or opening frames an observed feed cover. '
+    'Consider women in their 30s and 40s through relevant situations and desires without stereotyping family or household roles. '
+    'Possible hooks include surprise, a recognizable inconvenience, overlooked possibilities, curiosity or a desired change. '
+    'Use short natural Korean in a friendly respectful voice. Broad reaction headlines such as 이거 대박인데요? '
+    'are allowed candidates, not a recommended formula or an automatic failure for lacking a product name or specific function. '
+    'Compare their actual curiosity against the risk of sounding like familiar advertising. '
+    'Do not impose secrets, questions, paradoxes, a fixed candidate count or a quota of psychological effects. '
+    'For multiple candidates vary angles and structures. Quote each headline and explain the reason to stop, '
+    'the emotion or question it creates, reading ease and whether the full video delivers its promise. '
+    'Evaluate image representativeness and headline appeal separately, then check their combined meaning and expectation. '
+    'Loose coupling is allowed; misleading bait is not. Keep factual claims within supplied script/reference evidence '
+    'and do not invent popularity, price, efficacy or verified personal experience. '
+    'Do not negate actual actions or conditions through exaggerated shorthand. '
+    'Preserve a user-selected headline unless its revision is requested. Editorial judgment is not measured click performance. '
 )
 
 COPY_REVIEW_INSTRUCTION = (
@@ -24,9 +31,9 @@ COPY_REVIEW_INSTRUCTION = (
     'do not demand verbs on both lines. Reject an unintelligible missing predicate or unnatural case relation, '
     'not merely brevity. Quote the actual broken phrase in problem_quote. If natural, keep proposed_lines '
     'identical and problem_quote empty. If broken, propose only a local copy correction without changing '
-    'the narration, its psychological mechanism or product facts. Evaluate concrete viewer stakes and the '
-    'relationship to supplied actual reference frames. Reference samples are not an observed feed cover. '
-    'Do not add numbers, popularity, prices or promised functions. '
+    'the narration or product facts. Missing literal correspondence with the image, narration opening or conflict '
+    'is not a language defect. Reference samples are not an observed feed cover. '
+    'Do not add numbers, popularity, prices or promised functions. ' + INSTRUCTION
 )
 
 
@@ -61,7 +68,8 @@ def resolve_copy(ask, lines, script, reference, review, *, script_changed=False)
     selected=lines
     if not review['natural'] or script_changed:
         comparison=ask('두 썸네일 문구를 최종 원고·실제 원본 근거와 비교하세요. '
-            '1번이 더 낫다고 가정하지 마세요. 한국어가 자연스럽고 제품 사실·심리갈등·본문과 일치하는 문구만 선택하세요. '
+            '1번이 더 낫다고 가정하지 마세요. 자연스럽고 제품 사실과 양립하며 영상이 기대를 충족하는 문구를 선택하세요. '
+            '이미지 설명·대본 첫 문장·심리갈등의 동일성을 요구하지 마세요. '
             '새 기능·수치·가격·인기 약속이 추가되면 grounded=false입니다. '
             'preferred는0 또는1, natural과grounded는선택문구의판단입니다. '+INSTRUCTION,
             {'script':script,'reference':reference,'thumbnail_candidates':[lines,proposed],
@@ -84,5 +92,5 @@ def review_copy(lines):
     text = ' '.join(lines) if isinstance(lines, list) and all(isinstance(x, str) for x in lines) else ''
     issues = []
     if re.search(r'왜\s*(?:눈길이\s*갈|끌릴|끌리는)|뭐가\s*특별|어떤\s*비밀|궁금하지\s*않', text):
-        issues.append('제품의 구체적인 이득·갈등 대신 일반적인 궁금증 문구를 사용함')
+        issues.append('넓은 호기심 표현: 실제 맥락에서 후킹이 되는지와 흔한 광고로 읽힐 가능성을 비교할 것; 표현만으로 불합격하지 않음')
     return {'policy': POLICY, 'issues': issues, 'advisory_only': True}

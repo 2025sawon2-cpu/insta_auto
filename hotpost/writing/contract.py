@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 
-VERSION = 'internal-codex-three-variants-20261025-v12-flexible-story'
+VERSION = 'internal-codex-three-variants-20261025-v13-thumbnail-hook'
 
 
 def snapshot(mode=None):
