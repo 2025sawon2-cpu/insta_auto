@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,22 +17,50 @@ UNFINISHED = {"in_progress", "paused", "blocked"}
 SCHEMA_VERSION = 1
 
 
+class Registry(dict):
+    """JSON-compatible state with a private, non-persisted read token."""
+
+
+def _bytes(path):
+    return path.read_bytes() if path.exists() else None
+
+
 def kst_date(seconds):
     return datetime.fromtimestamp(seconds, KST).date().isoformat() if isinstance(seconds, (int, float)) and seconds > 0 else None
 
 
 def load(path: Path):
-    if not path.exists():
-        return {"schema_version": SCHEMA_VERSION, "report": None, "posts": {}}
-    registry = json.loads(path.read_text(encoding="utf-8"))
+    path = Path(path).resolve()
+    raw = _bytes(path)
+    registry = Registry(json.loads(raw) if raw is not None else
+                        {"schema_version": SCHEMA_VERSION, "report": None, "posts": {}})
     if registry.get("schema_version") != SCHEMA_VERSION or not isinstance(registry.get("posts"), dict):
         raise ValueError("Unsupported reference registry; preserve it and inspect before changing")
+    revision = registry.get('revision', 0)
+    if type(revision) is not int or revision < 0:
+        raise ValueError('Invalid reference registry revision')
+    registry.source_path, registry.source_bytes = path, raw
     return registry
 
 
 def save(path: Path, registry):
+    from .state_lock import file_lock
+    path = Path(path).resolve()
+    with file_lock(path.with_name(path.name + '.lock')):
+        _save_locked(path, registry)
+
+
+def _save_locked(path, registry):
+    if not isinstance(registry, Registry) or registry.source_path != path:
+        raise ValueError('Load this reference registry before saving')
+    if _bytes(path) != registry.source_bytes:
+        raise ValueError('Reference registry changed; reload before saving')
+    original = json.loads(registry.source_bytes) if registry.source_bytes is not None else {}
+    if registry.get('revision', 0) != original.get('revision', 0):
+        raise ValueError('Reference registry revision cannot be edited manually')
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(registry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    updated = dict(registry, revision=original.get('revision', 0) + 1)
+    content = json.dumps(updated, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=path.parent, delete=False) as stream:
         temp = Path(stream.name)
         stream.write(content)
@@ -39,8 +68,55 @@ def save(path: Path, registry):
         os.fsync(stream.fileno())
     try:
         os.replace(temp, path)
+        registry['revision'] = updated['revision']
+        registry.source_bytes = content.encode('utf-8')
     finally:
         temp.unlink(missing_ok=True)
+
+
+@contextmanager
+def transaction(path, *, expected_revision=None):
+    """Serialize load, all transition checks and atomic save in one process lock."""
+    from .state_lock import file_lock
+    path = Path(path).resolve()
+    with file_lock(path.with_name(path.name + '.lock')):
+        registry = load(path)
+        if expected_revision is not None and registry.get('revision', 0) != expected_revision:
+            raise ValueError('Reference registry revision changed; inspect current context')
+        yield registry
+        _save_locked(path, registry)
+
+
+def context(registry, code):
+    """Small read-only recovery view; role bindings do not prove worker liveness."""
+    if code not in registry['posts']:
+        raise ValueError(f'Unknown video ID: {code}')
+    production = registry['posts'][code]['production']
+    state = production['state']
+    qa = {'status': 'not_recorded'}
+    if production.get('qa_evidence'):
+        try:
+            from .final_qa import validate
+            if state == 'completed':
+                from .daily_ranking import require_completion_binding
+                require_completion_binding(production)
+            result = validate(production['qa_evidence'], video_id=code,
+                              task_id=production.get('task_id'), run_id=production.get('run_id'),
+                              producer=production.get('owner'), final_sha256=production.get('final_sha256'))
+            qa = {'status': 'current', 'input_binding': result['input_binding']}
+        except (OSError, ValueError) as error:
+            qa = {'status': 'needs_review', 'reason': str(error)}
+    actions = {'unknown': 'audit_history', 'not_started': 'confirm_selection_and_bind_workers',
+               'in_progress': 'verify_actual_workers_and_current_artifacts',
+               'paused': 'require_explicit_resume_and_current_evidence',
+               'blocked': 'require_explicit_resume_and_new_progress_evidence',
+               'completed': 'verify_completion_before_skipping'}
+    return {'video_id': code, 'revision': registry.get('revision', 0),
+            **{key: production.get(key) for key in ('state', 'stage', 'reason', 'task_id', 'run_id', 'owner', 'monitor')},
+            'worker_observation': 'unverified; bound identities are not live tool observations',
+            'evidence': production.get('evidence', [])[-5:], 'qa': qa,
+            'next_action': actions[state], 'grants_execution_authority': False,
+            'rule_paths': ['AGENTS.md', 'docs/COLLABORATION.md', 'docs/WORKFLOW.md', 'docs/REFERENCE_STATUS.md']}
 
 
 def sync(registry, report, report_path, run_id=None):
@@ -158,6 +234,8 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
         qa = validate(qa_evidence, video_id=code, task_id=current["task_id"],
                       run_id=current["run_id"], producer=current["owner"],
                       final_sha256=final_sha256)
+        if qa['schema_version'] != 2:
+            raise ValueError('New completion requires file-bound final QA schema_version=2')
     changed_at = datetime.now(KST).isoformat()
     updated = dict(current)
     updated.update({"state": state, "stage": stage if stage is not None else current.get("stage"),
@@ -194,6 +272,8 @@ def main(argv=None):
     show = sub.add_parser("show")
     show.add_argument("video_id")
     show.add_argument("--report", type=Path, help="Merge this report in memory without changing the registry")
+    recovery = sub.add_parser('context', help='Read-only compact recovery; never resume work')
+    recovery.add_argument('video_id')
     next_cmd = sub.add_parser('next', help='Read-only next production candidate/state audit')
     next_cmd.add_argument('--report', type=Path)
     change = sub.add_parser("mark")
@@ -204,13 +284,16 @@ def main(argv=None):
     for key in ("stage", "task_id", "run_id", "owner", "monitor", "reason", "qa_evidence", "final_sha256"):
         change.add_argument("--" + key.replace("_", "-"))
     change.add_argument("--new-over-paused", action="append", default=[])
+    change.add_argument('--expected-revision', type=int)
     args = parser.parse_args(argv)
     registry = load(args.registry)
     if args.command == "sync":
         report = json.loads(args.report.read_text(encoding="utf-8"))
-        sync(registry, report, args.report, args.run_id)
-        save(args.registry, registry)
+        with transaction(args.registry) as registry:
+            sync(registry, report, args.report, args.run_id)
         print(f"Synced {registry['report']['candidate_count']} hot reels; production states preserved")
+    elif args.command == 'context':
+        print(json.dumps(context(registry, args.video_id), ensure_ascii=False, indent=2))
     elif args.command == "list":
         if args.report:
             sync(registry, json.loads(args.report.read_text(encoding="utf-8")), args.report)
@@ -230,11 +313,11 @@ def main(argv=None):
             raise SystemExit(f"Unknown video ID: {args.video_id}")
         print(json.dumps(registry["posts"][args.video_id], ensure_ascii=False, indent=2))
     else:
-        mark(registry, args.video_id, args.state, args.evidence, expected=args.expected_state,
-             stage=args.stage, task_id=args.task_id, run_id=args.run_id, owner=args.owner,
-             monitor=args.monitor, reason=args.reason, qa_evidence=args.qa_evidence,
-             final_sha256=args.final_sha256, new_over_paused=args.new_over_paused)
-        save(args.registry, registry)
+        with transaction(args.registry, expected_revision=args.expected_revision) as registry:
+            mark(registry, args.video_id, args.state, args.evidence, expected=args.expected_state,
+                 stage=args.stage, task_id=args.task_id, run_id=args.run_id, owner=args.owner,
+                 monitor=args.monitor, reason=args.reason, qa_evidence=args.qa_evidence,
+                 final_sha256=args.final_sha256, new_over_paused=args.new_over_paused)
         print(f"{args.video_id}: {args.expected_state} -> {args.state}")
 
 

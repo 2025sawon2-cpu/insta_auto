@@ -8,6 +8,7 @@
 - Python은 지원 최소 3.10과 실제 환경을 고려한다. worktree에 venv가 없으면 원래 clone의 Python을 사용하되 cwd/PYTHONPATH는 수정 중인 worktree로 둔다. 운영 data/config를 테스트 fixture로 사용하지 않는다.
 - 관련 검사: `python -m pytest -q tests/<관련 파일>`, JS는 `node --test tests/<관련 파일>.test.cjs`와 `node --check <변경 파일>`. 정적 확인은 `git diff --check`.
 - 격리 테스트·소형 합성 fixture를 사용한다. 실제 외부 검색·모델·GPU·전체 영상 재제작을 일반 회귀 검사에 끼워 넣지 않는다.
+- 입력 스냅샷·상태 잠금·짧은 재개 요약은 ABBYS 2026-10-24 배포본의 설계를 참고해 기존 Python 모듈에 구현했다. 외부 런타임·전역 훅 의존성은 없다. 입력 변경·저장 중 변경·오래된 쓰기·프로세스 충돌과 강제 종료를 작은 파일 fixture로 검사한다. 기계적 결속 검사는 실제 품질 판정이나 에이전트의 네이티브 실행 확인을 대신하지 않는다.
 
 ## 지침 구조
 

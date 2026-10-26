@@ -166,6 +166,10 @@ def require_completion_binding(production):
         raise ValueError('Completed work is missing its task/run, QA or file identity')
     if production['owner'] == production['monitor']:
         raise ValueError('Completed work requires distinct producer and monitor')
+    if production.get('qa_record_sha256'):
+        from .final_qa import digest
+        if digest(production['qa_evidence']) != production['qa_record_sha256']:
+            raise ValueError('Completed QA record changed; inspect the original completion evidence')
 
 
 def public_production(code, production):
@@ -188,7 +192,7 @@ def publish(report, settings, snapshot_path):
     from .models import Post, Profile
     from .storage import Storage
     from .report import write_report
-    from .reference_registry import load, save, sync
+    from .reference_registry import transaction, sync
     prior = snapshot_path.with_name('previous-report.json')
     if settings.report_path.is_file():
         with prior.open('xb') as stream:
@@ -222,13 +226,12 @@ def publish(report, settings, snapshot_path):
     finally:
         store.close()
     registry_path = settings.data_dir / 'reference-status.json'
-    registry = sync(load(registry_path), report, settings.report_path,
-                    report['collection_verification']['run_id'])
-    for post in report['posts']:
-        production = registry['posts'].get(post['shortcode'], {}).get('production', {})
-        post['production'] = public_production(post['shortcode'], production)
-    write_report(settings, report)
-    save(registry_path, registry)
+    with transaction(registry_path) as registry:
+        sync(registry, report, settings.report_path, report['collection_verification']['run_id'])
+        for post in report['posts']:
+            production = registry['posts'].get(post['shortcode'], {}).get('production', {})
+            post['production'] = public_production(post['shortcode'], production)
+        write_report(settings, report)
 
 
 def main(argv=None):

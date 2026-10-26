@@ -111,6 +111,19 @@ def test_completion_needs_qa_and_read_only_view_does_not_write(tmp_path, capsys)
              qa_evidence=qa, final_sha256=sha(video))
     record["artifacts"]["cover"]["sha256"] = sha(cover)
     qa.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(ValueError, match='schema_version=2'):
+        mark(registry, 'a', 'completed', 'Legacy QA cannot certify a new completion',
+             expected='in_progress', qa_evidence=qa, final_sha256=sha(video))
+    record['schema_version'] = 2
+    for name in ('script', 'voice', 'plan'):
+        path = tmp_path / name
+        path.write_bytes(name.encode())
+        record['artifacts'][name].update(path=str(path), sha256=sha(path))
+    source, rule = tmp_path / 'source.mp4', tmp_path / 'RULES.md'
+    source.write_bytes(b'used source'); rule.write_bytes(b'applicable rules')
+    record['dependencies'] = {name: [{'path': str(path), 'sha256': sha(path)}]
+                              for name, path in (('sources', source), ('rules', rule))}
+    qa.write_text(json.dumps(record), encoding='utf-8')
     mark(registry, "a", "completed", "Final QA verified", expected="in_progress",
          qa_evidence=qa, final_sha256=sha(video))
     production = registry["posts"]["a"]["production"]

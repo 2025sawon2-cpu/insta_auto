@@ -10,12 +10,12 @@
 | 본문·댓글·DM 준비 문구 | hotpost/post_preparation_content.py/json | test_post_preparation_content.py |
 | 명시 썸네일 반영·AVC 전달·서버 간 실행권 | hotpost/post_thumbnail.py, post_media_rules.py | test_post_thumbnail.py, test_thumbnail_admission.py, test_post_media_rules.py |
 | 독립 계획 스타일·광고 전달·검토본 보관 | hotpost/production_delivery.py, publication_export.py | test_production_delivery.py, test_publication_export.py |
-| 제작자 최종 QA 결속·완료 전환·현재 영상/표지 저장 | hotpost/final_qa.py → reference_registry.py, publication_export.py | test_reference_registry.py, test_publication_export.py |
+| 제작자 최종 QA 결속·입력 파일/규칙 변경 감지·완료 전환·현재 영상/표지 저장 | hotpost/final_qa.py → reference_registry.py, publication_export.py | test_qa_input_binding.py, test_reference_registry.py, test_publication_export.py |
 | 로컬 폰 제어·명시 게시 | hotpost/mobile_reels_cli.py → mobile_device.py, mobile_reels.py | test_mobile_reels.py |
 | 대본 계약·3안·후킹·금지 표현 | hotpost/writing/RULES.md → contract.py, variants.py, hook_policy.py, script_style.py, pipeline.py | test_first_sentence_hook.py, test_writing_variants.py, test_internal_writing.py |
 | VoiceBench HTTP 연동 | hotpost/voicebench_adapter.py | test_voicebench_adapter.py |
 | 수집·분석·리포트(별도 실행 승인) | hotpost/cli.py → collectors/, storage.py, analyze.py, report.py | test_collection_control.py, hot_detection.test.cjs |
-| 레퍼런스 순위·게시물별 제작 상태 | hotpost/reference_registry.py, data/reference-status.json | test_reference_registry.py |
+| 레퍼런스 순위·제작 상태 트랜잭션·revision·읽기 전용 재개 context | hotpost/reference_registry.py → state_lock.py, data/reference-status.json | test_registry_transactions.py, test_reference_registry.py |
 | 오전 7시 72시간 현재 수치 선정·축약 수치·완성본 건너뛰기 | hotpost/daily_ranking.py → reference_registry.py, web/discovery/model.js | test_daily_ranking.py, discovery_model.test.cjs |
 | 설정 | hotpost/config.py, config.json, HOTPOST_* | 설정을 변경하는 기능의 계약 테스트 |
 | 지침 파일·경로 | tools/check_guidance.py, docs/guidance.json | .github/workflows/guidance.yml |

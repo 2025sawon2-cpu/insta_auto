@@ -53,11 +53,15 @@
 
 사용자 반응은 바로 앞의 대상·맥락·명시한 확인 범위에만 적용한다. 대본 확인이나 단순 진행 동의인 “좋아”를 영상 재생·청감·문장별 싱크 확인으로 넓히지 않는다. 음성을 실제 들을 수 없으면 `확인 불가`를 유지한다. 사용자 검토를 근거로 쓸 때에는 해당 evidence에 `method=human_user_review`, `user_quote`(실제 발언), `review_context`(제시한 대상과 질문), `reviewed_checks`(확인된 항목), `video_sha256`을 남긴다. 코드가 범위·현재 파일 결속을 검사하더라도 발언 의미를 대신 판단하지 않는다.
 
-판정 기준은 위 Markdown 규칙이다. 제작 에이전트는 실제 파일을 보고 판단한 뒤, 같은 Git 제외 task/run 폴더에 UTF-8 JSON 기록을 남긴다. `schema_version=1`, `video_id`(shortcode), `task_id`, `run_id`, `edit_id`, `producer`, 시간대가 있는 ISO `reviewed_at`이 필요하다. `artifacts`의 `script`·`voice`·`plan`에는 각각 현재 선택본의 `id`와 SHA-256을, `video`·`cover`에는 각각 현재 최종 파일의 절대 `path`와 실제 SHA-256을 기록한다. 입력 세 항목의 ID·해시는 제작자가 원래 작업 자료와 대조해 기록하며, 코드가 그 내용 자체를 판단했다고 보고하지 않는다.
+판정 기준은 위 Markdown 규칙이다. 제작 에이전트는 실제 파일을 보고 판단한 뒤, 같은 Git 제외 task/run 폴더에 UTF-8 JSON 기록을 남긴다. 신규 완료 전환에는 `schema_version=2`, `video_id`(shortcode), `task_id`, `run_id`, `edit_id`, `producer`, 시간대가 있는 ISO `reviewed_at`이 필요하다. `artifacts`의 `script`·`voice`·`plan`에는 각각 현재 선택본의 `id`, 실제 파일의 절대 `path`와 SHA-256을, `video`·`cover`에는 각각 현재 최종 파일의 절대 `path`와 실제 SHA-256을 기록한다. `dependencies.sources`에는 실제 사용 원본 파일 전체를, `dependencies.rules`에는 적용한 지침 원본을 각각 비어 있지 않은 `{path, sha256}` 배열로 연결한다. 코드는 연결된 입력 파일·규칙의 실제 바이트가 검토 당시와 같은지 확인하며, 자료 선택의 타당성·내용 품질은 제작자가 원본과 대조한다. 이 목록이 모든 사용 원본과 필요한 규칙을 포함했는지도 제작자가 확인한다.
+
+내용 검토 **전에** `python -m hotpost.final_qa inputs --script <선택 대본 파일> --voice <음성 파일> --plan <계획 JSON> --source <사용 원본 파일> --rule <규칙 원본>`으로 입력 경로와 해시를 읽기 전용 JSON으로 얻을 수 있다. `--source`·`--rule`은 필요한 파일마다 반복한다. 출력의 입력 정보를 같은 QA 기록에 연결하고 원래 선택본의 ID를 추가한 뒤 실제 검토와 판정을 기록한다. 명령은 QA 기록을 쓰거나 `충족` 판정을 생성하지 않는다. 변경 뒤 해시만 다시 채워 이전 판정을 유지하지 않고 영향받는 내용과 연결을 재검토한다.
+
+기존 `schema_version=1` 기록과 완료본은 기존 계약으로 읽고 `input_binding=legacy_metadata_only`로 범위를 구분한다. 원본·과거 판정을 자동 변경하거나 새 입력 검증을 소급해 주장하지 않는다. 새 `mark ... --state completed`에는 v2가 필요하다. v2 입력이 삭제·변경됐으면 현재 원장 완료 확인과 저장도 실패하며 자동 재제작하지 않는다. v1의 기존 영상·표지 해시 검사와 미확인 항목 거부는 유지한다.
 
 `checks`에는 `script`, `visual`, `audio_captions`, `cover_delivery` 네 항목을 모두 둔다. 각 항목은 `status`를 `충족 / 수정 필요 / 확인 불가` 중 하나로 기록하고, `evidence` 배열에 실제 관찰의 `asset`·`location`(문장·시간 구간·프레임 등)·`observation`을 남긴다. 대본 항목은 `script`, 화면·음성/자막 항목은 `video`, 표지·전달 항목은 `cover`에 대한 근거를 각각 포함한다. 예: `"visual": {"status": "충족", "evidence": [{"asset": "video", "location": "00:03.2–00:05.1", "observation": "처리 과정 뒤 양말의 변화가 보임"}]}`. 빈 근거나 `수정 필요`·`확인 불가`가 있으면 완료로 표시하지 않는다.
 
-`hotpost.final_qa.validate`는 기록의 형식·task/run·제작자 결속과 현재 영상·표지의 파일 존재/해시를 검사한다. 관찰 내용의 진실성·후킹·청감·마스킹 품질을 자동 보증하지 않는다. `reference_registry mark ... --state completed`와 `publication_export save ... --qa-record <이 JSON>`은 같은 검사를 거친다. 썸네일 반영 작업의 `completed`는 기술 작업의 종료이며 영상 품질 완료가 아니다. 반영 후 영상/표지 바이트가 달라졌다면 그 파일을 새로 검토해 QA 기록을 갱신한다. 과거 제작실 DB의 완료 이력은 읽기용으로 보존하고 새 QA 합격으로 소급 해석하지 않는다.
+`hotpost.final_qa.validate`는 기록의 형식·task/run·제작자 결속과 현재 영상·표지의 파일 존재/해시를 검사하고, v2의 대본·음성·계획·연결한 소스·규칙도 실제 파일과 대조한다. 검증 도중 파일이나 QA 기록이 바뀌면 거절한다. 관찰 내용의 진실성·후킹·청감·마스킹 품질을 자동 보증하지 않는다. `reference_registry mark ... --state completed`와 `publication_export save ... --qa-record <이 JSON>`은 같은 검사를 거친다. 썸네일 반영 작업의 `completed`는 기술 작업의 종료이며 영상 품질 완료가 아니다. 반영 후 영상/표지 바이트가 달라졌다면 그 파일을 새로 검토해 QA 기록을 갱신한다. 과거 제작실 DB의 완료 이력은 읽기용으로 보존하고 새 QA 합격으로 소급 해석하지 않는다.
 
 ## 콘텐츠·서비스 경계
 
