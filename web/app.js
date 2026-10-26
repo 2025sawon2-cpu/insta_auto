@@ -4,6 +4,7 @@
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
   let R = window.HOTPOST_REPORT;
+  const dailyRanking = () => R?.ranking_mode === 'views_per_follower_72h';
   async function loadCollectionHealth() {
     const el=$('#collection-health');if(!el)return;
     try{
@@ -82,9 +83,14 @@
   let saved;
   try {saved=await window.HotpostDisplay.load();} catch(e){saved={...window.HotpostDisplay.defaults};window.HotpostNotices.show($('#banner'),{title:'저장된 화면 설정을 불러오지 못해 기본 조건을 표시합니다.',tone:'warning',solution:'설정 페이지에서 서버 연결과 저장된 조건을 확인한 뒤 다시 열어 주세요.',actions:[{label:'설정 확인',href:'settings.html'}]});}
   const state={...saved,q:'',topic:null,production:'all'};
+  if(dailyRanking())Object.assign(state,{sort:'rank',assessment:'all',detection:'all',period:72});
   const linkedAccount=new URLSearchParams(location.search).get('account');if(linkedAccount)state.account=linkedAccount;
   function currentSettings(){
     const c=R.criteria.values;
+    if(dailyRanking()) {
+      $('#current-settings').innerHTML=`<p>최근 72시간 게시물 · 팔로워 대비 조회수순</p><p>조회수 ${fmt(c.minViews)} 이상 · 팔로워 대비 ${esc(c.t1)}배 이상</p><p>표시 게시물 <strong id="result-count">0</strong>개</p><p id="result-context" hidden></p>`;
+      return;
+    }
     const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16"/>',sort:'<path d="M7 4v16m-4-4 4 4 4-4M14 5h7m-7 5h5m-5 5h3"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>'})[name]}</svg>`;
     const period=state.detection==='today'?['오늘',window.HotpostDetection.dateKey(Date.now()/1000).slice(5).replace('-','/')]:state.period===24?['24','시간']:[state.period/24,'일'];
     const sort={rank:'급상승순',views:'조회수순',comments:'댓글순',likes:'좋아요순',recent:'최근 발견순'}[state.sort];
@@ -124,6 +130,12 @@
 
   // ---------- 통계 ----------
   function renderStats() {
+    if(dailyRanking()) {
+      const eligible=POSTS.filter(p=>p.eligible);
+      $('#stats').innerHTML=[['기준 통과',eligible.length],['확인한 게시물',POSTS.length],['확인한 계정',R.accounts.length]]
+        .map(([label,value])=>`<div class="stat"><div class="k">${label}</div><div class="v">${value}<small>개</small></div></div>`).join('');
+      return;
+    }
     const summary=discovery.dailyStats(POSTS);
     const stats=$('#stats');
     stats.dataset.day=summary.day;
@@ -162,12 +174,25 @@
     } catch (error) { e.target.textContent = error.message; e.target.disabled = false; }
   }, true);
   function productionMarkup(code) {
+    if(dailyRanking())return `<span>${esc(productionState(code).label)}</span>`;
     return window.AgentStatus.markup(agentState(code));
   }
   function agentState(code) {
     return window.AgentStatus.model(studioByCode.get(code),{legacy:productionByCode.get(code),loaded:studioLoaded,online:studioOnline&&(!studioSyncedAt||Date.now()-studioSyncedAt<15000)});
   }
   function productionState(code) {
+    if(dailyRanking()) {
+      const production=R.posts.find(p=>p.shortcode===code)?.production||{};
+      if(production.state==='completed'&&!production.completed_video_ready)
+        return {state:'attention',label:'완성본 확인 필요',action:'상태 확인'};
+      const states={completed:{state:'completed',label:'완성',action:'완성 영상 보기'},
+        not_started:{state:'idle',label:'미제작',action:'상세 보기'},
+        in_progress:{state:'working',label:'제작 중',action:'진행 확인'},
+        paused:{state:'attention',label:'중지',action:'상태 확인'},
+        blocked:{state:'attention',label:'보류',action:'상태 확인'},
+        unknown:{state:'attention',label:'제작 이력 미확인',action:'상태 확인'}};
+      return states[production.state]||states.unknown;
+    }
     const work = studioByCode.get(code);
     if (work) {
       const view = window.StudioBoard.describe(work), ready = work._summary?work.completed_video_ready:window.PostResult.model(work).active?.video_url;
@@ -200,6 +225,7 @@
   }
   let productionsRefreshing=false;
   async function refreshProductions() {
+    if(dailyRanking()){studioLoaded=true;return;}
     if(productionsRefreshing)return;productionsRefreshing=true;
     try{
     const responses = await Promise.allSettled([
@@ -260,12 +286,12 @@
       <div class="thumb">${thumb}
         <div class="tl">${p.tier ? `<span class="pill t${p.tier}">${tierTxt(p.tier)} ×${p.multiplier.toFixed(1)}</span>` : `<span class="pill">×${p.multiplier.toFixed(1)}</span>`}</div>
         <div class="tr"><span class="pill kind">${kindTxt(p.kind)}${p.video_duration ? ' · ' + Math.round(p.video_duration) + 's' : ''}</span></div>
-        <div class="rank">#${i + 1}</div>
+        <div class="rank">#${dailyRanking() ? p.rank : i + 1}</div>
       </div>
       <div class="body">
         <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="업로드 ${dateStr(p.taken_at)}">업로드 ${ago(Math.max(0,Date.now()/1000-p.taken_at)/3600)}</span></div>
         <div class="metrics benchmark-metrics">
-          ${isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
+          ${dailyRanking() ? `<div class="m"><div class="k">조회수 / 팔로워</div><div class="v">${esc(p.views_display||fmt(p.views))} / ${esc(p.followers_display||fmt(p.followers))}</div><div class="r">팔로워 대비 약 ${p.rank_score.toFixed(2)}배</div></div>` : isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
         </div>
         ${isVideo(p) ? `<div class="production-status" data-code="${esc(p.shortcode)}">${productionMarkup(p.shortcode)}</div>` : ''}
         <div class="foot"><button class="card-open-production">${isVideo(p) ? status.action+' →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 보기 ↗</a></div>
@@ -282,7 +308,7 @@
     current = visiblePosts(base);
     $('#cards').innerHTML = current.map(card).join('');
     const emp = $('#empty'); emp.hidden = current.length > 0;
-    if (!current.length) emp.textContent = state.detection === 'today' ? '오늘 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 오늘은 한국 시간 00시부터입니다.' : '선택한 기간에 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 설정에서 발견 기간이나 다른 조건을 확인하세요.';
+    if (!current.length) emp.textContent = dailyRanking() ? '최근 72시간 게시물 중 현재 조건을 통과한 게시물이 없습니다.' : state.detection === 'today' ? '오늘 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 오늘은 한국 시간 00시부터입니다.' : '선택한 기간에 새로 발견한 게시물 중 현재 조건에 맞는 게시물이 없습니다. 설정에서 발견 기간이나 다른 조건을 확인하세요.';
     if(!current.length&&state.production!=='all')emp.textContent=!studioLoaded?'영상 제작 상태를 확인하고 있어요…':
       state.production==='completed'?'현재 조건에 맞는 완성 영상이 없습니다.':'현재 조건에 맞는 제작 중 영상이 없습니다.';
     $('#result-count').textContent = current.length;
@@ -394,6 +420,7 @@
     },
     onReport:report=>{
       R=report;window.HOTPOST_REPORT=report;
+      if(dailyRanking())Object.assign(state,{sort:'rank',assessment:'all',detection:'all',period:72});
       acctMap=Object.fromEntries((R.accounts||[]).map(account=>[account.username,account]));
       renderReportMetadata();
     }

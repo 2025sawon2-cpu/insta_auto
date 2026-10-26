@@ -47,6 +47,13 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
                             'reference_accounts': True})
             elif path in ('/data.js', '/api/report'):
                 report = json.loads(settings.report_path.read_text('utf8'))
+                if report.get('ranking_mode') == 'views_per_follower_72h':
+                    from .reference_registry import load
+                    from .daily_ranking import public_production
+                    registry = load(settings.data_dir / 'reference-status.json')
+                    for post in report['posts']:
+                        production = registry['posts'].get(post['shortcode'], {}).get('production', {})
+                        post['production'] = public_production(post['shortcode'], production)
                 if path == '/api/report':
                     self._json(report)
                 else:

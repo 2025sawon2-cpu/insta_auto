@@ -16,6 +16,7 @@
 | VoiceBench HTTP 연동 | hotpost/voicebench_adapter.py | test_voicebench_adapter.py |
 | 수집·분석·리포트(별도 실행 승인) | hotpost/cli.py → collectors/, storage.py, analyze.py, report.py | test_collection_control.py, hot_detection.test.cjs |
 | 레퍼런스 순위·게시물별 제작 상태 | hotpost/reference_registry.py, data/reference-status.json | test_reference_registry.py |
+| 오전 7시 72시간 현재 수치 선정·축약 수치·완성본 건너뛰기 | hotpost/daily_ranking.py → reference_registry.py, web/discovery/model.js | test_daily_ranking.py, discovery_model.test.cjs |
 | 설정 | hotpost/config.py, config.json, HOTPOST_* | 설정을 변경하는 기능의 계약 테스트 |
 | 지침 파일·경로 | tools/check_guidance.py, docs/guidance.json | .github/workflows/guidance.yml |
 

@@ -30,6 +30,7 @@
 | 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md) |
 | 영상 시작·완료·썸네일 완료 | [LOCAL_VIDEO_STORAGE.md](docs/LOCAL_VIDEO_STORAGE.md) + 원래 clone의 `local/VIDEO_STORAGE.md`, `local/video-storage.json` |
 | 신규 제작 선정·중단 재개·레퍼런스 현황 | [REFERENCE_STATUS.md](docs/REFERENCE_STATUS.md), [WORKFLOW.md](docs/WORKFLOW.md) |
+| 오전 7시 최근 72시간 수집·선정 | [DAILY_RANKING.md](docs/DAILY_RANKING.md) |
 | 게시물 문구·썸네일 반영 | [POST_COPY_RULES.md](docs/POST_COPY_RULES.md), [게시물 준비 계약](docs/POST_PREPARATION_UI_20261022.md) |
 | 폰 제어·게시 | [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md) |
 | 개발 검증·지침 유지보수 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) |

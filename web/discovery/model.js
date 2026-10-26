@@ -8,7 +8,9 @@
     function baseFiltered(posts, state, now = Date.now() / 1000) {
       const query = state.q;
       return posts.filter(post => {
-        if (state.detection === 'today') {
+        if (post.ranking_mode === 'views_per_follower_72h') {
+          if (!post.eligible) return false;
+        } else if (state.detection === 'today') {
           if (!detection.isToday(post, now)) return false;
         } else if (!detection.withinHours(post, state.period, now)) return false;
         if (state.kind === 'video' && !isVideo(post)) return false;
@@ -24,7 +26,7 @@
     function filtered(base, state, now = Date.now() / 1000) {
       const list = base.filter(post => {
         if (post.tier < state.tier) return false;
-        if (state.assessment !== 'all' && post.assessment?.status !== state.assessment) return false;
+        if (post.ranking_mode !== 'views_per_follower_72h' && state.assessment !== 'all' && post.assessment?.status !== state.assessment) return false;
         if (state.topic && !(post.categories || ['생활·기타']).includes(state.topic)) return false;
         return true;
       });
@@ -35,14 +37,15 @@
         likes: post => post.likes,
         recent: post => post.hot_detected_at,
       }[state.sort];
-      return list.sort((a, b) => detection.compare(a, b, key, now));
+      return list.sort((a, b) => state.sort === 'rank' && a.ranking_mode === 'views_per_follower_72h'
+        ? a.rank - b.rank : detection.compare(a, b, key, now));
     }
 
     function topics(base, state) {
       const groups = new Map();
       for (const post of base) {
         if (post.tier < Math.max(1, state.tier) ||
-          (state.assessment !== 'all' && post.assessment?.status !== state.assessment)) continue;
+          (post.ranking_mode !== 'views_per_follower_72h' && state.assessment !== 'all' && post.assessment?.status !== state.assessment)) continue;
         for (const label of post.categories || ['생활·기타']) {
           if (!groups.has(label)) groups.set(label, {label, posts: 0, score: 0, accounts: new Set()});
           const group = groups.get(label);
@@ -58,7 +61,8 @@
 
     // Header totals describe the whole Korean day, independently of card filters.
     function dailyStats(posts, now = Date.now() / 1000) {
-      const hot = posts.filter(post => detection.isToday(post, now));
+      const daily = posts.some(post => post.ranking_mode === 'views_per_follower_72h');
+      const hot = posts.filter(post => daily ? post.eligible : detection.isToday(post, now));
       return {
         day: detection.dateKey(now),
         total: hot.length,

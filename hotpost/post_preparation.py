@@ -58,6 +58,9 @@ class PostPreparation:
 
     def source(self, code):
         code = shortcode(code)
+        registered = self._registered_source(code)
+        if registered is not None:
+            return registered
         historical = self.root / 'studio' / 'studio.sqlite3'
         state = {}
         if historical.is_file():
@@ -115,6 +118,51 @@ class PostPreparation:
                 'spoken_text': spoken_text, 'publication_rules': rules,
                 'thumbnail_style': plan.get('cover_spec', {}).get('style', {}),
                 'thumbnail_ready': bool(base_final and background and font and font.is_file())}
+
+    def _registered_source(self, code):
+        """Current independent completions take precedence over historical Studio."""
+        registry_path = self.root / 'reference-status.json'
+        if not registry_path.is_file():
+            return None
+        from .reference_registry import load
+        production = load(registry_path)['posts'].get(code, {}).get('production', {})
+        if production.get('state') != 'completed':
+            return None
+        empty = {'run_id': production.get('run_id'), 'edit_id': None, 'script': '', 'cover_text': '',
+                 'media': {'reference': None, 'final': None, 'cover': None}, 'media_version': None,
+                 'base_final': None, 'thumbnail_background': None, 'thumbnail_font': None,
+                 'spoken_text': '', 'publication_rules': {}, 'thumbnail_style': {}, 'thumbnail_ready': False}
+        path = self._file(production.get('qa_evidence'))
+        if path is None:
+            return empty
+        try:
+            qa = json.loads(path.read_text('utf-8'))
+            video = self._file(qa['artifacts']['video']['path'])
+            cover = self._file(qa['artifacts']['cover']['path'])
+            if not video or not cover:
+                return empty
+            from .final_qa import validate
+            from .daily_ranking import require_completion_binding
+            require_completion_binding(production)
+            validate(path, video_id=code, task_id=production.get('task_id'),
+                     run_id=production.get('run_id'), producer=production.get('owner'),
+                     final_sha256=production.get('final_sha256'))
+            empty.update(edit_id=qa['edit_id'], base_final=video,
+                         media_version=production.get('final_sha256'))
+            empty['media'].update(final=video, cover=cover)
+            from .final_qa import digest
+            script = self._file(qa['artifacts']['script'].get('path'))
+            if script and digest(script) == qa['artifacts']['script']['sha256']:
+                empty['spoken_text'] = script.read_text('utf-8')
+                empty['script'] = without_opening_interjection(empty['spoken_text'])
+            plan_path = self._file(qa['artifacts']['plan'].get('path'))
+            if plan_path and plan_path.stat().st_size <= 8*1024*1024 and digest(plan_path) == qa['artifacts']['plan']['sha256']:
+                plan = json.loads(plan_path.read_text('utf-8'))
+                lines = plan.get('cover_spec', {}).get('lines')
+                empty['cover_text'] = '\n'.join(str(line) for line in lines) if isinstance(lines, list) else plan.get('cover_text', '')
+        except (ValueError, OSError, KeyError, TypeError):
+            pass
+        return empty
 
     def defaults(self, code, source):
         options = dict.fromkeys(CHOICES, '')
@@ -211,6 +259,11 @@ class PostPreparation:
         if kind not in ('reference', 'final', 'cover'):
             raise FileNotFoundError('영상을 찾을 수 없습니다.')
         if version and kind in ('final','cover'):
+            if re.fullmatch('[a-f0-9]{64}', version):
+                current = self._registered_source(code)
+                if current and current['media_version'] == version and current['media'][kind]:
+                    return current['media'][kind]
+                raise FileNotFoundError('현재 완성 영상 파일을 확인할 수 없습니다.')
             if not re.fullmatch('[a-f0-9]{32}', version):
                 raise FileNotFoundError('영상을 찾을 수 없습니다.')
             with self.connect() as db:

@@ -51,12 +51,16 @@ def sync(registry, report, report_path, run_id=None):
     for entry in registry["posts"].values():
         entry["reference"]["in_latest_report"] = False
     candidates = [p for p in report["posts"] if p.get("kind") == "reel" and (p.get("tier") or 0) >= 1 and p.get("shortcode")]
-    # Date desc, then score desc, then publication time desc, then stable ID.
+    daily = report.get('ranking_mode') == 'views_per_follower_72h'
+    # Old reports retain their historical ordering; daily snapshots span all 72 hours.
     candidates.sort(key=lambda p: p["shortcode"])
-    candidates.sort(key=lambda p: (p.get("rank_score") or 0, p.get("taken_at") or 0), reverse=True)
-    candidates.sort(key=lambda p: kst_date(p.get("taken_at")) or "", reverse=True)
+    candidates.sort(key=lambda p: (p.get("rank_score") or 0,
+                                   (p.get('views') or 0) if daily else 0,
+                                   p.get("taken_at") or 0), reverse=True)
+    if not daily:
+        candidates.sort(key=lambda p: kst_date(p.get("taken_at")) or "", reverse=True)
     ranks = {}
-    for post in candidates:
+    for rank, post in enumerate(candidates, 1):
         code = post["shortcode"]
         day = kst_date(post.get("taken_at"))
         ranks[day] = ranks.get(day, 0) + 1
@@ -79,6 +83,11 @@ def sync(registry, report, report_path, run_id=None):
             "metric_status": post.get("metric_status"),
             "in_latest_report": True,
             "report_generated_at": report.get("generated_at"),
+            "rank": rank if daily else None,
+            "ranking_mode": report.get('ranking_mode'),
+            "views_display": post.get('views_display'),
+            "followers": post.get('followers'),
+            "followers_display": post.get('followers_display'),
         })
         registry["posts"][code] = {
             "video_id": code,
@@ -89,7 +98,7 @@ def sync(registry, report, report_path, run_id=None):
         }
     registry["report"] = {"path": str(report_path), "generated_at": report.get("generated_at"),
                           "collection_started_at": report.get("collection_started_at"), "run_id": run_id,
-                          "candidate_count": len(candidates)}
+                          "candidate_count": len(candidates), "ranking_mode": report.get('ranking_mode')}
     return registry
 
 
@@ -98,9 +107,12 @@ def ranked(registry, include_old=False):
     if not include_old:
         entries = [p for p in entries if p["reference"].get("in_latest_report")]
     entries.sort(key=lambda p: p["video_id"])
+    daily = (registry.get('report') or {}).get('ranking_mode') == 'views_per_follower_72h'
     entries.sort(key=lambda p: (p["reference"].get("rank_score") or 0,
+                                (p['reference'].get('views') or 0) if daily else 0,
                                 p["reference"].get("published_at") or 0), reverse=True)
-    entries.sort(key=lambda p: p["reference"].get("published_date_kst") or "", reverse=True)
+    if not daily:
+        entries.sort(key=lambda p: p["reference"].get("published_date_kst") or "", reverse=True)
     return entries
 
 
@@ -182,6 +194,8 @@ def main(argv=None):
     show = sub.add_parser("show")
     show.add_argument("video_id")
     show.add_argument("--report", type=Path, help="Merge this report in memory without changing the registry")
+    next_cmd = sub.add_parser('next', help='Read-only next production candidate/state audit')
+    next_cmd.add_argument('--report', type=Path)
     change = sub.add_parser("mark")
     change.add_argument("video_id")
     change.add_argument("--state", required=True, choices=sorted(STATES))
@@ -202,8 +216,13 @@ def main(argv=None):
             sync(registry, json.loads(args.report.read_text(encoding="utf-8")), args.report)
         for item in ranked(registry, args.all):
             ref, prod = item["reference"], item["production"]
-            print(f"{item['video_id']}\t{ref.get('published_date_kst') or '?'}\t#{ref.get('rank_in_published_date') or '?'}"
+            print(f"{item['video_id']}\t{ref.get('published_date_kst') or '?'}\t#{ref.get('rank') or ref.get('rank_in_published_date') or '?'}"
                   f"\t{ref.get('rank_score') or '?'}\t{prod['state']}\t{(ref.get('assessment') or {}).get('status', '?')}")
+    elif args.command == 'next':
+        if args.report:
+            sync(registry, json.loads(args.report.read_text('utf-8')), args.report)
+        from .daily_ranking import select_next
+        print(json.dumps(select_next(registry), ensure_ascii=False))
     elif args.command == "show":
         if args.report:
             sync(registry, json.loads(args.report.read_text(encoding="utf-8")), args.report)
