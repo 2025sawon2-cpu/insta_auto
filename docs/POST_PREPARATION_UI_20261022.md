@@ -65,3 +65,10 @@
 ## 2026-10-23 소스32 확대 후 썸네일 기준 보존
 
 사용자가 지정한 소스32의 녹색 가림은 해당 소스 세 구간의1.2배 확대로 제거했다. 현재 공개 결과와 독립 검증은 PRODUCTION_ISSUES 최신 절 및 data/shelf-source32-zoom-20261023에 있다. active.json의 body_final은 이 수정 완료본을 가리킨다. 후속 썸네일 생성은 이 파일을 기준으로 첫 프레임만 바꾸며 수정된 본문을 되돌리지 않는다. 완성본 공개 전 DB 잠금 안에서 edit_id와 base_final이 준비 당시와 같은지 확인해 동시 수정 덮어쓰기를 방지한다. 이 경로의 짧은 실제 렌더 회귀 검사를 추가했고 관련17검사가 통과했다.
+
+
+## Studio 작업 없는 독립 완성본 조회
+
+`data/post-preparations/{shortcode}/independent.json`으로 현재 독립 영상과 적용 표지를 읽을 수 있다. `completion_verified`가 true이고 `final`, `cover`가 data 내부의 실제 MP4 및 PNG/JPG/WebP 파일이며 `sha256.final`, `sha256.cover`가 현재 파일과 일치해야 노출한다. `version`은 영문·숫자·밑줄·하이픈의 1~100자 식별자다. `spoken_text`, `cover_text`, 선택 `reference`, `rules`를 함께 기록한다. 파일 교체는 검증된 쌍과 해시를 준비한 뒤 manifest를 원자 교체한다.
+
+독립 manifest가 유효하면 기존 게시물 준비 API와 버전별 미디어 URL에서 읽고 Studio 작업을 만들지 않는다. 유효하지 않으면 기존 역사적 완료본 조회를 유지한다. 배경·폰트 편집 자료를 제공하지 않는 이 경로는 썸네일 재반영 버튼을 활성화하지 않는다. 기존 초안·DM 문구와 기존 완료본 썸네일 경로는 유지한다. 이 조회 검증은 제작자의 내용·청감·현재 파일 QA와 완료 후 감시 검증을 대신하지 않는다. 생성 미디어와 manifest는 Git에서 제외한다.
