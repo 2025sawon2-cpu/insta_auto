@@ -7,16 +7,17 @@ from .post_preparation import DraftConflict
 
 
 class PostPreparationHTTP:
-    def post_preparation_request(self, service, *, write=False, head=False, thumbnail=False):
+    def post_preparation_request(self, service, *, write=False, head=False, thumbnail=False, coupang=False):
         parsed = urlparse(self.path)
         if not parsed.path.startswith('/api/post-preparations/'):
             return False
         # Invalid writes can be rejected before their body is read.
         # Close this connection so leftover bytes cannot become another request.
-        if write or thumbnail:
+        if write or thumbnail or coupang:
             self.close_connection = True
-        if thumbnail:
-            match = re.fullmatch(r'/api/post-preparations/([A-Za-z0-9_-]{1,100})/thumbnail', parsed.path)
+        if thumbnail or coupang:
+            action = 'coupang-link' if coupang else 'thumbnail'
+            match = re.fullmatch(r'/api/post-preparations/([A-Za-z0-9_-]{1,100})/' + action, parsed.path)
             if not match:
                 self._json({'error': '썸네일 반영 경로를 확인하세요.'}, 404)
                 return True
@@ -25,9 +26,9 @@ class PostPreparationHTTP:
         if not match:
             self._json({'error': '게시물을 찾을 수 없습니다.'}, 404)
             return True
-        code, kind = (match.group(1), None) if thumbnail else match.groups()
+        code, kind = (match.group(1), None) if thumbnail or coupang else match.groups()
         try:
-            if write or thumbnail:
+            if write or thumbnail or coupang:
                 if kind:
                     self._json({'error': '초안만 저장할 수 있습니다.'}, 405)
                     return True
@@ -39,7 +40,9 @@ class PostPreparationHTTP:
                 if not 0 < length <= 64000:
                     raise ValueError('입력 크기를 확인하세요.')
                 payload = json.loads(self.rfile.read(length))
-                self._json(service.start_thumbnail(code, payload) if thumbnail else service.save(code, payload), 202 if thumbnail else 200)
+                result = (service.start_coupang_link(code, payload) if coupang else
+                          service.start_thumbnail(code, payload) if thumbnail else service.save(code, payload))
+                self._json(result, 202 if thumbnail or coupang else 200)
             elif kind:
                 self._post_preparation_media(service.media(code, kind, parse_qs(parsed.query).get('v', [None])[0]), code, kind,
                                              parse_qs(parsed.query).get('download') == ['1'], head)

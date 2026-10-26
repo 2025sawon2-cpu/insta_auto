@@ -26,10 +26,13 @@ def shortcode(value):
 
 class PostPreparation:
     def __init__(self, settings):
+        self.settings = settings
         self.root = settings.data_dir.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / 'post-preparation.sqlite3'
         with self.connect() as db:
+            from .post_coupang_link import initialize
+            initialize(db)
             db.execute('''CREATE TABLE IF NOT EXISTS drafts (
                 shortcode TEXT PRIMARY KEY, revision INTEGER NOT NULL,
                 value TEXT NOT NULL, updated REAL NOT NULL)''')
@@ -59,6 +62,9 @@ class PostPreparation:
 
     def source(self, code):
         code = shortcode(code)
+        registered = self._registered_source(code)
+        if registered is not None:
+            return registered
         independent = self._independent_source(code)
         if independent:
             return independent
@@ -120,6 +126,51 @@ class PostPreparation:
                 'thumbnail_style': plan.get('cover_spec', {}).get('style', {}),
                 'thumbnail_ready': bool(base_final and background and font and font.is_file())}
 
+    def _registered_source(self, code):
+        """Current independent completions take precedence over historical Studio."""
+        registry_path = self.root / 'reference-status.json'
+        if not registry_path.is_file():
+            return None
+        from .reference_registry import load
+        production = load(registry_path)['posts'].get(code, {}).get('production', {})
+        if production.get('state') != 'completed':
+            return None
+        empty = {'run_id': production.get('run_id'), 'edit_id': None, 'script': '', 'cover_text': '',
+                 'media': {'reference': None, 'final': None, 'cover': None}, 'media_version': None,
+                 'base_final': None, 'thumbnail_background': None, 'thumbnail_font': None,
+                 'spoken_text': '', 'publication_rules': {}, 'thumbnail_style': {}, 'thumbnail_ready': False}
+        path = self._file(production.get('qa_evidence'))
+        if path is None:
+            return empty
+        try:
+            qa = json.loads(path.read_text('utf-8'))
+            video = self._file(qa['artifacts']['video']['path'])
+            cover = self._file(qa['artifacts']['cover']['path'])
+            if not video or not cover:
+                return empty
+            from .final_qa import validate
+            from .daily_ranking import require_completion_binding
+            require_completion_binding(production)
+            validate(path, video_id=code, task_id=production.get('task_id'),
+                     run_id=production.get('run_id'), producer=production.get('owner'),
+                     final_sha256=production.get('final_sha256'))
+            empty.update(edit_id=qa['edit_id'], base_final=video,
+                         media_version=production.get('final_sha256'))
+            empty['media'].update(final=video, cover=cover)
+            from .final_qa import digest
+            script = self._file(qa['artifacts']['script'].get('path'))
+            if script and digest(script) == qa['artifacts']['script']['sha256']:
+                empty['spoken_text'] = script.read_text('utf-8')
+                empty['script'] = without_opening_interjection(empty['spoken_text'])
+            plan_path = self._file(qa['artifacts']['plan'].get('path'))
+            if plan_path and plan_path.stat().st_size <= 8*1024*1024 and digest(plan_path) == qa['artifacts']['plan']['sha256']:
+                plan = json.loads(plan_path.read_text('utf-8'))
+                lines = plan.get('cover_spec', {}).get('lines')
+                empty['cover_text'] = '\n'.join(str(line) for line in lines) if isinstance(lines, list) else plan.get('cover_text', '')
+        except (ValueError, OSError, KeyError, TypeError):
+            pass
+        return empty
+
     def _independent_source(self, code):
         """Read a verified independent delivery without creating a Studio task."""
         path = self.root / 'post-preparations' / code / 'independent.json'
@@ -179,12 +230,14 @@ class PostPreparation:
         draft = {**build_dm_copy(code, source['cover_text'] or source['script']), **draft,
                  'dm_message': DM_MESSAGE}
         from .post_thumbnail import job_status
+        from .post_coupang_link import status as coupang_status
         thumbnail = {**job_status(self, code), 'ready': source['thumbnail_ready'], 'applied_text': source['cover_text']}
         suffix = '?v=' + source['media_version'] if source['media_version'] else ''
         return {'shortcode': code, 'accounts': list(ACCOUNTS), 'draft': draft,
                 'revision': row['revision'] if row else 0, 'updated': row['updated'] if row else None,
                 'source_run_id': source['run_id'], 'source_edit_id': source['edit_id'],
                 'thumbnail': thumbnail,
+                'coupang_link': coupang_status(self, code),
                 'media': {key: f'/api/post-preparations/{code}/media/{key}' + (suffix if key in ('final','cover') else '') if value else None
                           for key, value in source['media'].items()}}
 
@@ -241,13 +294,22 @@ class PostPreparation:
         from .post_thumbnail import start
         return start(self, shortcode(code), payload)
 
+    def start_coupang_link(self, code, payload):
+        from .post_coupang_link import start
+        return start(self, shortcode(code), payload)
+
     def media(self, code, kind, version=None):
         code = shortcode(code)
         if kind not in ('reference', 'final', 'cover'):
             raise FileNotFoundError('영상을 찾을 수 없습니다.')
         if version and kind in ('final','cover'):
+            if re.fullmatch('[a-f0-9]{64}', version):
+                current = self._registered_source(code)
+                if current and current['media_version'] == version and current['media'][kind]:
+                    return current['media'][kind]
+                raise FileNotFoundError('현재 완성 영상 파일을 확인할 수 없습니다.')
             independent = self._independent_source(code)
-            if independent and independent['media_version'] == version:
+            if self._registered_source(code) is None and independent and independent['media_version'] == version:
                 return independent['media'][kind]
             if not re.fullmatch('[a-f0-9]{32}', version):
                 raise FileNotFoundError('영상을 찾을 수 없습니다.')

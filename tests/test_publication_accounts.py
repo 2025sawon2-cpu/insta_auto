@@ -95,3 +95,24 @@ def test_startup_does_not_import_retired_production_or_collection_runners():
         "assert not any(n in sys.modules for n in ('hotpost.server','hotpost.studio','hotpost.job_queue','hotpost.collector'))"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_coupang_lookup_requires_explicit_post_and_rejects_cross_origin(dashboard, monkeypatch):
+    from hotpost.post_preparation import PostPreparation
+    calls = []
+    def start(service, code, payload):
+        calls.append((code, payload))
+        return {'status': 'running', 'id': 'lookup'}
+    monkeypatch.setattr(PostPreparation, 'start_coupang_link', start)
+    request, _ = dashboard
+    assert request('GET', '/api/post-preparations/post')[0] == 200
+    assert calls == []
+    assert request('POST', '/api/post-preparations/post/coupang-link', {},
+                   {'Origin': 'https://unrelated.example'})[0] == 403
+    assert calls == []
+    status, result = request('POST', '/api/post-preparations/post/coupang-link', {'revision': 0})
+    assert status == 202 and result['id'] == 'lookup'
+    assert calls == [('post', {'revision': 0})]
+    assert request('PUT', '/api/post-preparations/post/coupang-link', {})[0] == 404
+    health = request('GET', '/api/health')[1]
+    assert health['production_workers'] == health['collection_workers'] == 0

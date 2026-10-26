@@ -51,6 +51,7 @@ def test_orphan_script_cannot_permanently_block_new_video_owner(tmp_path,monkeyp
 def run(tmp_path, monkeypatch, replies):
     calls=[]
     def chat(instruction, data, schema, check, state):
+        assert state['purpose'] == 'script_writing'
         calls.append((instruction,json.loads(data)))
         value=replies[len(calls)-1]
         if isinstance(value,Exception):raise value

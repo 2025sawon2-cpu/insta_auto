@@ -38,3 +38,14 @@ def test_unverified_and_outside_independent_assets_are_not_exposed(tmp_path):
                   {'completion_verified': True, 'final': str(outside), 'cover': str(outside)}):
         (folder/'independent.json').write_text(json.dumps(value), encoding='utf8')
         assert service.get('post')['media']['final'] is None
+
+
+def test_registered_completion_keeps_priority_over_manifest(tmp_path, monkeypatch):
+    service = PostPreparation(SimpleNamespace(data_dir=tmp_path))
+    registered = {'media_version': None, 'media': {'final': None, 'cover': None}}
+    monkeypatch.setattr(service, '_registered_source', lambda code: registered)
+    monkeypatch.setattr(service, '_independent_source', lambda code: {'media_version': 'manifest-version', 'media': {'final': tmp_path/'old.mp4'}})
+    assert service.source('post') is registered
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        service.media('post', 'final', 'manifest-version')

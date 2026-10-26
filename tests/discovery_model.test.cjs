@@ -8,6 +8,18 @@ const post=(id,changes={})=>({shortcode:id,username:'creator',caption:'텐트를
   categories:['캠핑·여행'],kind:'reel',tier:2,rank_score:4,hot_detected_at:now-60,taken_at:now-86400,
   assessment:{status:'confirmed'},...changes});
 
+test('daily 72-hour snapshots rank only qualified posts across dates and preserve completed ranks',()=>{
+  const daily=(id,rank,changes={})=>post(id,{ranking_mode:'views_per_follower_72h',eligible:true,
+    rank,rank_score:10-rank,hot_detected_at:null,assessment:{status:'qualified'},...changes});
+  const posts=[daily('new',2),daily('completed',1,{taken_at:now-71*3600,production:{state:'completed'}}),
+    daily('below',undefined,{eligible:false,tier:0})];
+  const base=model.baseFiltered(posts,state,now);
+  assert.equal(base.length,2);
+  assert.deepEqual(model.filtered(base,state,now).map(p=>p.shortcode),['completed','new']);
+  assert.deepEqual(model.filtered(base,{...state,account:'creator',assessment:'confirmed'},now)
+    .map(p=>p.rank),[1,2]);
+});
+
 test('discovery filters use Korean detection date, and rolling periods can include yesterday',()=>{
   const posts=[post('today'),post('yesterday',{hot_detected_at:now-3600}),post('ordinary',{tier:0})];
   assert.deepEqual(model.baseFiltered(posts,state,now).map(p=>p.shortcode),['today']);

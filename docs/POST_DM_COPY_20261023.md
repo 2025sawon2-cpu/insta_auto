@@ -1,6 +1,6 @@
 # 게시물 준비 DM 문구와 개별 복사
 
-2026-10-23 사용자 요청. 작업 브랜치 `feat/post-dm-copy-20261023`, 기준 origin/main `1e4d129c06df82d0a0be0d79b151ed605b3cd021`. 협업 규칙은 같은 커밋의 `docs/COLLABORATION.md` 원문을 확인했다. 이슈/PR 없이 검사 후 최신 main을 통합하고 자동 push한다.
+2026-10-23 사용자 요청의 과거 구현 기록이다. 작업 브랜치 `feat/post-dm-copy-20261023`, 기준 origin/main `1e4d129c06df82d0a0be0d79b151ed605b3cd021`. 당시 협업 원본에 따른 Git 통합·전달 절차를 사용했다. 현재 Git 반영은 [협업 원본](COLLABORATION.md)의 사용자 직접 반영 규칙을 따른다.
 
 - DM 메시지는 사용자 지정 4줄 고정 안내와 아래 방향 이모지 8개다. 정확한 원문은 `POST_COPY_RULES.md`와 `post_preparation_content.DM_MESSAGE`를 따른다.
 - 완료 게시물 30개에 확인된 주제에 맞는 20자 이내 한 줄 버튼 문구를 작성했다. 화면에서 수정하고 초안으로 저장한다. 서버에서도 빈 문구·20자 초과·줄바꿈을 거부한다.

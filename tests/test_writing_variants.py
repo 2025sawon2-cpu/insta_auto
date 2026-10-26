@@ -22,6 +22,7 @@ def triplet():
 def test_public_pipeline_generates_three_and_reviews_each_with_peer_context(tmp_path,monkeypatch):
     calls=[]
     def chat(instruction,data,schema,check,state):
+        assert state['purpose'] == 'script_writing'
         value=json.loads(data);calls.append(value)
         assert snapshot()['prompt'] in instruction
         assert '후킹 → 상황 설정 → 문제 해소 → 공감 → CTA' in instruction

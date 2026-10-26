@@ -4,7 +4,7 @@
 
 ## 시작·재개 시
 
-1. [협업 원본](docs/COLLABORATION.md)을 작업 시작, 세션 재개·컨텍스트 압축 후, 범위 확장, 병합/push 직전에 실제로 다시 읽는다. 협업 절차의 단일 원본이며 최신 사용자 명시 지시가 우선한다.
+1. [협업 원본](docs/COLLABORATION.md)을 작업 시작, 세션 재개·컨텍스트 압축 후, 범위 확장, 사용자가 요청한 Git 변경 작업 직전에 실제로 다시 읽는다. 협업 절차의 단일 원본이며 최신 사용자 명시 지시가 우선한다.
 2. `git status --short`와 관련 브랜치를 확인하고 기존 변경을 보존한다. [현재 작업 경계](docs/WORKFLOW.md)를 읽는다. 운영 이력이 필요하면 원래 clone의 Git 제외 `docs/HANDOFF.md`에서 해당 작업의 최신 절만 확인한다.
 3. 아래 표로 필요한 규칙을 읽고 수정할 모듈·계약 테스트를 [코드 지도](docs/CODE_MAP.md)에서 찾는다. 파일이 없으면 원본 clone/최신 Git에서 확보하며 기억으로 대신하지 않는다.
 4. 작업 범위·읽은 문서 SHA·기준 커밋·현재 단계·검증·미해결 사항을 Git 제외 `local/SESSION.md`에 남긴다. 재개 시 문서가 바뀌었으면 다시 읽는다.
@@ -26,10 +26,11 @@
 |---|---|
 | 집필·수정·대본 검사 | [writing/RULES.md](hotpost/writing/RULES.md) |
 | 소스 검색·검토·검색 기록 | [SOURCE_WORKFLOW.md](docs/SOURCE_WORKFLOW.md), [SOURCE_SEARCH_LOG.md](docs/SOURCE_SEARCH_LOG.md) |
-| 음성·잘림 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
+| 음성·잘림·확인된 발음 이상 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
 | 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md) |
 | 영상 시작·완료·썸네일 완료 | [LOCAL_VIDEO_STORAGE.md](docs/LOCAL_VIDEO_STORAGE.md) + 원래 clone의 `local/VIDEO_STORAGE.md`, `local/video-storage.json` |
 | 신규 제작 선정·중단 재개·레퍼런스 현황 | [REFERENCE_STATUS.md](docs/REFERENCE_STATUS.md), [WORKFLOW.md](docs/WORKFLOW.md) |
+| 오전 7시 최근 72시간 수집·선정 | [DAILY_RANKING.md](docs/DAILY_RANKING.md) |
 | 게시물 문구·썸네일 반영 | [POST_COPY_RULES.md](docs/POST_COPY_RULES.md), [게시물 준비 계약](docs/POST_PREPARATION_UI_20261022.md) |
 | 폰 제어·게시 | [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md) |
 | 개발 검증·지침 유지보수 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) |

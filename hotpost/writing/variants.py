@@ -57,7 +57,7 @@ def generate_three(payload, directory, check, progress, *, evaluate):
     if visual:
         evidence['reference_visual'] = visual
     visual_instruction = VISUAL_INSTRUCTION if images else ''
-    state = {'directory':directory,'calls':[]}
+    state = {'directory':directory,'calls':[], 'purpose':'script_writing'}
     if visual:
         state['reference_visual'] = visual
     progress(.1,'원작 심리 후킹을 분석하고 대본 1·2·3안을 함께 작성하는 중')

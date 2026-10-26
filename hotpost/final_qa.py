@@ -7,6 +7,7 @@ their binding to the files, not the truth of a visual or editorial judgment.
 from __future__ import annotations
 
 from datetime import datetime
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -25,9 +26,50 @@ SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open("rb") as stream:
+        before = _identity(stream)
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
+        if _identity(stream) != before:
+            raise ValueError('Final QA file changed while hashing')
+    current = Path(path).stat()
+    if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != before:
+        raise ValueError('Final QA file replaced while hashing')
     return value.hexdigest()
+
+
+def _identity(stream):
+    import os
+    stat = os.fstat(stream.fileno())
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def file_input(path):
+    path = Path(path).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError('Final QA input must be an existing file')
+    return {'path': str(path), 'sha256': digest(path)}
+
+
+def capture_inputs(*, script, voice, plan, sources, rules):
+    """Snapshot before review. No quality verdict or existing QA is updated."""
+    if not sources or not rules:
+        raise ValueError('Final QA inputs require used sources and applicable rules')
+    return {'schema_version': 2,
+            'artifacts': {name: file_input(path) for name, path in
+                          (('script', script), ('voice', voice), ('plan', plan))},
+            'dependencies': {name: [file_input(path) for path in paths]
+                             for name, paths in (('sources', sources), ('rules', rules))}}
+
+
+def _verified_input(item, label):
+    if not isinstance(item, dict):
+        raise ValueError(f'Final QA {label} file binding is required')
+    path = Path(_text(item.get('path'), f'{label} path'))
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError(f'Final QA {label} must name an existing absolute file')
+    if digest(path) != _hash(item.get('sha256'), f'{label} sha256'):
+        raise ValueError(f'Final QA {label} bytes changed after review')
+    return path
 
 
 def _text(value, label):
@@ -74,7 +116,7 @@ def inspect_record(record_path, *, video_id, task_id=None, run_id=None, producer
         record = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Final QA record must be UTF-8 JSON") from error
-    if not isinstance(record, dict) or record.get("schema_version") != 1:
+    if not isinstance(record, dict) or type(record.get('schema_version')) is not int or record['schema_version'] not in (1, 2):
         raise ValueError("Unsupported final QA record schema")
     if record.get("video_id") != video_id:
         raise ValueError("Final QA video ID differs from the selected post")
@@ -100,6 +142,19 @@ def inspect_record(record_path, *, video_id, task_id=None, run_id=None, producer
             raise ValueError(f"Final QA {name} identity is required")
         _text(item.get("id"), f"{name} id")
         _hash(item.get("sha256"), f"{name} sha256")
+        if record['schema_version'] == 2:
+            _verified_input(item, name)
+
+    if record['schema_version'] == 2:
+        dependencies = record.get('dependencies')
+        if not isinstance(dependencies, dict):
+            raise ValueError('Final QA dependencies are required')
+        for name in ('sources', 'rules'):
+            items = dependencies.get(name)
+            if not isinstance(items, list) or not items:
+                raise ValueError(f'Final QA {name} dependencies are required')
+            for item in items:
+                _verified_input(item, name)
 
     verified = {}
     for name, current in (("video", video), ("cover", cover)):
@@ -146,8 +201,36 @@ def inspect_record(record_path, *, video_id, task_id=None, run_id=None, producer
                     raise ValueError(f'Final QA {name} human review names another video')
         if not any(row["asset"] == asset for row in evidence):
             raise ValueError(f"Final QA {name} needs evidence from {asset}")
+    # Long video/source hashing must not hide an input changed during this check.
+    if record['schema_version'] == 2:
+        for name in ('script', 'voice', 'plan'):
+            _verified_input(artifacts[name], name)
+        for name in ('sources', 'rules'):
+            for item in record['dependencies'][name]:
+                _verified_input(item, name)
+    if path.read_bytes() != raw:
+        raise ValueError('Final QA record changed during validation')
     return {"record_path": str(path), "record_sha256": hashlib.sha256(raw).hexdigest(),
+            'schema_version': record['schema_version'],
+            'input_binding': 'files' if record['schema_version'] == 2 else 'legacy_metadata_only',
             "video": verified["video"], "cover": verified["cover"],
             "task_id": record["task_id"], "run_id": record["run_id"],
             "producer": record["producer"], "edit_id": record["edit_id"],
             "unresolved": [name for name in CHECK_ASSETS if checks[name]['status'] != '충족']}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Capture current QA input files before content review; no quality approval')
+    sub = parser.add_subparsers(dest='command', required=True)
+    inputs = sub.add_parser('inputs')
+    for name in ('script', 'voice', 'plan'):
+        inputs.add_argument('--' + name, type=Path, required=True)
+    inputs.add_argument('--source', type=Path, action='append', required=True)
+    inputs.add_argument('--rule', type=Path, action='append', required=True)
+    args = parser.parse_args(argv)
+    print(json.dumps(capture_inputs(script=args.script, voice=args.voice, plan=args.plan,
+                                   sources=args.source, rules=args.rule), ensure_ascii=False, indent=2))
+
+
+if __name__ == '__main__':
+    main()

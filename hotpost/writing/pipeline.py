@@ -65,7 +65,7 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
         evidence['variant_context'] = payload['variant_context']
     if owned:
         evidence.update(reference_kind='product_information', product=payload.get('product'), research=payload.get('research', {}))
-    state={'directory':directory,'calls':[]}
+    state={'directory':directory,'calls':[], 'purpose':'script_writing'}
     if visual:
         state['reference_visual'] = visual
     rules=contract['prompt']
