@@ -77,6 +77,9 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
         def do_POST(self):
             if self.account_registry_request(accounts):
                 return
+            if urlparse(self.path).path.endswith('/coupang-link'):
+                if self.post_preparation_request(service, coupang=True):
+                    return
             if self.post_preparation_request(service, thumbnail=True):
                 return
             self._blocked()

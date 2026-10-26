@@ -174,10 +174,10 @@
     } catch (error) { e.target.textContent = error.message; e.target.disabled = false; }
   }, true);
   function productionMarkup(code) {
-    if(dailyRanking())return `<span>${esc(productionState(code).label)}</span>`;
     return window.AgentStatus.markup(agentState(code));
   }
   function agentState(code) {
+    if(dailyRanking())return window.AgentStatus.referenceModel(R.posts.find(p=>p.shortcode===code)?.production);
     return window.AgentStatus.model(studioByCode.get(code),{legacy:productionByCode.get(code),loaded:studioLoaded,online:studioOnline&&(!studioSyncedAt||Date.now()-studioSyncedAt<15000)});
   }
   function productionState(code) {
@@ -276,11 +276,12 @@
       $$('#cards .production-status').forEach(el=>{const code=el.dataset.code;el.closest('.card').dataset.agentLive='false';const next=productionMarkup(code);if(el.innerHTML!==next)el.innerHTML=next;});
     }
   },3000);
-  function metric(label, val, ratio, na) {
-    return `<div class="m ${na ? 'na' : ''}"><div class="k">${label}</div><div class="v">${na ? '–' : fmt(val)}</div><div class="r ${ratioCls(ratio)}">${na ? '' : ratioTxt(ratio) + (ratio != null ? ' 평소 대비' : '')}</div></div>`;
+  function metric(label, val, ratio, na, display) {
+    return `<div class="m ${na ? 'na' : ''}"><div class="k">${label}</div><div class="v">${na ? '–' : display ? esc(display) : fmt(val)}</div><div class="r ${ratioCls(ratio)}">${na ? '' : ratioTxt(ratio) + (ratio != null ? ' 평소 대비' : '')}</div></div>`;
   }
   function card(p, i) {
-    const thumb = p.thumb ? `<img loading="lazy" src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`;
+    const thumbUrl=p.thumb||`thumbs/${encodeURIComponent(p.shortcode)}.jpg`;
+    const thumb = `<img loading="lazy" src="${esc(thumbUrl)}" alt="" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="ph" hidden>${isVideo(p) ? '🎬' : '🖼'}</div>`;
     const status = productionState(p.shortcode);
     return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}" data-agent-live="${agentState(p.shortcode).live}"` : ''}>
       <div class="thumb">${thumb}
@@ -291,7 +292,7 @@
       <div class="body">
         <div class="who"><span class="avatar">${initials(p.username)}</span><span class="name">@${esc(p.username)}</span><span class="time" title="업로드 ${dateStr(p.taken_at)}">업로드 ${ago(Math.max(0,Date.now()/1000-p.taken_at)/3600)}</span></div>
         <div class="metrics benchmark-metrics">
-          ${dailyRanking() ? `<div class="m"><div class="k">조회수 / 팔로워</div><div class="v">${esc(p.views_display||fmt(p.views))} / ${esc(p.followers_display||fmt(p.followers))}</div><div class="r">팔로워 대비 약 ${p.rank_score.toFixed(2)}배</div></div>` : isVideo(p) ? metric('조회수', p.views, p.ratios.views, p.views == null) : metric('좋아요', p.likes, p.ratios.likes, false)}
+          ${isVideo(p) ? metric('조회수', p.views, dailyRanking()?null:p.ratios.views, p.views == null, dailyRanking()&&p.metric_status?.views==='approximate'?p.views_display:null) : metric('좋아요', p.likes, p.ratios.likes, false)}
         </div>
         ${isVideo(p) ? `<div class="production-status" data-code="${esc(p.shortcode)}">${productionMarkup(p.shortcode)}</div>` : ''}
         <div class="foot"><button class="card-open-production">${isVideo(p) ? status.action+' →' : '게시물 보기 →'}</button><a href="${esc(p.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">원본 보기 ↗</a></div>

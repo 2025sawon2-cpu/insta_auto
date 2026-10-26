@@ -34,6 +34,17 @@
     if(queued)return {...base,phase:'waiting',stage:jobs[queued.kind][0],label:stages[jobs[queued.kind][0]]+' 작업 대기',detail:'실행 조건이 준비되면 이어서 진행해요'};
     return {...base,...(activity||{phase:'waiting',label:'다음 단계 준비',detail:'제작 결과를 확인하고 있어요'})};
   }
+  function referenceModel(production={}){
+    const base={...model(null),stage:-1};
+    if(production.state==='completed')return production.completed_video_ready
+      ? {...base,phase:'completed',label:'영상 제작 완료',detail:'검수 완료 · 완성 영상을 바로 확인하세요',stage:4,done:[true,true,true,true,true]}
+      : {...base,phase:'attention',label:'완성본 확인 필요',detail:'현재 영상과 검수 근거를 다시 확인해 주세요',stage:4};
+    if(production.state==='blocked')return {...base,phase:'attention',label:'제작 진행 보류',detail:'현재 작업과 자료를 보관하고 있어요 · 재개 조건 확인 필요'};
+    if(production.state==='paused')return {...base,phase:'paused',label:'제작 일시정지',detail:'중단한 작업과 자료를 보관하고 있어요'};
+    if(production.state==='in_progress')return {...base,phase:'waiting',label:'제작 작업 진행 중',detail:'등록된 작업 상태 · 실제 실행 여부는 별도 확인이 필요해요'};
+    if(production.state==='not_started')return base;
+    return {...base,phase:'waiting',label:'제작 이력 확인 필요',detail:'기존 작업과 완성본의 확인이 필요해요'};
+  }
   const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function markup(value){
     const tag=value.live?'진행 중':({completed:'완료',waiting:'대기',attention:'확인 필요',paused:'일시정지',offline:'연결 확인',loading:'연결 중',watching:'확인 중'}[value.phase]||'준비');
@@ -44,5 +55,5 @@
       <div class="agent-stages" aria-hidden="true">${stages.map((label,i)=>`<span data-done="${!!value.done[i]}" data-current="${i===value.stage&&value.phase!=='completed'}"><b></b><small>${label}</small></span>`).join('')}</div>
     </div>`;
   }
-  const api={model,markup};if(typeof module==='object'&&module.exports)module.exports=api;else root.AgentStatus=api;
+  const api={model,referenceModel,markup};if(typeof module==='object'&&module.exports)module.exports=api;else root.AgentStatus=api;
 })(typeof window==='undefined'?globalThis:window);

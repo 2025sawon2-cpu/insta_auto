@@ -25,10 +25,13 @@ def shortcode(value):
 
 class PostPreparation:
     def __init__(self, settings):
+        self.settings = settings
         self.root = settings.data_dir.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / 'post-preparation.sqlite3'
         with self.connect() as db:
+            from .post_coupang_link import initialize
+            initialize(db)
             db.execute('''CREATE TABLE IF NOT EXISTS drafts (
                 shortcode TEXT PRIMARY KEY, revision INTEGER NOT NULL,
                 value TEXT NOT NULL, updated REAL NOT NULL)''')
@@ -192,12 +195,14 @@ class PostPreparation:
         draft = {**build_dm_copy(code, source['cover_text'] or source['script']), **draft,
                  'dm_message': DM_MESSAGE}
         from .post_thumbnail import job_status
+        from .post_coupang_link import status as coupang_status
         thumbnail = {**job_status(self, code), 'ready': source['thumbnail_ready'], 'applied_text': source['cover_text']}
         suffix = '?v=' + source['media_version'] if source['media_version'] else ''
         return {'shortcode': code, 'accounts': list(ACCOUNTS), 'draft': draft,
                 'revision': row['revision'] if row else 0, 'updated': row['updated'] if row else None,
                 'source_run_id': source['run_id'], 'source_edit_id': source['edit_id'],
                 'thumbnail': thumbnail,
+                'coupang_link': coupang_status(self, code),
                 'media': {key: f'/api/post-preparations/{code}/media/{key}' + (suffix if key in ('final','cover') else '') if value else None
                           for key, value in source['media'].items()}}
 
@@ -252,6 +257,10 @@ class PostPreparation:
 
     def start_thumbnail(self, code, payload):
         from .post_thumbnail import start
+        return start(self, shortcode(code), payload)
+
+    def start_coupang_link(self, code, payload):
+        from .post_coupang_link import start
         return start(self, shortcode(code), payload)
 
     def media(self, code, kind, version=None):

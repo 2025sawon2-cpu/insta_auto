@@ -1,6 +1,17 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {model,markup}=require('../web/agent-status.js');
+const {referenceModel}=require('../web/agent-status.js');
+test('registry-backed cards retain five-stage panel without inventing live workers',()=>{
+  for(const state of ['blocked','paused','unknown','not_started','in_progress']){
+    const value=referenceModel({state});
+    assert.equal(value.live,false);assert.equal(value.ai,false);
+    const html=markup(value);assert.ok(html.includes('agent-strip'));
+    for(const label of ['소스','대본','음성','편집','검수'])assert.ok(html.includes(label));
+  }
+  assert.equal(referenceModel({state:'completed',completed_video_ready:true}).phase,'completed');
+  assert.equal(referenceModel({state:'completed',completed_video_ready:false}).phase,'attention');
+});
 test('shows actual running stage, no percent guess',()=>{
   const m=model({jobs:[{kind:'quality_review',status:'running'}],video_agent:{activity:{phase:'watching'}}});
   assert.equal(m.label,'완성 영상 검수 중');assert.equal(m.stage,4);assert.equal(m.live,true);assert.ok(!markup(m).includes('%'));
