@@ -53,6 +53,37 @@ def test_only_qualified_posts_within_72_hours_rank_across_publication_dates(tmp_
     assert report['window']['end'] - report['window']['start'] == WINDOW
 
 
+def panel(body, comments=()):
+    """Collected post-panel text: header, body, then commenter/NBSP/age/text blocks."""
+    lines = ['example', '오리지널 오디오', '팔로우', 'example', '\xa0', '수정됨', '•', '2일', body]
+    for comment in comments:
+        lines += ['viewer', '\xa0', '1일', comment, '답글 달기']
+    return '\n'.join(lines)
+
+
+def test_reels_with_daiso_in_post_body_are_kept_but_excluded_from_ranking(tmp_path):
+    captions = {
+        'body': panel('다이소 북커버 꿀조합\n\n#북커버'),
+        'hashtag': panel('북커버 꿀조합\n\n#다이소꿀템'),
+        'english': panel('Best DAISO finds'),
+        'comment_only': panel('북커버 꿀조합', ['다이소에도 있나요?']),
+        'plain': '수집 형식이 다른 캡션',
+    }
+    report_inputs = inputs([(code, hours, '8만') for hours, code in enumerate(captions, 1)])
+    for row, caption in zip(report_inputs[1]['rows'], captions.values()):
+        row['caption'] = caption
+    report = build_report(*report_inputs, Settings(), generated_at=NOW)
+    by_code = {p['shortcode']: p for p in report['posts']}
+    for code in ('body', 'hashtag', 'english'):
+        post = by_code[code]
+        assert not post['eligible'] and post['tier'] == 0 and 'rank' not in post, code
+        assert post['assessment']['status'] == 'excluded'
+        assert post['assessment']['reasons'] == ['excluded_topic:daiso']
+    assert report['collection_verification']['excluded_posts'] == 3
+    registry = sync(load(tmp_path/'registry'), report, 'report.json')
+    assert [p['video_id'] for p in ranked(registry)] == ['comment_only', 'plain']
+
+
 def test_each_day_current_values_requalify_without_prior_metrics_or_baseline(tmp_path):
     first = build_report(*inputs([('growing', 12, '1.7만')]), Settings())
     assert not first['posts'][0]['eligible']
@@ -84,7 +115,7 @@ def completed(tmp_path, item):
     return video
 
 
-def test_completed_rank_stays_visible_and_next_only_skips_real_completions(tmp_path):
+def test_completed_rank_stays_visible_and_next_skips_completions_without_recheck(tmp_path):
     report = build_report(*inputs([('first', 10, '8만'), ('second', 1, '3만')]), Settings())
     registry = sync(load(tmp_path/'registry'), report, 'report.json')
     video = completed(tmp_path, registry['posts']['first'])
@@ -93,7 +124,8 @@ def test_completed_rank_stays_visible_and_next_only_skips_real_completions(tmp_p
     assert select_next(registry)=={'action':'start','video_id':'second','rank':2}
     assert [p['video_id'] for p in ranked(registry)]==['first','second']
     video.write_bytes(b'changed after review')
-    assert select_next(registry)['action']=='audit_completion'
+    # Reviewed completions are final and are not rechecked later.
+    assert select_next(registry)=={'action':'start','video_id':'second','rank':2}
 
 
 @pytest.mark.parametrize('state', ['in_progress','paused','blocked'])

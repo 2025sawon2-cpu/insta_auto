@@ -1,0 +1,4 @@
+interface:
+  display_name: "인스타 모바일 업로드"
+  short_description: "리틀리·Edits 업로드부터 본인 댓글 작성·고정 확인까지"
+  default_prompt: "$hotpost-mobile-upload로 기존 설정과 로그인부터 확인하고 지정한 영상 한 편의 모바일 업로드를 진행해."

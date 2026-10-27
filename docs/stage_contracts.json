@@ -1,0 +1,77 @@
+{
+  "version": "stage-contracts-20261027-v1",
+  "common_rules": ["AGENTS.md", "docs/COLLABORATION.md", "docs/WORKFLOW.md"],
+  "stages": {
+    "source": {
+      "requires": [],
+      "rules": ["docs/SOURCE_WORKFLOW.md", "docs/SOURCE_SEARCH_LOG.md", "docs/editorial_montage_policy.md"],
+      "checks": [
+        {"id": "source_log", "rule": "docs/SOURCE_SEARCH_LOG.md",
+         "question": "검색어와 실제 제출·후보·다운로드·채택을 검색 기록에 남겼나요?"},
+        {"id": "source_fill", "rule": "docs/SOURCE_WORKFLOW.md",
+         "question": "원본의 검은 띠·블러 배경·패딩을 확인하고 9:16 화면을 실제 장면으로 채웠나요?"},
+        {"id": "source_masks", "rule": "docs/editorial_montage_policy.md",
+         "question": "사용 구간의 원작 자막·워터마크만 가렸나요? 제품·동작을 가로지르는 띠가 없는지 각 컷의 시작·중간·끝 프레임에서 봤나요?"}
+      ],
+      "outputs": {"sources": {"kind": "files"}}
+    },
+    "script": {
+      "requires": [],
+      "rules": ["hotpost/writing/RULES.md"],
+      "checks": [
+        {"id": "script_three", "rule": "hotpost/writing/RULES.md",
+         "question": "세 안을 공식 집필 경로로 한 번에 만들고, 선택안과 선택 이유를 남겼나요?"},
+        {"id": "script_hook", "rule": "hotpost/writing/RULES.md",
+         "question": "선택안의 첫 문장을 그대로 인용하고 어떤 구체적 의문이 생기는지 적었나요?"},
+        {"id": "script_facts", "rule": "hotpost/writing/RULES.md",
+         "question": "원본에 없는 기능·수치·효능·사용 경험을 사실처럼 넣지 않았나요?"},
+        {"id": "script_cta", "rule": "hotpost/writing/RULES.md",
+         "question": "댓글 요청을 지워도 제품을 찾아볼 이유가 남나요?"}
+      ],
+      "outputs": {
+        "writing_result": {"kind": "writing_result", "model": "gpt-6-sol", "variants": 3},
+        "selected_script": {"kind": "file"},
+        "selection": {"kind": "script_selection", "model": "gpt-6-sol", "optional": true}
+      }
+    },
+    "voice": {
+      "requires": ["script"],
+      "rules": ["docs/TTS_TRUNCATION_RECOVERY.md"],
+      "checks": [
+        {"id": "voice_whole", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
+         "question": "선택 원고 전체를 개인 목소리로 한 번에 합성했나요(문장 분할·덧붙이기·Seed 변경 없음)?"},
+        {"id": "voice_listen", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
+         "question": "원음의 시작·끝·주요 문구를 실제로 들었나요? 듣지 못했다면 확인 불가로 적었나요?"}
+      ],
+      "outputs": {"voice_result": {"kind": "voice_result", "style": "reels_bright_v1"}}
+    },
+    "edit": {
+      "requires": ["source", "voice"],
+      "rules": ["docs/editorial_montage_policy.md", "docs/editing_adapter.md",
+                "docs/CAPTION_SEGMENTATION.md", "docs/PRODUCTION_DELIVERY.md",
+                "docs/TTS_TRUNCATION_RECOVERY.md"],
+      "checks": [
+        {"id": "edit_captions", "rule": "docs/CAPTION_SEGMENTATION.md",
+         "question": "자막 분할의 보호구와 경계별 이유를 이 원고 기준으로 검토했나요?"},
+        {"id": "edit_pauses", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
+         "question": "문장 뒤 원래 쉼을 보존하는 기본 정책으로 편집했나요?"},
+        {"id": "edit_sync", "rule": "docs/editing_adapter.md",
+         "question": "렌더의 여러 시점과 컷 경계에서 자막과 음성의 순서·내용이 맞는지 봤나요?"},
+        {"id": "edit_scenes", "rule": "docs/editorial_montage_policy.md",
+         "question": "각 컷이 맡은 장면 역할과 전체 흐름을 원본 구간과 대조했나요?"}
+      ],
+      "outputs": {"plan": {"kind": "edit_plan", "narration_profile": "sentence_preserved_v1"}}
+    },
+    "deliver": {
+      "requires": ["edit"],
+      "rules": ["docs/PRODUCTION_DELIVERY.md", "docs/LOCAL_VIDEO_STORAGE.md", "hotpost/writing/RULES.md"],
+      "checks": [
+        {"id": "deliver_cover", "rule": "hotpost/writing/RULES.md",
+         "question": "표지의 얼굴 없음·문장 끝 마침표·[광고]를 실제 이미지에서 확인했나요?"},
+        {"id": "deliver_first_frame", "rule": "docs/PRODUCTION_DELIVERY.md",
+         "question": "전달본 첫 프레임과 바로 다음 본문, [광고] 표시를 실제로 확인했나요?"}
+      ],
+      "outputs": {"delivery_receipt": {"kind": "delivery_receipt"}}
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -84,35 +85,31 @@ def test_capture_inputs_does_not_write_or_approve_a_review(reviewed, capsys):
     snapshot = json.loads(capsys.readouterr().out)
     assert snapshot['schema_version'] == 2 and 'checks' not in snapshot
     assert snapshot['artifacts']['script']['sha256'] == hashlib.sha256(files['script'].read_bytes()).hexdigest()
+    rules = [Path(item['path']).name for item in snapshot['dependencies']['rules']]
+    assert rules[0] == Path(files['rule']).name and 'CAPTION_SEGMENTATION.md' in rules
     assert path.read_bytes() == before
 
 
-def test_completed_lookup_and_next_selection_recheck_inputs_and_saved_qa_identity(reviewed, tmp_path):
-    from hotpost.reference_registry import context, load, mark, save
+def test_completed_video_is_not_reopened_by_later_rule_or_qa_edits(reviewed, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr('hotpost.stage_gate.REQUIRED_SINCE', datetime(2999, 1, 1, tzinfo=timezone.utc))
+    from hotpost.reference_registry import context, load, mark
     from hotpost.daily_ranking import public_production, select_next
     path, files, record = reviewed
-    registry_path = tmp_path / 'registry.json'
-    registry = load(registry_path)
+    registry = load(tmp_path / 'registry.json')
     registry['posts']['post'] = {'video_id': 'post', 'reference': {'in_latest_report': True},
                                 'production': {'state': 'unknown'}}
     mark(registry, 'post', 'in_progress', 'Bound workers', expected='unknown',
          task_id='task', run_id='run', owner='producer', monitor='monitor')
     mark(registry, 'post', 'completed', 'Reviewed current inputs and outputs', expected='in_progress',
          qa_evidence=path, final_sha256=hashlib.sha256(files['video'].read_bytes()).hexdigest())
-    save(registry_path, registry)
     production = registry['posts']['post']['production']
-    assert public_production('post', production)['completed_video_ready'] is True
-    assert context(registry, 'post')['qa']['input_binding'] == 'files'
+    # User decision 2026-10-27: a reviewed completion stays done when guidance changes later.
     files['rule'].write_bytes(b'new rules')
-    assert select_next(registry)['action'] == 'audit_completion'
-    assert public_production('post', production)['completed_video_ready'] is False
-    # Editing the existing QA cannot silently replace the verdict stored at completion.
-    record['dependencies']['rules'][0]['sha256'] = hashlib.sha256(files['rule'].read_bytes()).hexdigest()
-    path.write_text(json.dumps(record), 'utf8')
-    assert final_qa.validate(path, video_id='post')['input_binding'] == 'files'
-    assert context(registry, 'post')['qa']['status'] == 'needs_review'
-    assert select_next(registry)['action'] == 'audit_completion'
-    assert load(registry_path)['posts']['post']['production']['state'] == 'completed'
+    path.write_text(json.dumps({**record, 'edited': True}), 'utf8')
+    assert public_production('post', production)['completed_video_ready'] is True
+    assert context(registry, 'post')['qa'] == {'status': 'completed'}
+    assert select_next(registry) == {'action': 'no_candidate'}
 
 
 def test_export_rechecks_bound_inputs_after_copy(reviewed, tmp_path, monkeypatch):

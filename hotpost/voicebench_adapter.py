@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import io
 import os
 import re
@@ -15,6 +16,8 @@ from typing import Callable
 import requests
 
 from .config import Settings
+
+PERSONAL_REELS_STYLE = 'reels_bright_v1'
 
 
 def verify_wav(payload: bytes) -> dict:
@@ -146,7 +149,8 @@ class VoiceBenchAdapter:
                    on_submitted: Callable[[int], None] | None = None,
                    retry_failed: bool = False, generation_key: str | None = None,
                    voice_profile_id: str | None = None, require_personal_clone: bool = False,
-                   before_save: Callable[[], None] | None = None) -> dict:
+                   before_save: Callable[[], None] | None = None,
+                   style_id: str | None = None) -> dict:
         script = text.strip()
         if not script:
             raise ValueError("VoiceBench cannot synthesize an empty script.")
@@ -163,6 +167,7 @@ class VoiceBenchAdapter:
         timeout = min(60.0, float(self.settings.voicebench_timeout))
         progress("VoiceBench 음성 생성을 요청하는 중", 5)
         payload = {"text": script}
+        expected_style = None
         if require_personal_clone:
             if voice_profile_id:
                 raise ValueError('자동 제작은 본인 복제 목소리만 사용합니다.')
@@ -172,6 +177,30 @@ class VoiceBenchAdapter:
                 raise RuntimeError('내 목소리 복제 준비가 필요합니다. ' +
                                    ' / '.join(health.get('errors') or ['기본 음성이 개인 복제 음성인지 확인할 수 없습니다.']) +
                                    ' 다른 기본 목소리로 대체하지 않습니다.')
+            style_id = style_id or PERSONAL_REELS_STYLE
+        if style_id:
+            if not require_personal_clone or voice_profile_id or style_id != PERSONAL_REELS_STYLE:
+                raise ValueError('밝은 릴스 스타일은 본인 복제 음성에만 사용합니다.')
+            try:
+                catalog = self._response_json(self._synthesis_request('get', '/v1/styles', headers=headers, timeout=timeout))
+            except requests.HTTPError as exc:
+                raise RuntimeError('VoiceBench가 밝은 릴스 스타일을 지원하지 않습니다. 중립 음성으로 대체하지 않습니다.') from exc
+            expected_style = next((s for s in catalog.get('styles', []) if s.get('id') == style_id), None)
+            native = {'emotion_enabled': True, 'emotion_sliders': {'happy': 0.35},
+                      'emotion_strength': 1.0, 'emotion_cfg_scale': 1.0, 'speaking_rate_enabled': False}
+            if (not expected_style or expected_style.get('version') != 1 or expected_style.get('native') != native
+                    or not expected_style.get('direction_assets_sha256')):
+                raise RuntimeError('VoiceBench 밝은 릴스 스타일 계약을 확인할 수 없습니다.')
+            unsigned = {k:v for k,v in expected_style.items() if k != 'sha256'}
+            if expected_style.get('sha256') != hashlib.sha256(json.dumps(unsigned, sort_keys=True, separators=(',', ':')).encode()).hexdigest():
+                raise RuntimeError('VoiceBench 스타일 스냅샷 해시가 다릅니다.')
+            payload['style_id'] = style_id
+        def verify_style(status, final=False):
+            if require_personal_clone and status.get('voice_id'):
+                raise RuntimeError('기존 요청이 다른 목소리로 생성됐습니다. 본인 복제 음성으로 새 작업이 필요합니다.')
+            if expected_style is not None and (status.get('style') != expected_style
+                    or (final and (not status.get('style_verified') or status.get('style_actual') != expected_style))):
+                raise RuntimeError('기존 요청/실제 음성이 요청한 밝은 릴스 스타일과 다릅니다. 중립 음성으로 대체하지 않습니다.')
         if voice_profile_id:
             if not any(v.get('id')==voice_profile_id and v.get('available') for v in self.voices().get('voices',[])):
                 raise ValueError('선택한 목소리가 준비되지 않았습니다. 다른 목소리를 선택하세요.')
@@ -188,6 +217,7 @@ class VoiceBenchAdapter:
                 submitted = self._response_json(self._synthesis_request('get', f'/v1/tts/{request_id}',
                     headers=headers, timeout=timeout))
                 submitted.setdefault('id', request_id)
+                verify_style(submitted)
                 # Explicit retry may replace a confirmed terminal failure.
                 # Unknown/running outcomes always retain the existing ID.
                 if retry_failed and submitted.get('status') in {'failed', 'cancelled'}:
@@ -201,6 +231,7 @@ class VoiceBenchAdapter:
                 f"VoiceBench is not reachable at {self.settings.voicebench_url}."
             ) from exc
         request_id = submitted.get("id")
+        verify_style(submitted)
         if not isinstance(request_id, int):
             raise RuntimeError("VoiceBench did not return a request ID.")
         if on_submitted:
@@ -254,6 +285,7 @@ class VoiceBenchAdapter:
             raise RuntimeError('기존 요청이 다른 목소리로 생성됐습니다. 본인 복제 음성으로 새 작업이 필요합니다.')
         if voice_profile_id and status.get('voice_id') != voice_profile_id:
             raise RuntimeError('요청한 목소리와 생성 결과가 다릅니다. VoiceBench 업데이트 상태를 확인하세요.')
+        verify_style(status, final=True)
         try:
             audio = self._synthesis_request('get', f'/v1/tts/{request_id}/audio',
                 headers=headers, timeout=timeout)
@@ -283,6 +315,10 @@ class VoiceBenchAdapter:
             "quality_control": status.get("quality_control"),
             "speech_plan": status.get("speech_plan"),
             "reused": bool(submitted.get("reused")),
+            'requested_style_id': style_id,
+            'style': status.get('style', {}),
+            'style_actual': status.get('style_actual', {}),
+            'style_verified': status.get('style_verified', False),
         }
         target.with_suffix(".json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"

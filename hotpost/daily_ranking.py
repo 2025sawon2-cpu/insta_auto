@@ -12,6 +12,30 @@ import time
 MODE = 'views_per_follower_72h'
 WINDOW = 72 * 3600
 KST = timezone(timedelta(hours=9))
+# User decision 2026-10-27: reels whose post body mentions Daiso are excluded from the 7 AM ranking.
+EXCLUDED_TOPICS = {'daiso': re.compile(r'다이소|daiso', re.I)}
+
+
+def post_body(caption):
+    """Body text (with hashtags) from the collected panel text, without the header or comments.
+
+    Panel text is: account, audio, 팔로우, account, NBSP, [수정됨, •,] age, body..., then
+    comments as commenter, NBSP, age, text. Unrecognized layouts fall back to the whole text.
+    """
+    lines = caption.split('\n')
+    if '\xa0' not in lines:
+        return caption
+    start = lines.index('\xa0') + 1
+    while start < len(lines) and lines[start] in ('수정됨', '•'):
+        start += 1
+    start += 1  # age, e.g. "2일"
+    end = next((i for i in range(start, len(lines) - 1) if lines[i + 1] == '\xa0'), len(lines))
+    return '\n'.join(lines[start:end])
+
+
+def excluded_topics(caption):
+    body = post_body(caption)
+    return [name for name, pattern in EXCLUDED_TOPICS.items() if pattern.search(body)]
 
 
 def timestamp(value):
@@ -82,12 +106,13 @@ def build_report(profiles, details, grid, settings, *, generated_at=None):
         metric = count(view.get('raw', view.get('views')))
         followers, total = account['followers'], metric['value']
         ratio = total / followers if total is not None and followers and followers > 0 else None
-        eligible = (match[2] == 'reel' and ratio is not None
+        caption = row.get('caption') or ''
+        excluded = excluded_topics(caption)
+        eligible = (match[2] == 'reel' and ratio is not None and not excluded
                     and total >= settings.acquisition_min_views
                     and ratio >= settings.acquisition_min_views_per_follower)
         tier = (3 if ratio >= settings.tier3_multiplier else
                 2 if ratio >= settings.tier2_multiplier else 1) if eligible else 0
-        caption = row.get('caption') or ''
         posts.append({
             'shortcode': code, 'username': row['username'], 'taken_at': published,
             'kind': 'reel' if match[2] == 'reel' else 'image',
@@ -104,9 +129,12 @@ def build_report(profiles, details, grid, settings, *, generated_at=None):
             'age_hours': (started - published) / 3600,
             'baseline': {}, 'ratios': {'views': ratio},
             'metric_status': {'views': metric['precision']},
-            'assessment': {'status': 'qualified' if eligible else 'unavailable' if ratio is None else 'normal',
-                           'label': '기준 통과' if eligible else '수치 미확인' if ratio is None else '기준 미달',
-                           'reasons': [], 'scope': 'views_per_follower'},
+            'assessment': {'status': 'qualified' if eligible else 'excluded' if excluded
+                           else 'unavailable' if ratio is None else 'normal',
+                           'label': '기준 통과' if eligible else '다이소 주제 제외' if excluded
+                           else '수치 미확인' if ratio is None else '기준 미달',
+                           'reasons': [f'excluded_topic:{name}' for name in excluded],
+                           'scope': 'views_per_follower'},
         })
     posts.sort(key=lambda p: (-p['rank_score'], -(p['views'] or 0), -p['taken_at'], p['shortcode']))
     rank = 0
@@ -131,6 +159,8 @@ def build_report(profiles, details, grid, settings, *, generated_at=None):
         'collection_verification': {
             'scope': 'current_snapshot', 'approximate_counts_allowed': True,
             'growth_tracking': False,
+            'excluded_topics': sorted(EXCLUDED_TOPICS),
+            'excluded_posts': sum(p['assessment']['status'] == 'excluded' for p in posts),
             'missing_metrics': sum(p['assessment']['status'] == 'unavailable' for p in posts)},
     }
 
@@ -144,46 +174,17 @@ def select_next(registry):
     for item in ranked(registry):
         state = item['production']['state']
         if state == 'completed':
-            # Validate the actual completed artifact before relying on the flag.
-            production = item['production']
-            try:
-                require_completion_binding(production)
-                from .final_qa import validate
-                validate(production.get('qa_evidence'), video_id=item['video_id'],
-                         task_id=production.get('task_id'), run_id=production.get('run_id'),
-                         producer=production.get('owner'), final_sha256=production.get('final_sha256'))
-            except (OSError, ValueError) as error:
-                return {'action': 'audit_completion', 'video_id': item['video_id'], 'reason': str(error)}
+            # User decision 2026-10-27: a reviewed completion is final and is not rechecked.
             continue
         return {'action': 'start' if state == 'not_started' else 'audit_history',
                 'video_id': item['video_id'], 'rank': item['reference'].get('rank')}
     return {'action': 'no_candidate'}
 
 
-def require_completion_binding(production):
-    if not all(production.get(key) for key in
-               ('task_id', 'run_id', 'owner', 'monitor', 'qa_evidence', 'final_sha256')):
-        raise ValueError('Completed work is missing its task/run, QA or file identity')
-    if production['owner'] == production['monitor']:
-        raise ValueError('Completed work requires distinct producer and monitor')
-    if production.get('qa_record_sha256'):
-        from .final_qa import digest
-        if digest(production['qa_evidence']) != production['qa_record_sha256']:
-            raise ValueError('Completed QA record changed; inspect the original completion evidence')
-
-
 def public_production(code, production):
     result = {'state': production.get('state', 'unknown')}
     if result['state'] == 'completed':
-        try:
-            require_completion_binding(production)
-            from .final_qa import validate
-            validate(production.get('qa_evidence'), video_id=code,
-                     task_id=production.get('task_id'), run_id=production.get('run_id'),
-                     producer=production.get('owner'), final_sha256=production.get('final_sha256'))
-            result['completed_video_ready'] = True
-        except (OSError, ValueError):
-            result['completed_video_ready'] = False
+        result['completed_video_ready'] = True
     return result
 
 
@@ -199,6 +200,12 @@ def publish(report, settings, snapshot_path):
             stream.write(settings.report_path.read_bytes())
     store = Storage(settings.db_path)
     try:
+        # Reserve novelty before the post upsert: a crash cannot turn an
+        # unqueued new post into an old post on the next collection.
+        from .collection_products import CollectionProducts
+        known = [row[0] for row in store.conn.execute('SELECT shortcode FROM posts')]
+        queued = CollectionProducts(settings.data_dir).enqueue(report, known)
+        report['collection_products'] = {'queued': queued, 'browser_actions_started': False}
         old = store.profiles()
         from dataclasses import replace
         for account in report['accounts']:

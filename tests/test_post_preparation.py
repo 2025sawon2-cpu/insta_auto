@@ -17,6 +17,10 @@ from hotpost.post_preparation_content import DM_MESSAGE
 def service(tmp_path):
     root = tmp_path / 'data'
     root.mkdir()
+    from hotpost.installation_settings import save
+    save(root,{'revision':0,'values':{'publication_accounts':['mr.salrim','__ariddaum__'],
+        'discovery_account':'collector','storefront_url':'https://influencers.coupang.com/s/test',
+        'collection':'Test collection'}})
     return PostPreparation(SimpleNamespace(data_dir=root))
 
 
@@ -54,6 +58,51 @@ def test_finished_media_caption_and_cover_belong_to_same_completed_edit(service)
     assert data['media']['final'] == '/api/post-preparations/post/media/final'
     assert before == (service.root / 'studio/studio.sqlite3').read_bytes()
     assert state['scripts'][0]['text'].startswith('아,')
+
+
+@pytest.mark.parametrize('change', ['valid', 'missing', 'invalid_json', 'invalid_type', 'video_hash', 'cover_hash',
+                                   'video_path', 'cover_path', 'disclosure'])
+def test_independent_delivery_receipt_allows_mobile_package_only_for_matching_media(service, change):
+    import hashlib
+    import shutil
+    from hotpost.mobile_reels import ReelJobs
+    from hotpost.reference_registry import SCHEMA_VERSION
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    video, cover, script, plan = [service.root / name for name in
+                                 ('video.mp4', 'cover.png', 'script.txt', 'plan.json')]
+    video.write_bytes(b'completed video'); cover.write_bytes(b'completed cover')
+    script.write_text('침대 둘레를 누빔 텐트가 감싸요.', encoding='utf8')
+    plan.write_text('{}', encoding='utf8')
+    qa = service.root / 'qa.json'
+    qa.write_text(json.dumps({'edit_id': 'completed-edit', 'artifacts': {
+        key: {'path': str(path), 'sha256': sha(path)} for key, path in
+        [('video', video), ('cover', cover), ('script', script), ('plan', plan)]}}), encoding='utf8')
+    registry = service.root / 'reference-status.json'
+    registry.write_text(json.dumps({'schema_version': SCHEMA_VERSION, 'posts': {'post': {'production': {
+        'state': 'completed', 'run_id': 'completed-run', 'qa_evidence': str(qa),
+        'final_sha256': sha(video)}}}}), encoding='utf8')
+    receipt = {'schema_version': 1, 'disclosure': 'upper-right-gray-v1',
+               'video': str(video), 'cover': str(cover), 'video_sha256': sha(video), 'cover_sha256': sha(cover)}
+    if change in ('video_hash', 'cover_hash'):
+        receipt[change.replace('_hash', '_sha256')] = '0' * 64
+    elif change in ('video_path', 'cover_path'):
+        receipt[change.replace('_path', '')] = str(script)
+    elif change == 'disclosure':
+        receipt['disclosure'] = 'unverified'
+    if change != 'missing':
+        (service.root / 'delivery-receipt.json').write_text(
+            '{' if change == 'invalid_json' else '[]' if change == 'invalid_type' else json.dumps(receipt), encoding='utf8')
+    before = {p: p.read_bytes() for p in (video, cover, qa, registry)}
+    jobs = ReelJobs(service.root / 'mobile-jobs')
+    if change == 'valid':
+        result = jobs.prepare(service, 'post', 'mr.salrim', converter=lambda s, t: (shutil.copyfile(s, t) and {}))
+        assert result['phase'] == 'prepared'
+        assert result['package']['source_video_sha256'] == sha(video)
+        assert result['package']['rules']['advertising_disclosure'] == 'upper-right-gray-v1'
+    else:
+        with pytest.raises(ValueError, match='광고'):
+            jobs.prepare(service, 'post', 'mr.salrim')
+    assert all(p.read_bytes() == content for p, content in before.items())
 
 
 def test_drafts_persist_are_separate_and_reject_stale_save(service):

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>처음 연결 · Hotpost</title>
+<link rel="stylesheet" href="style.css?v=14-coupang-settings"><link rel="stylesheet" href="setup.css?v=20261028-1"></head>
+<body><header class="top"><div class="wrap top-inner"><a class="setup-brand" href="/">🔥 Hotpost</a><nav class="top-right"><a class="btn ghost" href="/">터진 게시물</a><button class="btn ghost" id="theme-toggle" aria-label="테마 전환">🌙</button></nav></div></header>
+<main class="setup-page">
+<div class="setup-intro"><p class="setup-eyebrow">시작하기 · 이 PC의 연결 설정</p><h1>내 계정으로 시작하세요</h1><p>인스타 계정과 쿠팡 스토어를 한 번 연결하면,<br>게시물마다 같은 정보를 입력할 필요가 없어요.</p></div>
+<p id="setup-status" class="setup-status" role="status" aria-live="polite">저장된 연결 정보를 불러오는 중…</p>
+<form id="setup-form">
+<section class="setup-card" aria-labelledby="instagram-title"><div class="setup-section-title"><span>01</span><div><h2 id="instagram-title">내 인스타 계정</h2><p>게시할 계정과 상품 정보를 확인할 계정을 알려주세요.</p></div></div>
+<label>게시용 인스타 계정<input name="publication_accounts" placeholder="my.brand" maxlength="330" autocomplete="off" spellcheck="false" required><small>@ 없이 입력해도 돼요. 여러 계정은 쉼표로 구분하세요.</small></label>
+<label>수집·댓글용 인스타 계정<input name="discovery_account" placeholder="게시용 계정과 같으면 비워두세요" maxlength="31" autocomplete="off" spellcheck="false"><small>원작 게시물의 상품 정보를 확인할 때 사용하는 계정이에요.</small></label></section>
+<section class="setup-card" aria-labelledby="store-title"><div class="setup-section-title"><span>02</span><div><h2 id="store-title">내 쿠팡 스토어</h2><p>내 수익화 링크를 준비할 스토어를 연결해요.</p></div></div>
+<label>공개 스토어 주소<input type="url" name="storefront_url" placeholder="https://influencers.coupang.com/s/my-store" maxlength="2048" autocomplete="off" required><small>쿠팡 인플루언서 ‘내 스토어’에 표시된 공개 주소를 넣어주세요.</small></label>
+<label>상품 등록 컬렉션<input name="collection" placeholder="예: 살림템" maxlength="80" autocomplete="off" required><small>이 스토어에 있는 컬렉션 이름을 그대로 입력하세요.</small></label></section>
+<section class="setup-chrome"><span class="setup-browser-icon" aria-hidden="true">↗</span><div><h2>기존 Chrome의 로그인부터 확인해요</h2><p>이미 열린 탭과 저장된 연결 정보를 먼저 확인해요. 빠진 서비스만 같은 Chrome 프로필에서 열고 로그인해 두세요.</p><p>① Instagram(상품 확인용 계정) · ② 리틀리 DM 자동화(게시용 인스타 연결) · ③ 쿠팡 인플루언서 ‘내 스토어’</p><p>폰의 Instagram·Edits에는 게시할 계정으로 로그인해 주세요. 실제 계정·리틀리 연결·스토어 소유 여부는 업로드 전에 확인해요.</p><p class="setup-privacy">비밀번호·인증 코드·API 키를 보내지 마세요. 연결 정보는 이 설치의 로컬 데이터에 저장돼요.</p></div></section>
+<footer class="setup-footer"><p>저장만으로 댓글이나 상품 등록을 시작하지 않아요.</p><button class="btn" type="submit" id="setup-save" disabled>연결 정보 저장</button></footer>
+</form><div id="setup-done" class="setup-done" hidden><span>연결 정보를 저장했어요.</span><a class="btn" href="/">터진 게시물로 이동 →</a></div>
+</main><script src="display-settings.js"></script><script src="setup.js?v=20261028-1"></script></body></html>

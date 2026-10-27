@@ -67,6 +67,46 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
+def device_name(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', value):
+        raise MobileError('기기 이름은 영문 소문자로 시작하는 영문·숫자·밑줄·하이픈 32자 이내입니다.')
+    if value.upper() in {'CON','PRN','AUX','NUL',*(f'COM{i}' for i in range(1,10)),*(f'LPT{i}' for i in range(1,10))}:
+        raise MobileError('이 기기 이름은 Windows에서 사용할 수 없습니다.')
+    return value
+
+
+class DeviceRegistry:
+    """Named phones preserve the original primary config and pairing keys in place."""
+    def __init__(self, data_dir):
+        self.root = Path(data_dir).resolve()
+        self.folder = self.root / 'mobile-devices'
+
+    def path(self, name):
+        name = device_name(name)
+        return self.root / '.mobile-device.json' if name == 'primary' else self.folder / (name+'.json')
+
+    def devices(self):
+        names = {'primary'} if self.path('primary').is_file() else set()
+        if self.folder.is_dir():
+            names.update(p.stem for p in self.folder.glob('*.json'))
+        return [{'device_id': device_name(name), 'config_file': str(self.path(name)),
+                 **asdict(DeviceConfig.load(self.path(name)).validate())} for name in sorted(names)]
+
+    def save(self, name, config):
+        config.validate()
+        with phone_lock(self.folder):
+            for row in self.devices():
+                if row['device_id'] != name and (row['phone_ip'] == config.phone_ip or
+                        (config.android_serial and row['android_serial'] == config.android_serial)):
+                    raise MobileError('같은 휴대폰이 다른 기기 이름으로 이미 등록되어 있습니다.')
+            config.save(self.path(name))
+
+    def lock_folder(self, name):
+        name = device_name(name)
+        root = self.root / 'mobile-reels'
+        return root if name == 'primary' else root / 'device-locks' / name
+
+
 @contextmanager
 def phone_lock(folder):
     """Kernel lock, released after process death; only one phone action at a time."""
@@ -180,8 +220,11 @@ class AdbDevice:
         # Remote is generated internally and checked by push(), never a user path.
         if not re.fullmatch(r'/sdcard/Movies/Hotpost/[a-f0-9]{32}/final\.mp4', remote):
             raise MobileError('올바른 전송 영상 경로가 아닙니다.')
+        canonical = self.command('shell', 'readlink', '-f', remote).decode().strip()
+        if canonical != '/storage/emulated/0' + remote.removeprefix('/sdcard'):
+            raise MobileError('전송 영상의 실제 저장 경로가 예상과 다릅니다.')
         result = self.command('shell', 'content', 'query', '--uri', 'content://media/external/video/media',
-                              '--projection', '_id', '--where', '"_data=\''+remote+'\'"').decode('utf8', 'replace')
+                              '--projection', '_id', '--where', '"_data=\''+canonical+'\'"').decode('utf8', 'replace')
         ids = re.findall(r'_id=(\d+)\b', result)
         if len(ids) != 1:
             raise MobileError('갤러리의 전송 영상 등록을 확인하지 못했습니다. 잠시 후 transfer를 다시 확인하세요.')
@@ -216,6 +259,42 @@ def parse_screen(xml):
     return nodes
 
 
+def focused_package(dumpsys):
+    """Package of the window that has input focus, read from `dumpsys window`.
+
+    uiautomator2's app_current() can name a background app (seen on Samsung Android 17),
+    so the system's own focus record is used. Popups/transitions fall back to the focused app."""
+    for key in ('mCurrentFocus', 'mFocusedApp'):
+        match = re.search(key+r'=\S+\{[^}]*?\bu\d+ ([A-Za-z0-9_.]+)/', dumpsys)
+        if match:
+            return match.group(1)
+    raise MobileError('현재 포커스된 앱을 확인하지 못했습니다.')
+
+
+def stable_screen_nodes(nodes):
+    # Navigation uses node indices too: normalize those together with the hash.
+    edge_package = 'com.sec.android.app.launcher'
+    system_package = 'com.android.systemui'
+    content = [n for n in nodes if n['package'] not in (edge_package,system_package)]
+    edge = [n for n in nodes if n['package']==edge_package]
+    system = [n for n in nodes if n['package']==system_package]
+    return [{**n,'index':i} for i,n in enumerate(content+edge+system)]
+
+
+def screen_fingerprint(package, nodes):
+    # Android can reorder the status bar and Samsung's persistent Edge handle
+    # around the app window. Their positions must not renumber an unchanged app.
+    # Keep every other window in order, including keyboards and permission dialogs.
+    relevant = [{k:v for k,v in n.items() if k!='index'} for n in nodes
+                if n['package']!='com.android.systemui']
+    edge_package = 'com.sec.android.app.launcher'
+    edge = [n for n in relevant if n['package']==edge_package]
+    content = [n for n in relevant if n['package']!=edge_package]
+    fingerprint = json.dumps({'package':package,'nodes':content,'edge_panel':edge},
+                             ensure_ascii=False,sort_keys=True)
+    return hashlib.sha256(fingerprint.encode()).hexdigest()
+
+
 class AndroidUI:
     def __init__(self, endpoint):
         import uiautomator2 as u2
@@ -223,12 +302,10 @@ class AndroidUI:
 
     def screen(self):
         xml = self.device.dump_hierarchy()
-        package = self.device.app_current()['package']
-        nodes = parse_screen(xml)
+        package = focused_package(self.device.shell(['dumpsys','window']).output)
+        nodes = stable_screen_nodes(parse_screen(xml))
         # A status-bar clock tick is not a changed composer; app content/bounds are.
-        relevant = [n for n in nodes if n['package']!='com.android.systemui']
-        fingerprint = json.dumps({'package':package,'nodes':relevant},ensure_ascii=False,sort_keys=True)
-        return {'xml':xml,'sha256':hashlib.sha256(fingerprint.encode()).hexdigest(),
+        return {'xml':xml,'sha256':screen_fingerprint(package,nodes),
                 'package':package,'nodes':nodes}
 
     def capture(self, folder, label):
@@ -255,6 +332,13 @@ class AndroidUI:
         control.set_text(text, timeout=5)  # Unicode JSON-RPC; never adb input text.
         if control.get_text() != text:
             raise MobileError('입력된 한글/이모지 본문이 원문과 다릅니다.')
+
+    def get_text(self, node):
+        # Android's XML hierarchy replaces supplementary emoji with dots on some phones.
+        control = self.device(className=node['class'], resourceId=node['resource_id'])
+        if control.count != 1:
+            raise MobileError('본문 입력칸 하나를 확인하지 못했습니다.')
+        return control.get_text()
 
     def open_app(self, package):
         if package not in ('com.instagram.android','com.instagram.basel'):

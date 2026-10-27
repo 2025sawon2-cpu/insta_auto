@@ -60,7 +60,9 @@ def test_new_video_requires_explicit_held_video_decision_and_distinct_monitor(tm
              task_id="task-held", run_id="run-held", owner="producer-2", monitor="watcher-2")
 
 
-def test_completion_needs_qa_and_read_only_view_does_not_write(tmp_path, capsys):
+def test_completion_needs_qa_and_read_only_view_does_not_write(tmp_path, capsys, monkeypatch):
+    # Stage gates are covered in test_stage_gate.py; this test keeps the pre-gate path.
+    monkeypatch.setattr('hotpost.stage_gate.REQUIRED_SINCE', datetime(2999, 1, 1, tzinfo=timezone.utc))
     registry_path = tmp_path / "registry.json"
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report(post("a", 24, 1))), encoding="utf-8")

@@ -110,7 +110,12 @@ class MonetizationStore:
     def automation(self):
         with self.connect() as db:
             row = db.execute("SELECT value FROM configuration WHERE name='automation'").fetchone()
-        return json.loads(row[0]) if row else {'enabled': False, 'account': ''}
+            installation = db.execute("SELECT value FROM configuration WHERE name='installation'").fetchone()
+        value = json.loads(row[0]) if row else {'enabled': False, 'account': ''}
+        if installation:
+            saved = json.loads(installation[0])['values']
+            value = {**value,'account':saved['publication_accounts'][0],'discovery_account':saved['discovery_account']}
+        return value
 
     def configure_automation(self, enabled, account, discovery_account=None):
         if not isinstance(enabled, bool):
@@ -386,6 +391,10 @@ class MonetizationStore:
         with self.connect() as db:
             pending = db.execute("SELECT * FROM effects WHERE status='dispatching'").fetchall()
         for effect in pending:
+            # Collection actions deliberately span collector tool turns and are
+            # owned by the durable collection state machine, not a legacy worker.
+            if json.loads(effect['details']).get('origin') == 'collection':
+                continue
             try:
                 with effect_lease(self.root, effect['id']):
                     with self.connect() as db:

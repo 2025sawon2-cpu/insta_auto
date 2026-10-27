@@ -7,6 +7,12 @@
 켜거나 현재 본문 십대·표지 도현을 이전 글꼴로 바꾸라는 지시가 아니다.
 프로세스·버전 JSON 경계와 아래 음성/자막 시간축 원칙은 계속 적용한다.
 
+화면 자막으로 대본을 자르기 전에는 [의미 단위 분할 원본](CAPTION_SEGMENTATION.md)을
+읽는다. 제품·명사구와 시간 표현 등을 보호구로 검토하고, 원고·정책·실제 글꼴 배치·
+분할별 이유를 결속한 검토를 Auto CapCut JSON 경계에 전달한다. 자동 제안의 폭 검사나
+유한 분할 점수만으로 의미 검토를 완료하지 않는다. 신규 분석·수동 수정·재분할·렌더·
+자막 내보내기에서 누락·금지 경계·변경된 검토는 거절하며 기존 파일은 보존한다.
+
 `insta_auto` and `auto_capcut` remain separate processes even when their Git
 repositories are later combined. `hotpost.editing_adapter.AutoCapcutAdapter`
 writes a versioned request under `data/editing_jobs/<job_id>/` and invokes the
@@ -107,7 +113,13 @@ VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
 문구와 순서를 여러 시점에서 직접 확인한다. 오디오·비디오 시작 시각의 일치만으로
 문장별 싱크가 맞는다고 판정하지 않는다.
 
-사용자가 비교 후 승인한 `tight` 쉼 처리를 신규 제작실 편집에 기본 적용한다.
+2026-10-27 사용자가 비교 B를 선택했으므로 새 독립 편집에는
+`sentence_preserved_v1`을 기본 적용한다. 문장·질문 종결 뒤 원래 조용한 구간을
+보존하고 문장 안의 쉼은 기존 tight 조건으로 정리한다. 선택 원고와 ASR의
+종결부 개수가 누락·불일치하면 쉼 축소를 보수적으로 중단한다. 개수 일치는
+정확한 정렬을 증명하지 않는다. 상세 음성 기준은
+[TTS 기본·톤·쉼·복구](TTS_TRUNCATION_RECOVERY.md)를 따른다.
+명시한 과거 `tight` 계획과 기존 영상은 그대로 보존한다.
 VoiceBench의 원본 복제 음성 WAV와 voice ID는 보존한다. 별도 처리 WAV를
 auto_capcut 프로세스에서 만들고 원본 ASR 시간을 샘플 단위 cut-map으로
 변환한 뒤 자막·장면·완성 MP4·CapCut 초안을 같은 시계로 제작한다.

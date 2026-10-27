@@ -11,6 +11,7 @@ from .accounts import AccountRegistry
 from .config import load_settings
 from .post_preparation import PostPreparation
 from .post_preparation_http import PostPreparationHTTP
+from .installation_http import InstallationHTTP
 
 
 def make_publication_handler(settings, snapshot=None, review_dir=None):
@@ -18,7 +19,7 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
     service = PostPreparation(settings)
     snapshot = dict(snapshot or {})
 
-    class Handler(AccountRegistryHTTP, PostPreparationHTTP, SimpleHTTPRequestHandler):
+    class Handler(InstallationHTTP, AccountRegistryHTTP, PostPreparationHTTP, SimpleHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
 
         def log_message(self, *args):
@@ -37,6 +38,16 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
             self._body(json.dumps(value, ensure_ascii=False).encode('utf8'), status=status)
 
         def do_GET(self):
+            if self.installation_request(settings):
+                return
+            if urlparse(self.path).path == '/':
+                from .installation_settings import read
+                if not read(settings.data_dir)['configured']:
+                    self.send_response(302)
+                    self.send_header('Location','/setup.html')
+                    self.send_header('Content-Length','0')
+                    self.end_headers()
+                    return
             if self.account_registry_request(accounts):
                 return
             if self.post_preparation_request(service, head=self.command == 'HEAD'):
@@ -45,8 +56,21 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
             if path == '/api/health':
                 self._json({'mode': 'publication', 'production_workers': 0, 'collection_workers': 0,
                             'reference_accounts': True})
+            elif path == '/api/display-settings':
+                from . import display_settings
+                from .storage import Storage
+                store = Storage(settings.db_path)
+                try:
+                    self._json({'values':display_settings.read(store),'defaults':display_settings.DEFAULTS})
+                finally:
+                    store.close()
             elif path in ('/data.js', '/api/report'):
-                report = json.loads(settings.report_path.read_text('utf8'))
+                report = json.loads(settings.report_path.read_text('utf8')) if settings.report_path.is_file() else {
+                    'ranking_mode':'views_per_follower_72h','is_sample':False,'source':'browser_ui_existing_chrome',
+                    'generated_at':0,'generated_at_kst':'첫 수집 전','settings':{'recent_days':3},
+                    'criteria':{'version':1,'values':{'t1':settings.acquisition_min_views_per_follower,
+                    't2':settings.tier2_multiplier,'t3':settings.tier3_multiplier,'minViews':settings.acquisition_min_views}},
+                    'accounts':[],'posts':[],'topics':[],'summary':{'accounts':0,'posts':0,'hot':0,'reels':0}}
                 if report.get('ranking_mode') == 'views_per_follower_72h':
                     from .reference_registry import load
                     from .daily_ranking import public_production
@@ -85,6 +109,8 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
             self._blocked()
 
         def do_PUT(self):
+            if self.installation_request(settings):
+                return
             if self.account_registry_request(accounts):
                 return
             if self.post_preparation_request(service, write=True):

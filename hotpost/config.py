@@ -203,7 +203,7 @@ class Settings:
         return {k: (str(v) if isinstance(v, Path) else v) for k, v in d.items()}
 
 
-def load_settings() -> Settings:
+def load_settings(*, create_dirs=True) -> Settings:
     s = Settings()
     cfg = ROOT / "config.json"
     if cfg.exists():
@@ -225,13 +225,9 @@ def load_settings() -> Settings:
                 setattr(s, k, Path(env))
             else:
                 setattr(s, k, type(cur)(env))
-    s.data_dir.mkdir(parents=True, exist_ok=True)
-    s.thumbs_dir.mkdir(parents=True, exist_ok=True)
-    s.session_dir.mkdir(parents=True, exist_ok=True)
-    s.source_dir.mkdir(parents=True, exist_ok=True)
-    s.transcript_dir.mkdir(parents=True, exist_ok=True)
-    s.editing_dir.mkdir(parents=True, exist_ok=True)
-    s.source_browser_profile_dir.mkdir(parents=True, exist_ok=True)
-    s.source_model_dir.mkdir(parents=True, exist_ok=True)
-    s.source_tessdata_dir.mkdir(parents=True, exist_ok=True)
+    if create_dirs:
+        for path in (s.data_dir, s.thumbs_dir, s.session_dir, s.source_dir,
+                     s.transcript_dir, s.editing_dir, s.source_browser_profile_dir,
+                     s.source_model_dir, s.source_tessdata_dir):
+            path.mkdir(parents=True, exist_ok=True)
     return s

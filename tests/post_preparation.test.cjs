@@ -4,7 +4,7 @@ const code=fs.readFileSync(require('node:path').join(__dirname,'../web/post-prep
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const dm='본 포스팅은 쿠팡파트너스 활동의\n일환으로 제품 구매시 일정액의 수수료를\n지급 받습니다!\n👇👇👇👇👇👇👇👇';
 function fixture(){return {accounts:['mr.salrim','__ariddaum__'],revision:0,coupang_link:{status:'idle',payload:{}},draft:{selected_accounts:[],thumbnail_options:{recommended:'기존 표지',hook:'후킹',curiosity:'궁금증',benefit:'이득'},selected_thumbnail:'recommended',caption:'우리 대본 ✨',pinned_comment:'댓글',product_link:'',dm_message:dm,dm_button_text:'변기 위 빈자리, 수납으로 바꾸기'},media:{final:'/final.mp4',reference:'/ref.mp4',cover:'/cover.jpg'}};}
-function harness(fetch,navigator={}){const {document,window}=parseHTML('<html><body><div id="root"></div></body></html>');let timer;vm.runInNewContext(code,{window,document,navigator,fetch,AbortController,setTimeout:fn=>(timer=fn,1),clearTimeout:()=>{},console});return {root:document.querySelector('#root'),window,timer:()=>timer?.()};}
+function harness(fetch,navigator={}){const {document,window}=parseHTML('<html><body><div id="root"></div></body></html>');let timer;vm.runInNewContext(code,{window,document,navigator,fetch,AbortController,URL,setTimeout:fn=>(timer=fn,1),clearTimeout:()=>{},console});return {root:document.querySelector('#root'),window,timer:()=>timer?.()};}
 const response=(data,status=200)=>({ok:status<400,status,json:async()=>structuredClone(data)});
 test('four editable choices, both accounts and draft inputs survive a save without replacing DOM',async()=>{
  const puts=[],d=fixture();const h=harness(async(url,options={})=>{if(options.method==='PUT'){puts.push(JSON.parse(options.body));return response({revision:puts.length});}return response(d);});
@@ -113,60 +113,72 @@ test('missing clipboard and permission rejection select the field with honest fa
 const store='https://influencers.coupang.com/s/ourstore';
 const oneLink='https://link.coupang.com/re/AFFSDP?lptag=AFTEST&pageKey=123&itemId=456&vendorItemId=789&portal=CREATOR';
 function completedLink(){return {status:'completed',payload:{product_name:'난방텐트',storefront_url:store,product_url:'',register:false},result:{title:'브랜드 난방텐트',product_id:'123',item_id:'456',vendor_item_id:'789',one_link:oneLink,landing_verified:true},message:'원링크 확인 완료'};}
-function queryLink(h){h.root.querySelector('[name=coupang-name]').value='난방텐트';h.root.querySelector('[name=coupang-store]').value=store;}
-
-test('One-Link request is explicit, registration defaults off and verified result needs an apply click',async()=>{
- const initial=fixture();initial.draft.product_link='기존 제품 링크';let gets=0;const posts=[],puts=[];
- const h=harness(async(url,o={})=>{
-  if(o.method==='POST'){posts.push(JSON.parse(o.body));return response({status:'running',payload:posts.at(-1),message:'확인 중'});}
-  if(o.method==='PUT'){puts.push(JSON.parse(o.body));return response({revision:puts.length});}
-  gets++;return response(gets===1?initial:{...initial,coupang_link:completedLink()});
- });
- h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();queryLink(h);
- assert.equal(posts.length,0);assert.equal(h.root.querySelector('[name=coupang-register]').hasAttribute('checked'),false);
- h.root.querySelector('[data-find-coupang]').click();await tick();await tick();
- assert.equal(posts.length,1);assert.equal(posts[0].register,false);
- assert.equal(h.root.querySelector('[name=prep-link]').value,'기존 제품 링크');
- assert.equal(h.root.querySelector('[data-use-coupang]').hidden,false);
- h.root.querySelector('[data-use-coupang]').click();h.timer();await tick();
+test('product link section shows one result field without manual lookup controls or external writes',async()=>{
+ const requests=[];const initial=fixture();initial.coupang_link=completedLink();
+ const h=harness(async(url,o={})=>{requests.push(o.method||'GET');return response(initial);});
+ h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
  assert.equal(h.root.querySelector('[name=prep-link]').value,oneLink);
- assert.equal(puts.at(-1).draft.product_link,oneLink);assert.equal(puts.at(-1).draft.caption,initial.draft.caption);
+ assert.equal(h.root.querySelectorAll('[name^="coupang-"],[data-find-coupang],[data-use-coupang]').length,0);
+ assert.match(h.root.querySelector('[data-product-link-status]').textContent,/준비됐어요/);
+ assert.deepEqual(requests,['GET']);
 });
 
-test('One-Link result cannot be applied to changed query or change an edited link on its own',async()=>{
- const initial=fixture();initial.coupang_link=completedLink();initial.draft.product_link='내 링크';
+test('pending automation result refreshes only the empty product link and preserves edited caption',async()=>{
+ let gets=0;const requests=[];const initial=fixture();initial.collection_product={status:'pending'};
+ const h=harness(async(url,o={})=>{requests.push(o.method||'GET');gets++;return response(gets===1?initial:{...initial,collection_product:{status:'completed',one_link:oneLink}});});
+ h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
+ const caption=h.root.querySelector('[name=prep-caption]');caption.value='이 화면에서 작성 중인 문구';
+ const video=h.root.querySelector('video');h.timer();await tick();
+ assert.equal(h.root.querySelector('[name=prep-link]').value,oneLink);
+ assert.equal(caption.value,'이 화면에서 작성 중인 문구');assert.equal(h.root.querySelector('video'),video);
+ assert.deepEqual(requests,['GET','GET']);
+});
+
+test('automatic result never overwrites saved or currently typed product link',async()=>{
+ const initial=fixture();initial.draft.product_link='내가 저장한 링크';initial.coupang_link=completedLink();
  const h=harness(async()=>response(initial));h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
- const field=h.root.querySelector('[name=coupang-name]');field.value='다른 상품';field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
- assert.equal(h.root.querySelector('[data-use-coupang]').disabled,true);
- h.root.querySelector('[data-use-coupang]').click();assert.equal(h.root.querySelector('[name=prep-link]').value,'내 링크');
+ const field=h.root.querySelector('[name=prep-link]');assert.equal(field.value,'내가 저장한 링크');
+ field.value='';field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
+ assert.equal(field.value,'');
 });
 
-test('failed One-Link lookup preserves old link and late response cannot update the next post',async()=>{
- const initial=fixture();initial.draft.product_link='기존 링크';let release;
- const h=harness(async(url,o={})=>o.method==='POST'?new Promise(resolve=>release=resolve):response(initial));
- const view=h.window.PostPreparation.mount(h.root,{shortcode:'first'});await tick();queryLink(h);
- h.root.querySelector('[data-find-coupang]').click();await tick();
- release(response({error:'상품 불일치'},400));await tick();
- assert.equal(h.root.querySelector('[name=prep-link]').value,'기존 링크');assert.match(h.root.querySelector('[data-coupang-status]').textContent,/상품 불일치/);
- h.root.querySelector('[data-find-coupang]').click();await tick();view.close();h.root.textContent='next post';
- release(response({status:'running'}));await tick();assert.equal(h.root.textContent,'next post');
+test('missing or failed automation keeps link field available and does not start a lookup',async()=>{
+ for(const state of [undefined,{status:'failed',message:'상품 불일치'}]){
+  const methods=[];const initial=fixture();initial.coupang_link=state;
+  const h=harness(async(url,o={})=>{methods.push(o.method||'GET');return response(initial);});
+  h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
+  assert.equal(h.root.querySelector('[name=prep-link]').value,'');
+  assert.match(h.root.querySelector('[data-product-link-status]').textContent,state?/확인하지 못했어요/:/아직 준비/);
+  assert.deepEqual(methods,['GET']);
+ }
 });
 
-test('closing while draft saves prevents a later external One-Link submission',async()=>{
- let release,posts=0;const h=harness(async(url,o={})=>{
-  if(o.method==='PUT')return new Promise(resolve=>release=()=>resolve(response({revision:1})));
-  if(o.method==='POST'){posts++;return response({status:'running'});}
-  return response(fixture());
+test('late automation status after close cannot update the next post',async()=>{
+ let gets=0,release;const h=harness(async()=>{if(++gets===1)return response(fixture());return new Promise(resolve=>release=resolve);});
+ const view=h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();h.timer();view.close();h.root.textContent='next post';
+ release(response({...fixture(),collection_product:{status:'completed',one_link:oneLink}}));await tick();
+ assert.equal(h.root.textContent,'next post');
+});
+
+test('automation saving a draft product link is reflected without any lookup request',async()=>{
+ let gets=0;const methods=[];const h=harness(async(url,o={})=>{
+  methods.push(o.method||'GET');const fresh=fixture();if(++gets>1)fresh.draft.product_link=oneLink;return response(fresh);
  });
- const view=h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();queryLink(h);
- const field=h.root.querySelector('[name=prep-caption]');field.value='편집 중';field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
- h.root.querySelector('[data-find-coupang]').click();await tick();view.close();release();await tick();await tick();assert.equal(posts,0);
+ h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();h.timer();await tick();
+ assert.equal(h.root.querySelector('[name=prep-link]').value,oneLink);
+ assert.deepEqual(methods,['GET','GET']);
 });
 
-test('old server without One-Link capability leaves manual product link available',async()=>{
- const initial=fixture();delete initial.coupang_link;
+test('open-product link follows the current value in a new tab and disables invalid targets',async()=>{
+ const initial=fixture();initial.draft.product_link=oneLink;
  const h=harness(async()=>response(initial));h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
- assert.equal(h.root.querySelector('[data-find-coupang]').disabled,true);
- assert.match(h.root.querySelector('[data-coupang-status]').textContent,/아직 연결되지/);
- assert.equal(h.root.querySelector('[name=prep-link]').hasAttribute('readonly'),false);
+ const link=h.root.querySelector('[data-open-product]'),field=h.root.querySelector('[name=prep-link]');
+ assert.equal(link.getAttribute('href'),oneLink);assert.equal(link.getAttribute('target'),'_blank');
+ assert.match(link.getAttribute('rel'),/noopener/);
+ for(const invalid of ['', 'javascript:alert(1)', 'data:text/html,hello', 'https://user:pass@example.test']){
+  field.value=invalid;field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
+  assert.equal(link.hasAttribute('href'),false);assert.equal(link.getAttribute('aria-disabled'),'true');
+ }
+ field.value='https://example.test/other-product';field.dispatchEvent(new h.window.Event('input',{bubbles:true}));
+ assert.equal(link.getAttribute('href'),field.value);assert.equal(link.getAttribute('aria-disabled'),'false');
 });

@@ -1,5 +1,7 @@
 # 새 Windows PC 설치 가이드: 세 저장소 함께 사용하기
 
+**완성 영상의 모바일 업로드만 필요하면 [업로드 전용 시작 안내](MOBILE_UPLOAD_START.md)를 사용한다.** 아래 전체 제작용 GPU·음성 모델·편집기 설치는 그 경로의 선행 조건이 아니다.
+
 현재 기본 실행 경로는 [WORKFLOW](WORKFLOW.md)의 독립 `hotpost.publication_server`다.
 아래 `start-local.cmd`, 제작실 health, 전용 로그인·OS 예약은 과거 전체 스택 설치
 참고이며 신규 제작의 기본 시작 명령이 아니다. 이미 로그인한 Chrome이 있는 PC에서는

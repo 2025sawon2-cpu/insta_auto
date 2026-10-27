@@ -26,13 +26,16 @@
 |---|---|
 | 집필·수정·대본 검사 | [writing/RULES.md](hotpost/writing/RULES.md) |
 | 소스 검색·검토·검색 기록 | [SOURCE_WORKFLOW.md](docs/SOURCE_WORKFLOW.md), [SOURCE_SEARCH_LOG.md](docs/SOURCE_SEARCH_LOG.md) |
-| 음성·잘림·확인된 발음 이상 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
+| TTS 기본·밝은 톤·문장 쉼·이상 복구 | [TTS_TRUNCATION_RECOVERY.md](docs/TTS_TRUNCATION_RECOVERY.md) |
+| 대본의 화면 자막 분할·수동 자막 수정 | [CAPTION_SEGMENTATION.md](docs/CAPTION_SEGMENTATION.md) |
 | 편집·최종 QA·전달 | [WORKFLOW.md](docs/WORKFLOW.md), [editorial_montage_policy.md](docs/editorial_montage_policy.md) |
+| 제작 단계 시작·끝(소스·대본·음성·편집·전달) | [WORKFLOW.md의 단계 관문](docs/WORKFLOW.md#단계-관문), [stage_contracts.json](docs/stage_contracts.json) |
 | 영상 시작·완료·썸네일 완료 | [LOCAL_VIDEO_STORAGE.md](docs/LOCAL_VIDEO_STORAGE.md) + 원래 clone의 `local/VIDEO_STORAGE.md`, `local/video-storage.json` |
 | 신규 제작 선정·중단 재개·레퍼런스 현황 | [REFERENCE_STATUS.md](docs/REFERENCE_STATUS.md), [WORKFLOW.md](docs/WORKFLOW.md) |
 | 오전 7시 최근 72시간 수집·선정 | [DAILY_RANKING.md](docs/DAILY_RANKING.md) |
 | 게시물 문구·썸네일 반영 | [POST_COPY_RULES.md](docs/POST_COPY_RULES.md), [게시물 준비 계약](docs/POST_PREPARATION_UI_20261022.md) |
-| 폰 제어·게시 | [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md) |
+| 폰 제어·게시·업로드 초기 로그인 | [hotpost-mobile-upload 스킬](skills/hotpost-mobile-upload/SKILL.md), 처음이면 [모바일 업로드 시작](docs/MOBILE_UPLOAD_START.md), [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md) |
+| 폰 최초 연결·페어링·재연결 안내 | [PHONE_SETUP.md](docs/PHONE_SETUP.md), [MOBILE_REELS_WIREGUARD.md](docs/MOBILE_REELS_WIREGUARD.md)의 에이전트 지침 |
 | 개발 검증·지침 유지보수 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 
 작업 기록은 규칙에 누적하지 않는다. 과거 AGENTS는 Git 이력에서만 조회하며 당시 실행 지시를 현재 승인으로 해석하지 않는다. 규칙 변경은 담당 원본을 수정하고 이 표의 연결과 검사를 함께 확인한다.

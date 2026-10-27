@@ -43,6 +43,16 @@ def status(service, code):
 
 
 def start(service, code, payload, *, finder=None):
+    from .collection_products import admission
+    with admission(service.root):
+        return _start(service, code, payload, finder=finder)
+
+
+def _start(service, code, payload, *, finder=None):
+    from .collection_products import read_result
+    collected = read_result(service.root, code)
+    if collected and collected['status'] != 'cancelled':
+        raise ValueError('수집 단계의 상품 확인 이력이 있습니다. 저장된 결과·실패를 확인하고 중복 등록하지 마세요.')
     if (not isinstance(payload, dict) or set(payload) != {'revision', 'product_name', 'storefront_url', 'product_url', 'register'}
             or type(payload['revision']) is not int or payload['revision'] < 0
             or type(payload['register']) is not bool):

@@ -1,0 +1,6 @@
+# Completed-video publication only. No collection, speech models, GPU or editor runtime.
+requests>=2.32
+psutil>=7.2
+pillow>=10
+jsonschema>=4.26
+-r requirements-mobile.txt

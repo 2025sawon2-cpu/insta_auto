@@ -228,8 +228,12 @@ def main(argv=None):
     inputs.add_argument('--source', type=Path, action='append', required=True)
     inputs.add_argument('--rule', type=Path, action='append', required=True)
     args = parser.parse_args(argv)
+    # Every stage's contract rules are always bound; --rule only adds extra guidance.
+    from .stage_gate import required_rules
+    given = {path.resolve() for path in args.rule}
+    rules = args.rule + [path for path in required_rules() if path.resolve() not in given]
     print(json.dumps(capture_inputs(script=args.script, voice=args.voice, plan=args.plan,
-                                   sources=args.source, rules=args.rule), ensure_ascii=False, indent=2))
+                                   sources=args.source, rules=rules), ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

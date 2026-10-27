@@ -94,12 +94,12 @@ def context(registry, code):
     production = registry['posts'][code]['production']
     state = production['state']
     qa = {'status': 'not_recorded'}
-    if production.get('qa_evidence'):
+    if state == 'completed':
+        # User decision 2026-10-27: reviewed completions are final; later rule edits do not reopen them.
+        qa = {'status': 'completed'}
+    elif production.get('qa_evidence'):
         try:
             from .final_qa import validate
-            if state == 'completed':
-                from .daily_ranking import require_completion_binding
-                require_completion_binding(production)
             result = validate(production['qa_evidence'], video_id=code,
                               task_id=production.get('task_id'), run_id=production.get('run_id'),
                               producer=production.get('owner'), final_sha256=production.get('final_sha256'))
@@ -110,7 +110,7 @@ def context(registry, code):
                'in_progress': 'verify_actual_workers_and_current_artifacts',
                'paused': 'require_explicit_resume_and_current_evidence',
                'blocked': 'require_explicit_resume_and_new_progress_evidence',
-               'completed': 'verify_completion_before_skipping'}
+               'completed': 'skip_completed'}
     return {'video_id': code, 'revision': registry.get('revision', 0),
             **{key: production.get(key) for key in ('state', 'stage', 'reason', 'task_id', 'run_id', 'owner', 'monitor')},
             'worker_observation': 'unverified; bound identities are not live tool observations',
@@ -194,7 +194,7 @@ def ranked(registry, include_old=False):
 
 def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None, run_id=None,
          owner=None, monitor=None, reason=None, qa_evidence=None, final_sha256=None,
-         new_over_paused=()):
+         new_over_paused=(), stage_gates=None):
     if code not in registry["posts"]:
         raise ValueError(f"Unknown video ID: {code}")
     if state not in STATES or not evidence.strip():
@@ -236,6 +236,7 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
                       final_sha256=final_sha256)
         if qa['schema_version'] != 2:
             raise ValueError('New completion requires file-bound final QA schema_version=2')
+        _require_stage_gates(current, code, stage_gates, qa['video']['sha256'])
     changed_at = datetime.now(KST).isoformat()
     updated = dict(current)
     updated.update({"state": state, "stage": stage if stage is not None else current.get("stage"),
@@ -257,6 +258,20 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
         updated["cover_sha256"] = qa["cover"]["sha256"]
     registry["posts"][code]["production"] = updated
     return registry
+
+
+def _require_stage_gates(current, code, gates, video_sha256):
+    from . import stage_gate
+    starts = [item['at'] for item in current.get('history', []) if item.get('to') == 'in_progress']
+    if starts and datetime.fromisoformat(starts[0]) < stage_gate.REQUIRED_SINCE:
+        return  # started before stage gates; finish on the original path
+    if not gates:
+        raise ValueError('Completion requires the task stage-gates directory (--stage-gates)')
+    identity = {'video_id': code, 'task_id': current['task_id'], 'run_id': current['run_id']}
+    stage_gate.require_complete(gates, identity)
+    delivered = stage_gate.verify_end(gates, 'deliver', identity)['outputs']['delivery_receipt']
+    if video_sha256 not in {item['sha256'] for item in delivered}:
+        raise ValueError('Final QA video is not the delivered stage output')
 
 
 def main(argv=None):
@@ -281,7 +296,8 @@ def main(argv=None):
     change.add_argument("--state", required=True, choices=sorted(STATES))
     change.add_argument("--expected-state", required=True, choices=sorted(STATES))
     change.add_argument("--evidence", required=True)
-    for key in ("stage", "task_id", "run_id", "owner", "monitor", "reason", "qa_evidence", "final_sha256"):
+    for key in ("stage", "task_id", "run_id", "owner", "monitor", "reason", "qa_evidence", "final_sha256",
+                "stage_gates"):
         change.add_argument("--" + key.replace("_", "-"))
     change.add_argument("--new-over-paused", action="append", default=[])
     change.add_argument('--expected-revision', type=int)
@@ -317,7 +333,8 @@ def main(argv=None):
             mark(registry, args.video_id, args.state, args.evidence, expected=args.expected_state,
                  stage=args.stage, task_id=args.task_id, run_id=args.run_id, owner=args.owner,
                  monitor=args.monitor, reason=args.reason, qa_evidence=args.qa_evidence,
-                 final_sha256=args.final_sha256, new_over_paused=args.new_over_paused)
+                 final_sha256=args.final_sha256, new_over_paused=args.new_over_paused,
+                 stage_gates=args.stage_gates)
         print(f"{args.video_id}: {args.expected_state} -> {args.state}")
 
 

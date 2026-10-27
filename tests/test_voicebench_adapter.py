@@ -181,6 +181,9 @@ def test_automatic_clone_rejects_completed_legacy_named_request(tmp_path):
     class Legacy(Session):
         def get(self,url,**kwargs):
             if url.endswith('/health'):return Response({'ready':True,'default_voice_kind':'personal'})
+            if url.endswith('/styles'):
+                from tests.test_voicebench_style import snapshot
+                return Response({'styles':[snapshot()]})
             assert not url.endswith('/audio'), 'Wrong voice must not be downloaded'
             return Response({'id':17,'status':'succeeded','voice_id':'qwen-sohee'})
     settings=_settings(tmp_path)

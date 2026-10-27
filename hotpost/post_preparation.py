@@ -7,9 +7,11 @@ import re
 import sqlite3
 import time
 from .post_preparation_content import build_copy, build_dm_copy, DM_MESSAGE
-from .post_media_rules import without_opening_interjection
+from .post_media_rules import DISCLOSURE_VERSION, without_opening_interjection
 
+# Compatibility for historical callers; configured installations use accounts().
 ACCOUNTS = ('mr.salrim', '__ariddaum__')
+
 CHOICES = ('recommended', 'hook', 'curiosity', 'benefit')
 
 
@@ -24,6 +26,10 @@ def shortcode(value):
 
 
 class PostPreparation:
+    def accounts(self):
+        from .installation_settings import read
+        return read(self.root)['values']['publication_accounts']
+
     def __init__(self, settings):
         self.settings = settings
         self.root = settings.data_dir.resolve()
@@ -144,12 +150,10 @@ class PostPreparation:
             cover = self._file(qa['artifacts']['cover']['path'])
             if not video or not cover:
                 return empty
-            from .final_qa import validate
-            from .daily_ranking import require_completion_binding
-            require_completion_binding(production)
-            validate(path, video_id=code, task_id=production.get('task_id'),
-                     run_id=production.get('run_id'), producer=production.get('owner'),
-                     final_sha256=production.get('final_sha256'))
+            from .final_qa import digest
+            # Completed reviews are final; only make sure the served file is the reviewed one.
+            if digest(video) != production.get('final_sha256'):
+                return empty
             empty.update(edit_id=qa['edit_id'], base_final=video,
                          media_version=production.get('final_sha256'))
             empty['media'].update(final=video, cover=cover)
@@ -163,6 +167,16 @@ class PostPreparation:
                 plan = json.loads(plan_path.read_text('utf-8'))
                 lines = plan.get('cover_spec', {}).get('lines')
                 empty['cover_text'] = '\n'.join(str(line) for line in lines) if isinstance(lines, list) else plan.get('cover_text', '')
+            receipt_path = self._file(video.parent / 'delivery-receipt.json')
+            if receipt_path:
+                receipt = json.loads(receipt_path.read_text('utf-8'))
+                if (isinstance(receipt, dict) and receipt.get('schema_version') == 1
+                        and receipt.get('disclosure') == DISCLOSURE_VERSION
+                        and self._file(receipt.get('video')) == video
+                        and self._file(receipt.get('cover')) == cover
+                        and receipt.get('video_sha256') == production.get('final_sha256')
+                        and receipt.get('cover_sha256') == qa['artifacts']['cover']['sha256'] == digest(cover)):
+                    empty['publication_rules'] = {'advertising_disclosure': DISCLOSURE_VERSION}
         except (ValueError, OSError, KeyError, TypeError):
             pass
         return empty
@@ -194,15 +208,22 @@ class PostPreparation:
         # Hydrate old drafts in memory; never rewrite the user's other saved fields.
         draft = {**build_dm_copy(code, source['cover_text'] or source['script']), **draft,
                  'dm_message': DM_MESSAGE}
+        from .collection_products import read_result
+        collection_product = read_result(self.root, code)
+        if collection_product and collection_product['status'] == 'completed' and not draft.get('product_link'):
+            # Reuse the verified collection result without overwriting a saved
+            # nonempty user link or writing a new draft during a read.
+            draft['product_link'] = collection_product['one_link']
         from .post_thumbnail import job_status
         from .post_coupang_link import status as coupang_status
         thumbnail = {**job_status(self, code), 'ready': source['thumbnail_ready'], 'applied_text': source['cover_text']}
         suffix = '?v=' + source['media_version'] if source['media_version'] else ''
-        return {'shortcode': code, 'accounts': list(ACCOUNTS), 'draft': draft,
+        return {'shortcode': code, 'accounts': self.accounts(), 'draft': draft,
                 'revision': row['revision'] if row else 0, 'updated': row['updated'] if row else None,
                 'source_run_id': source['run_id'], 'source_edit_id': source['edit_id'],
                 'thumbnail': thumbnail,
                 'coupang_link': coupang_status(self, code),
+                'collection_product': collection_product,
                 'media': {key: f'/api/post-preparations/{code}/media/{key}' + (suffix if key in ('final','cover') else '') if value else None
                           for key, value in source['media'].items()}}
 
@@ -224,7 +245,8 @@ class PostPreparation:
                     or re.search(r'[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]', button)):
                 raise ValueError('DM 버튼 문구는 20자 이내 한 줄로 입력하세요.')
         accounts = value['selected_accounts']
-        if not isinstance(accounts, list) or any(not isinstance(a, str) or a not in ACCOUNTS for a in accounts):
+        available_accounts = self.accounts()
+        if not isinstance(accounts, list) or any(not isinstance(a, str) or a not in available_accounts for a in accounts):
             raise ValueError('등록된 업로드 계정을 선택하세요.')
         options = value['thumbnail_options']
         if not isinstance(options, dict) or set(options) != set(CHOICES):
@@ -236,7 +258,7 @@ class PostPreparation:
         for key, limit in (('caption', 2200), ('pinned_comment', 2200), ('product_link', 2048)):
             if not isinstance(value[key], str) or len(value[key]) > limit:
                 raise ValueError(f'{key} 입력 길이를 확인하세요.')
-        value = {**value, 'selected_accounts': [a for a in ACCOUNTS if a in accounts]}
+        value = {**value, 'selected_accounts': [a for a in available_accounts if a in accounts]}
         dm_defaults = None
         if 'dm_button_text' not in value:
             source = self.source(code)
