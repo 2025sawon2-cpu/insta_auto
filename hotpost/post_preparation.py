@@ -1,6 +1,7 @@
 """Independent publication drafts; historical production files are read-only inputs."""
 from __future__ import annotations
 from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -70,6 +71,9 @@ class PostPreparation:
         registered = self._registered_source(code)
         if registered is not None:
             return registered
+        independent = self._independent_source(code)
+        if independent:
+            return independent
         historical = self.root / 'studio' / 'studio.sqlite3'
         state = {}
         if historical.is_file():
@@ -180,6 +184,37 @@ class PostPreparation:
         except (ValueError, OSError, KeyError, TypeError):
             pass
         return empty
+
+    def _independent_source(self, code):
+        """Read a verified independent delivery without creating a Studio task."""
+        path = self.root / 'post-preparations' / code / 'independent.json'
+        try:
+            if not path.is_file() or path.stat().st_size > 1024 * 1024:
+                return None
+            value = json.loads(path.read_text('utf-8'))
+            if value.get('completion_verified') is not True:
+                return None
+            final, cover = (self._file(value.get(key)) for key in ('final', 'cover'))
+            if not final or not cover:
+                return None
+            if final.suffix.lower() != '.mp4' or cover.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
+                return None
+            for key, media in (('final', final), ('cover', cover)):
+                if hashlib.sha256(media.read_bytes()).hexdigest() != value['sha256'][key]:
+                    return None
+            version = value['version']
+            if not isinstance(version, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', version):
+                return None
+            spoken = value['spoken_text']
+            return {'run_id': version, 'edit_id': version,
+                    'script': without_opening_interjection(spoken), 'spoken_text': spoken,
+                    'cover_text': value['cover_text'],
+                    'media': {'final': final, 'cover': cover, 'reference': self._file(value.get('reference'))},
+                    'media_version': version, 'base_final': final,
+                    'thumbnail_background': None, 'thumbnail_font': None, 'thumbnail_style': {},
+                    'thumbnail_ready': False, 'publication_rules': value.get('rules', {})}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return None
 
     def defaults(self, code, source):
         options = dict.fromkeys(CHOICES, '')
@@ -295,6 +330,9 @@ class PostPreparation:
                 if current and current['media_version'] == version and current['media'][kind]:
                     return current['media'][kind]
                 raise FileNotFoundError('현재 완성 영상 파일을 확인할 수 없습니다.')
+            independent = self._independent_source(code)
+            if self._registered_source(code) is None and independent and independent['media_version'] == version:
+                return independent['media'][kind]
             if not re.fullmatch('[a-f0-9]{32}', version):
                 raise FileNotFoundError('영상을 찾을 수 없습니다.')
             with self.connect() as db:
