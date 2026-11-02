@@ -3,11 +3,10 @@ import argparse,copy,hashlib,json,subprocess,time
 from pathlib import Path
 from hotpost.config import load_settings
 from hotpost.editing_adapter import _atomic_json
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.source_quality import sha256_file,editing_ready
 from hotpost.studio import Studio
 from hotpost.studio_ai import describe_shots,restrict_context_shots
-from hotpost.local_compute import release_idle_voice
 
 ROOT=Path('data/user-feedback-revisions-20261011').resolve()
 CODES=('DeJ7hD6zsnR','DeSvpmAsWgZ')
@@ -35,15 +34,14 @@ def prepare(code):
     if not vf.exists():
         submit=final/'voice-submission.json'
         request=json.loads(submit.read_text('utf-8'))['request_id'] if submit.exists() else None
-        result=VoiceBenchAdapter(settings).synthesize(text,final/'narration.wav',
+        result=AiStudioAdapter(settings).synthesize(text,final/'narration.wav',
             request_id=request,on_submitted=lambda i:_atomic_json(submit,{'request_id':i}),
-            generation_key='feedback-20261011-'+code+'-'+digest,require_personal_clone=True,
+            generation_key='feedback-20261011-'+code+'-'+digest,
             progress=lambda m,n:print(code,m,n,flush=True))
         assert result['speech_plan']['segment_count']==1,'Whole-script generation required'
         _atomic_json(vf,{**result,'id':'feedback-voice-'+digest[:12],'path':str(final/'narration.wav'),
             'sha256':sha256_file(final/'narration.wav'),'duration':result['audio']['duration'],
             'script_id':script['id'],'script_sha256':digest,'created':time.time(),'status':'completed'})
-    release_idle_voice(settings,best_effort=True)
     pool=[]
     for other in CODES:
         baseline=json.loads(Path('data/user-feedback-20261011-v1',other+'-baseline.json').read_text('utf-8'))

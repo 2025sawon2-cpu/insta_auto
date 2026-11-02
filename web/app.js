@@ -15,7 +15,7 @@
     }catch(_){
       window.CollectionNotifications.update({title:'수집 상태를 확인하지 못했습니다.',tone:'warning',
         solution:'서버 연결을 확인하고 상태를 다시 조회하세요. 계속 실패하면 서버 실행 상태를 확인하세요.',
-        actions:[{label:'상태 다시 확인',run:loadCollectionHealth},{label:'서버 확인 방법',href:'accounts.html#help-server'}]});
+        actions:[{label:'상태 다시 확인',run:loadCollectionHealth},{label:'수집 상태 확인',href:'accounts.html#collection-health'}]});
     }
   }
   loadCollectionHealth();
@@ -75,7 +75,7 @@
   else { sb.textContent = { instaloader: '실데이터 · 세션 수집', web: '실데이터 · 웹 수집', dump: '실데이터 · 브라우저 덤프' }[R.source] || '실데이터'; sb.classList.add('live'); }
   if(R.is_sample)window.HotpostNotices.show($('#banner'),{title:'샘플 게시물이 표시되고 있습니다.',tone:'info',
     solution:'전용 Instagram 로그인 상태를 확인한 뒤 수집을 실행하면 실제 게시물로 바뀝니다.',
-    actions:[{label:'실제 데이터 수집 방법',href:'accounts.html#help-collect'}]});
+    actions:[{label:'수집 상태 확인',href:'accounts.html#collection-health'}]});
   }
   renderReportMetadata();
 
@@ -88,7 +88,12 @@
   function currentSettings(){
     const c=R.criteria.values;
     if(dailyRanking()) {
-      $('#current-settings').innerHTML=`<p>최근 72시간 게시물 · 팔로워 대비 조회수순</p><p>조회수 ${fmt(c.minViews)} 이상 · 팔로워 대비 ${esc(c.t1)}배 이상</p><p>표시 게시물 <strong id="result-count">0</strong>개</p><p id="result-context" hidden></p>`;
+      const expanded=$('#current-settings details')?.open;
+      $('#current-settings').innerHTML=`<div class="discovery-summary-head"><span>현재 보기</span></div>
+        <div class="discovery-numbers"><div class="discovery-count"><span class="summary-label">표시 게시물</span><div><strong id="result-count" aria-live="polite">0</strong><span>개</span></div></div><div class="discovery-period"><span class="summary-label">게시 시각 · 최근</span><div><strong>72</strong><span>시간</span></div></div></div>
+        <div class="discovery-badges"><span>팔로워 대비 조회수순</span></div>
+        <p id="result-context" class="result-context" hidden></p>
+        <details class="discovery-conditions" ${expanded?'open':''}><summary>세부 조건</summary><div class="condition-tags"><span>조회수 ${fmt(c.minViews)} 이상</span><span>팔로워 대비 ${esc(c.t1)}배 이상</span></div></details>`;
       return;
     }
     const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${({filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',calendar:'<rect x="4" y="5" width="16" height="16" rx="3"/><path d="M8 3v4m8-4v4M4 11h16"/>',sort:'<path d="M7 4v16m-4-4 4 4 4-4M14 5h7m-7 5h5m-5 5h3"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4Z"/>',settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>'})[name]}</svg>`;
@@ -279,9 +284,13 @@
   function metric(label, val, ratio, na, display) {
     return `<div class="m ${na ? 'na' : ''}"><div class="k">${label}</div><div class="v">${na ? '–' : display ? esc(display) : fmt(val)}</div><div class="r ${ratioCls(ratio)}">${na ? '' : ratioTxt(ratio) + (ratio != null ? ' 평소 대비' : '')}</div></div>`;
   }
+  function referenceThumbnail(p) {
+    const cached = `thumbs/${encodeURIComponent(p.shortcode)}.jpg`;
+    const thumbUrl = p.thumb || cached;
+    return `<img loading="lazy" src="${esc(thumbUrl)}" data-fallback="${thumbUrl !== cached ? esc(cached) : ''}" alt="" onerror="if(this.dataset.fallback){const cached=this.dataset.fallback;delete this.dataset.fallback;this.src=cached;}else{this.hidden=true;this.nextElementSibling.hidden=false;}"><div class="ph" hidden>${isVideo(p) ? '🎬' : '🖼'}</div>`;
+  }
   function card(p, i) {
-    const thumbUrl=p.thumb||`thumbs/${encodeURIComponent(p.shortcode)}.jpg`;
-    const thumb = `<img loading="lazy" src="${esc(thumbUrl)}" alt="" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="ph" hidden>${isVideo(p) ? '🎬' : '🖼'}</div>`;
+    const thumb = referenceThumbnail(p);
     const status = productionState(p.shortcode);
     return `<article class="card" data-code="${esc(p.shortcode)}" ${isVideo(p) ? `data-production-state="${status.state}" data-agent-live="${agentState(p.shortcode).live}"` : ''}>
       <div class="thumb">${thumb}
@@ -379,7 +388,7 @@
     const a = acctMap[p.username] || {};
     $('#modal-body').innerHTML = `<div class="detail production-detail"><div class="detail-body">
       <div class="benchmark-header">
-      <div class="thumb">${p.thumb ? `<img src="${esc(p.thumb)}" alt="">` : `<div class="ph">${isVideo(p) ? '🎬' : '🖼'}</div>`}</div>
+      <div class="thumb">${referenceThumbnail(p)}</div>
       <div class="benchmark-summary">
         <span class="hint">벤치마크 원본 · ${kindTxt(p.kind)}</span>
         <h3>${p.tier ? '🔥 터진 ' : ''}${isVideo(p) ? '영상' : '게시물'}</h3>

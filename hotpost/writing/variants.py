@@ -80,7 +80,8 @@ def generate_three(payload, directory, check, progress, *, evaluate):
         '현재 판매 조건을 입증하지 못한 주장은 삭제하거나 가정으로만 표현하고, 필요한 한계는 분석 메타데이터에 남기세요. '
         '현재 최저가·재고·AS·원작의 특징적인 보증 묶음을 사실로 단정하지 마세요. '
         '짧고 간결하게 한 갈등을 전개하고 같은 기능·이득을 뒤에서 요약해 반복하지 마세요. 제품 기능을 반복하거나 '
-        '기준·방법·추상적인 교훈을 알려주는 내용으로 끝내지 마세요. 보유 장면 수로 집필을 제한하지 마세요.\n\n'
+        '기준·방법·추상적인 교훈을 알려주는 내용으로 끝내지 마세요. 보유 장면 수로 집필을 제한하지 마세요. '
+        '반환 전에 각 안을 공통 규칙 「6. 귀로 한 번 듣는 최종 점검」으로 한 번 듣는 시청자처럼 확인하세요.\n\n'
         +contract['prompt']+'\n\n'+THUMBNAIL_INSTRUCTION+visual_instruction,
         json.dumps(evidence,ensure_ascii=False), SCHEMA, check, state, **({'images':images} if images else {}))
     contract_attempts = []

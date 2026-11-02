@@ -131,7 +131,7 @@ def repair_triplet(code):
     print(json.dumps([{k:s[k] for k in ['variant_number','text','bias','thumbnail_lines']} for s in scripts],ensure_ascii=False),flush=True)
 
 def voice(code,index=0):
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
+    from hotpost.ai_studio_adapter import AiStudioAdapter
     from hotpost.source_quality import sha256_file
     final=ROOT/code/'final';final.mkdir(parents=True,exist_ok=True)
     writing=next(n for n in ('writing-v3','writing-v2','writing') if (ROOT/code/n/'quality.json').exists())
@@ -146,9 +146,9 @@ def voice(code,index=0):
     _atomic_json(final/'writing-selection.json',{'quality_path':str(quality_path),'variant':index+1})
     if (final/'voice.json').exists():return
     submit=final/'voice-submission.json';request=read(submit)['request_id'] if submit.exists() else None
-    result=VoiceBenchAdapter(load_settings()).synthesize(text,final/'narration.wav',request_id=request,
+    result=AiStudioAdapter(load_settings()).synthesize(text,final/'narration.wav',request_id=request,
         on_submitted=lambda i:_atomic_json(submit,{'request_id':i,'script_sha256':digest}),
-        generation_key='remake-20261012-'+code+'-'+digest[:32],require_personal_clone=True,
+        generation_key='remake-20261012-'+code+'-'+digest[:32],
         progress=lambda m,n:print(code,m,n,flush=True))
     assert result['speech_plan']['segment_count']==1
     _atomic_json(final/'voice.json',{**result,'id':'remake-20261012-voice-'+digest[:12],'path':str(final/'narration.wav'),

@@ -23,9 +23,10 @@ def inspect(repo, shortcode=None):
         raise ValueError('실제 insta_auto 저장소를 --repo로 지정하세요.')
     sys.path.insert(0,str(repo))
     from hotpost.config import load_settings
-    from hotpost.installation_settings import read
+    from hotpost.installation_settings import read, littly_login_routes
     data=Path(load_settings(create_dirs=False).data_dir).resolve()
     setup=read(data)
+    logins=littly_login_routes(setup['values'])
     devices=[]
     paths=[('primary',data/'.mobile-device.json')]
     paths.extend((path.stem,path) for path in sorted((data/'mobile-devices').glob('*.json')))
@@ -53,6 +54,8 @@ def inspect(repo, shortcode=None):
                'SELECT account,task_id,status FROM next_post_slots')
     return {'repo':str(repo),'data_dir':str(data),'read_only':True,
             'installation':setup,
+            'littly_logins':logins,
+            'missing_littly_login_accounts':[r['account'] for r in logins if not r['configured']],
             'installation_saved':read_configuration_exists(data),
             'devices':devices,'jobs':jobs,'next_post_slots':slots,
             'live_checks_required':['existing Chrome profile and Instagram discovery account',

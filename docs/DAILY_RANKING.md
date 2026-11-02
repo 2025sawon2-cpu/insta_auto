@@ -2,6 +2,10 @@
 
 사용자가 정한 현재 일일 경로다. 기존 제작실·자동 collector·성장 추적기는 보존하며 이 경로에서 호출하지 않는다. 수집과 제작은 승인된 예약 또는 명시 요청에서만 실행한다.
 
+## 예약 상태와 중지 알림
+
+사용자는 오전 7시 일일 예약의 지속 실행과 중지 시 알림을 요청했다. 예약이 중지·삭제되거나 대상 채팅이 보관되어 실행할 수 없는 상태, 예정 실행 실패 또는 상태 확인 불가를 발견하면 확인 시각·실제 상태·다음 실행에 미치는 영향과 필요한 조치를 사용자에게 알린다. 사용자 직접 지시라는 근거 없이 사용자 중지로 기록하지 않는다. 개별 영상의 보류·필수 입력 부족과 예약 자체의 중지는 구분하며, 개별 작업이 막혔다고 일일 예약을 임의로 비활성화하지 않는다. 다른 영상의 기존 중지·실제 게시 금지는 보존한다. 예약 자체가 멈추면 본 예약 안의 알림도 실행될 수 없으므로 독립된 상태 점검 예약을 사용하고, 변경 없는 정상 점검은 알림을 반복하지 않는다. 실제 예약 식별자·다음 실행 시각·복구 결과는 Git 제외 로컬 기록에서 관리한다. 앱·PC가 꺼져 점검이 실행되지 않은 시간을 감시했다고 주장하지 않는다.
+
 ## 매일 현재 값으로 평가
 
 - 수집 시작 시각을 한 번 고정하고 그 시각 이전 **72시간**에 실제 게시된 게시물을 확인한다. 고정 게시물·릴스 탭 순서와 원본 게시 시각을 구분한다. 시작 이후 게시물과 72시간 밖 게시물은 이번 대상에서 제외한다.
@@ -11,10 +15,13 @@
 - `1.7만`, `8만`, `팔로워 2.3만`은 표시 원문을 보존하고 각각 약 17,000·80,000·23,000으로 계산한다. 축약 표시만으로 제외하거나 정확값 확보를 기다리지 않는다. 실제로 값이 보이지 않거나 팔로워가 0이면 수치 미확인으로 남겨 이번 랭킹에서 제외한다.
 - 조회수 증가량·속도·추격 점수·가속도·순위 변화·후속 관측 예약은 **사용하지 않는다**. 매일 현재 수치만으로 새로 평가한다. 실행 증거와 이전 자료 보존은 성장 추적과 구분한다.
 - 최근 72시간 전체에서 점수 내림차순으로 정렬한다. 동점은 조회수, 게시 시각 내림차순, shortcode 순이다. 날짜별 우선 정렬이나 최초 발견일 우선은 적용하지 않는다. 1·2·3위 아래 후보도 보존하며, 통과 후보가 없으면 순위를 만들지 않는다.
+- 사용자에게 순위·제작 상태를 보고할 때는 원본 본문에서 확인한 상품·행동·주제를 짧은 한국어 명칭으로 **먼저** 적는다. 예: `1위 포켓몬 킨더조이 어드벤트 캘린더 (@kimaltteul, 조회수 약 30.2만)`. `shortcode`는 원장 조회와 대상 결속을 위해 괄호 안에 덧붙일 수 있으나 ID만으로 게시물을 소개하지 않는다. 본문으로 주제를 확정할 수 없으면 추측한 이름 대신 계정과 확인된 본문 일부를 표시한다. 명칭은 순위 점수나 고정 `video_id`를 변경하지 않는다.
 
 ## 현재 입력과 실행
 
 브라우저 관측 폴더의 `profile-cards.json`, `post-details.json`, `reel-grid-views.json`은 같은 `started_at`을 가진다. 기존 수집 기록 형식을 유지하되 탐색·재확인 범위는 72시간이다. 프로필에는 `username`·보이는 `followers`·`observed_at`, 게시물에는 계정 경로가 포함된 `href`·`username`·실제 게시 시각 `last`·`observed_at`, 조회수에는 `href`·보이는 `raw`·`observed_at`을 저장한다. 반올림·누락과 접근 실패를 구분하며 수집 누락 계정/게시물은 실행 기록에 남긴다.
+
+프로필의 게시물 카드에서 같은 `href`에 속한 실제 `img.currentSrc`(없으면 `img.src`)도 `cards[].thumbnail_url`로 보존한다. 상세 관측의 `thumbnail_url`도 지원한다. 프로필 사진·다른 게시물 사진을 대신 넣지 않는다. `publish`는 기존 `ensure_thumbnail`으로 이미지를 `web/thumbs/{shortcode}.jpg`에 캐시하고 리포트 `thumb`에 로컬 경로를 연결한다. 실제 사진이 없으면 누락으로 남기며, 그림 아이콘을 썸네일 복구 성공으로 세지 않는다. 사진 복구만 요청받은 경우 조회수·순위·제작 상태를 다시 수집하거나 변경하지 않는다.
 
 ```text
 python -m hotpost.daily_ranking --observations <이번 관측 폴더> --output <이번 폴더>/daily-report.json --publish
@@ -33,7 +40,7 @@ python -m hotpost.reference_registry --registry data/reference-status.json next 
 1. `python -m hotpost.collection_products list`로 `pending`을 읽고, 현재 게시 리포트에서 여전히 적격인 대상만 확인한다. `comment_reserved` 이후 중단된 시도는 다시 댓글을 달지 말고 기록·실제 화면을 확인해 실패 또는 읽기 전용 복구로 남긴다. 완료된 결과는 재사용하고 실패는 다음 수집·재시작으로 풀지 않는다.
 2. 기존 Chrome의 실제 로그인 계정, 원작성자·shortcode·현재 본문, 기존 DM 메시지 identity 기준선과 기존 자기 댓글을 관측한다. 키워드는 본문이 요청한 실제 단어를 사용한다(`keyword_from_caption`). 고정 `나도`를 다른 원작 키워드 대신 쓰지 않는다. 아무 댓글 조건일 때만 기본 `나도`를 사용한다. 불명확하면 보내지 않고 사유를 남긴다.
 3. Git 제외 data 작업 폴더에 preflight JSON을 저장한다. `observed_at`(Unix초), `account`, `browser_extension`, `storefront_url`, `shortcode`, `author`, `caption`, `keyword`, `dm_baseline`(기존 수신 메시지 identity 배열), 화면 근거를 포함한다. `begin --code <id> --evidence <JSON>`이 `comment_reserved`와 반환한 `token`을 내구 저장한 **후** 댓글 한 번만 제출한다. 기존 수익화 `effects`와 원링크 시도가 있으면 자동 재진입하지 않는다. 실제 자기 댓글의 ID·키워드·계정을 확인한 JSON으로 `record --stage comment_confirmed`를 실행한다.
-4. 댓글 이후의 새 수신 DM만 사용한다. `sender`, `incoming=true`, 새 `message_id`와 관측 시각·화면 근거로 `record --stage dm_received`를 실행한다. 팔로우 확인형이면 첫 안내 DM을 보존하고 확인 뒤 도착한 상품 DM을 새 message_id로 같은 dm_received 단계에 한 번 추가 기록한다(별도 followup 근거로 보존). 필요한 팔로우·팔로우 확인·상품 버튼은 클릭 **전에** `reserve-action --action follow|follow_check|product_button --code <id> --token <token>`으로 각각 한 번만 예약한다. 이미 팔로우 중이면 새 팔로우를 하지 않는다. 첫 DM 및 확인 후 DM은 기존 설정 `monetization_dm_initial_wait_seconds`/`monetization_dm_followup_wait_seconds`(기본 각각120초)까지만 기다린다. 미수신·결과 불명·접근 제한이면 `fail --reason <실제 사유>`로 종료하고 댓글/버튼을 재실행하지 않는다. 여러 상품 중 대상이 불명확하면 임의로 고르지 않는다.
+4. 댓글 이후의 새 수신 DM만 사용한다. `sender`, `incoming=true`, 새 `message_id`와 관측 시각·화면 근거로 `record --stage dm_received`를 실행한다. **수신 DM의 상품·팔로우 확인 버튼은 [모바일 DM 경로](MOBILE_REELS_WIREGUARD.md#한-편-업로드-순서)를 따른다.** Chrome에서 버튼이 안 보이는 것은 DM 미수신이나 버튼 부재의 근거가 아니다. 기존 폰 연결과 수집 계정으로 로그인한 실제 모바일 대화를 확인하며, 웹 수집 계정과 폰 게시 계정이 다르면 임의로 대신 사용하지 않는다. 모바일 실행 권한·연결·로그인이 실제로 없으면 그 선행 입력만 미확인으로 남기고 영상 제작 같은 독립 작업을 계속한다. 팔로우 확인형이면 첫 안내 DM을 보존하고 확인 뒤 도착한 상품 DM을 새 message_id로 같은 dm_received 단계에 한 번 추가 기록한다(별도 followup 근거로 보존). 필요한 팔로우·팔로우 확인·상품 버튼은 클릭 **전에** `reserve-action --action follow|follow_check|product_button --code <id> --token <token>`으로 각각 한 번만 예약한다. 이미 팔로우 중이면 새 팔로우를 하지 않는다. 첫 DM 및 확인 후 DM은 기존 설정 `monetization_dm_initial_wait_seconds`/`monetization_dm_followup_wait_seconds`(기본 각각120초)까지만 기다린다. 미수신·결과 불명·접근 제한이면 `fail --reason <실제 사유>`로 종료하고 댓글/버튼을 재실행하지 않는다. 120초 대기는 DM 수신 대기이며 지원되지 않는 웹 버튼이 나타날 때까지 기다리는 시간이 아니다. 이미 실패한 시도는 이 지침 수정만으로 재개·초기화하지 않고 기존 댓글·DM·버튼 예약과 원래 token을 보존한다. 여러 상품 중 대상이 불명확하면 임의로 고르지 않는다.
 5. 실제 버튼의 URL과 도착 상품명·원 상품 URL의 productId/itemId/vendorItemId를 확인해 `record --stage product_verified`에 `dm_button_url`, `product_name`, `product_url`과 최종 상품 DM의 `message_id`를 연결한다. 원작성자 제휴 링크를 우리 수익화 링크로 사용하지 않는다.
 6. 로그인된 내 스토어·설정 컬렉션을 확인한 JSON(`storefront_url`, `collection`)으로 `record --stage link_reserved`를 먼저 남긴다. 기존 원링크는 정확한 상품·옵션으로 찾아 재사용한다. 없으면 기존 Chrome에서 본인 파트너스 링크를 발급하고 **확인된 내 컬렉션**에 한 번 등록한다. 기존 `coupang_onelink`의 원링크·상품 식별자 검증을 재사용한다. 로그인/인증/상품·옵션 확인이 안 되면 중지하며 API나 다른 상품으로 대체하지 않는다.
 7. 내 스토어의 실제 상품 레코드에서 얻은 CREATOR 원링크와 그 링크의 실제 도착 상품·옵션을 대조한다. `record --stage completed` JSON에는 `one_link`, `product_name`, `product_url`, `storefront_url`, `final_url`, `landing_verified=true` 및 `store_record_evidence` 객체(스토어 주소·원링크·세 식별자), 실제 화면 근거를 포함한다. 모든 record에는 같은 `--code`, `--token`, `--evidence`를 전달한다. 완료 원링크는 정상 게시물 준비 화면의 빈 제품 링크에 읽기 전용으로 연결되며 기존 사용자의 비어 있지 않은 링크는 덮어쓰지 않는다.

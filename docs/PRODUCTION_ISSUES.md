@@ -1,12 +1,20 @@
 # 영상 제작 중 문제 기록
 
+## 2026-10-29 현재 제작 경로 — 원고·음성·후속 단계 결속 누락 수정
+
+격리 재현에서 대본만 교체해도 옛 음성/편집/전달이 완료로 인정됐고, 같은 스타일의 다른 원고 요청 ID도 새 음성처럼 저장됐다. 관문의 선행 산출물 결속과 서버 원고 SHA 대조로 거절하며, 동일 파일을 다시 검토한 경우에는 후속 재생성을 강제하지 않는다. 개인 릴스 Seed13/HQ/단일 구간을 검사하고 긴 스타일 원고는 큐 생성 전에 거절한다. 편집은 기존 renderer의 본문 5부모 검사 플래그를 필수 연결한다. 새 실행기·상태 DB·별도 승인 단계는 추가하지 않았다.
+
+TTS 기록의 요청17은 감정 제어가 꺼져 있었고 승인 기준 요청18부터21은 주요 실제 생성값이 같았다. 최초와 재제작이 언제나 같은 조건이었다고 단정할 수 없다. 밝은 스타일의 샘플링도 승인된 0.9/0.95/0.05로 고정하고 worker 적용 검사를 하나로 합쳤다. 원고 변경에 따른 운율 차이와 편집 쉼은 별도 검토 대상이며 설정 일치로 청감을 보증하지 않는다. 실패 재현·회귀·이력 비교는 Git 제외 `local/workflow-tts-20261029`와 현재 신규 영상 기록에 연결한다. 과거 자료/완료본과 다른 작업의 중지를 유지한다.
+
+같은 신규 영상의 실제 렌더에서 여러 자막을 묶은 beat가 `cue_ids`를 정상 제공해도, `dict.get`의 기본값이 먼저 평가되어 없는 단일 `cue_id`를 읽는 KeyError가 발생했다. Auto CapCut의 해당 표현만 조건 분기로 바꿨으며 다중·과거 단일 ID·분할 자막 상속 회귀를 실패 재현 후 통과했다. 현재 제작은 기존 단일 ID 호환 입력으로 이어갔고 원음·소스는 재생성하지 않았다. 인접 검사 36개 중 30개 통과, 6개는 기존 fixture의 자막 의미 검토 누락으로 수정 전 함수에서도 동일 실패함을 확인했다. 보호 기준을 낮추지 않고 기존 fixture 문제로 구분한다.
+
 ## 2026-10-27 수익 링크 준비 — 컬렉션 기존 상품 누락 (복구 미완료)
 
 텐트 리틀리 선행 작업에서 쿠팡 인플루언서 공개 컬렉션은 기존14개였으나 편집 화면에는10개만 표시됐다. 이 차이를 놓친 채 새 상품 추가와 최종 저장을 실행했고 공개 수가11개로 바뀌어 기존4개 누락을 확인했다. 서비스 내부 원인은 미확인이며 사용자에게 기존 상품 제거 승인을 받았다고 해석하지 않는다.
 
 기존 자동화 링크에서 원래 상품 식별값을 대조했다. 젤펜은 판매 종료/중지 안내, 퍼실은 현재 미판매·품절, 양치컵은 원 상품 재등록 UI에서 ‘상품 정보를 가지고 올 수 없습니다’ 오류를 확인했다. 스카트의 정확한 기존 옵션 URL은 아직 복구하지 못했다. 다른 상품/옵션으로 대체하지 않았으며 추가 전체 컬렉션 저장을 중지했다. 텐트용 리틀리 저장과 이 보존 오류는 별도로 기록한다. Git 제외 해당 모바일 작업의 `littly/store-preservation-issue.json`에 원래 목록·확인 URL·오류·남은 복구를 보존했다. 완료/복구 성공으로 보고하지 않는다.
 
-[모바일 업로드 선행 절차](MOBILE_REELS_WIREGUARD.md)에 공개/편집 목록 일치 확인과 불일치 시 저장 중지를 추가했다. 현재 조치는 실행 지침이며 플랫폼 수정 또는 모든 외부 자동화 코드의 강제를 검증했다는 뜻은 아니다.
+당시 [모바일 업로드 선행 절차](MOBILE_REELS_WIREGUARD.md)에 공개/편집 목록 불일치 시 저장 중지를 추가했으나, 2026-10-30 사용자 명시 지시로 해당 중단 조건을 제거했다. 이 절의 실제 누락·복구 미완료 이력은 보존하며 현재 실행 규칙은 모바일 문서를 따른다.
 
 ## 2026-10-27 의미 단위 자막 분할 — 기존 기준의 강제 누락
 
@@ -411,3 +419,98 @@ P-009의 청감 미확인은 새 승인 대본으로 만든 `revision-v2` 현재
 ## 2026-10-27 Android 17 실폰의 저장 경로·본문 확인·Edits 화면 연결
 
 실폰 전송 파일의 SHA는 일치했지만 MediaStore가 `/sdcard` 별칭 대신 `/storage/emulated/0` 경로를 저장해 URI 조회가 실패했다. `readlink -f` 결과를 현재 허용된 작업 경로와 대조하고 그 정확한 경로로 조회해 복구했다. 현재 앱의 본문 입력칸은 `AutoCompleteTextView`이며, XML 덤프가 일부 이모지를 점으로 바꾸는 반면 입력칸 직접 읽기는 원문과 일치했다. 지원 입력칸 형식과 직접 Unicode 문자열 대조로 수정했다. 음악 선택은 배경 타임라인이 움직여도 실제 검색어·트랙 ID·설명·위치가 같은지 검증하고, 계정 확인은 본문 언급을 배제한 본인 프로필과 동일 Edits 전달의 실제 로그인 안내 캡처에 결속한다. 현재 영상의 Edits 음악 70·전달·본문·표지·공유 직전까지 실폰에서 확인했으며 파일·캡처·정확한 상태는 Git 제외 해당 모바일 작업의 `live-verification.json`에 보존한다. 실제 공유 버튼 실행·게시 성공·다른 두 폰의 실기 검증은 수행하지 않았다.
+
+
+## 2026-10-28 premature source hold in the independent workflow
+
+For De_exCOz6sm the initial stage receipt matched the current source/editorial rules. The run nevertheless treated a missing exact retrieval/closure shot and full-file multi-scene differences as grounds for holding the whole video before testing clean later segments and distinct generic context. Existing source C07 has a separately reviewable clean drawer-organization segment; C09 has a generic vessel-closing segment. Producer and monitor independently found these from the unchanged MP4s. These findings refute exhaustion of reasonable alternatives, not final quality approval. The historical hold and source files remain intact.
+
+WORKFLOW now separates stopping a failed method from stopping the video and assigns continued action to the producer and main. Source rules, new/resume skills and the existing stage questions directly connect segment/context review and recovery principles; installed skills are synchronized. The independent path does not call the preserved Studio quality-progress controller, so that old controller was not an automatic recovery guarantee and was not reactivated. Source count, no-misrepresentation, masking and final hearing/QA requirements remain. The same task/run is being verified with existing script/voice and the previously unreviewed source segments. Actual completion is not claimed by these guidance edits.
+
+The daily product instructions also omitted the existing canonical mobile DM-button route. The daily rule now cites that route, distinguishes web-rendering limitations from DM receipt failure and retains existing-account checks and one-attempt history. No failed product attempt was cleared or recommented by this repair.
+
+A separate completion-boundary defect was reproduced: REQUIRED_SINCE used 2026-10-28 UTC, exempting the Korean morning run from mandatory stage gates. Three same-boundary cases failed before the fix; the threshold now uses Korean midnight. A pre-rollout production resumed later still retains its original path. This defect could omit a completion check but did not cause the observed source stop. Focused stage/registry/QA/export/product tests:69passed.
+
+During this same recovery, analysis correctly rejected a labeled C07 clip whose declared review endpoint1.166667s exceeded its actual1.166016s media duration. The producer conservatively shortened the input metadata and the same analysis completed; the failed request/result were preserved. No tolerance or quality rule was weakened.
+
+A separate real stage binding omission was then reproduced: edit plans could substitute newly labeled source files that were absent from source.end. Three isolated cases (new derivative, wrong declared source hash, absent source inputs) failed to reject before the fix. The edit gate now requires the actual plan source paths and current file/declared hashes to match reviewed source-stage outputs. The producer reviews changed label pixels and refreshes only the affected source receipt with history preserved.72focusedchecks pass. This is current-stage input validation, not retroactive revalidation of completed videos.
+
+Actual same-video recovery reached a16.633333s review delivery with five independently mapped filming parents, current five stage ends, input-bound schema2 QA and SHA-verified video/cover/QA copies in the configured Z review folder. External HTTPS full playback, Range and download bytes were verified. Script/visual/cover_delivery pass; actual hearing and perceptual caption sync remain unconfirmed, so quality_complete=false and no completed transition is claimed. The preserved source_diversity_diagnostics.selected_parent_sha256 mixes some derivative hashes; actual five-parent use was separately confirmed from original mappings and rendered_clips. This nonblocking diagnostic issue is recorded for separate repair, not a reason for another production run.
+
+2026-10-28 latest explicit user correction removes audio-user-review and pre-final approval as production prerequisites. WORKFLOW, TTS, storage, delivery, stage question and both installed production skills now proceed through producer checks to final-video delivery, with feedback afterward. Same-video final QA12cabf60…213a binds actual unchanged media and current rules, documents actual_listening=false/user_audio_approval=false, and validates unresolved[]. Registry revision26 is completed and normal configured date-folder video/cover copies independently match original SHA. Earlier review QA, review copies and hold history remain unchanged. This is the new completion scope, not evidence of actual hearing or a claimed user approval.
+
+## 2026-10-28 user-rejected repetition and target hook; full remake
+
+The user explicitly rejected the delivered De_exCOz6sm and requested actual process repair plus new source collection and a full remake. Independent actual plan analysis found C01+C05 use12.067seconds of16.600body (72.69%); the7.533second stretch6.833–14.367 repeatedly alternated rail contact/rows.18caption cues were fixed to18visual beats/clips. Five filming parents and technically valid crops did not establish compelling sequence or target relevance. Narration/cover focused on hand direction rather than an interested3040woman viewer's lived interest or payoff. Previous whole-appeal QA was insufficient; old files/QA/storage and factual source counts remain preserved, not silently rewritten.
+
+Current remake uses a fresh revision and actual source collection/official three-variant writing. Existing AutoCapCut wide subject beats/native visual_cuts decouple image sequence from fixed caption cues without a new editor. Shared model instructions now address audience relevance and challenge contrived direction puzzles; current-stage answers bind actual script/opening/thumbnail and rendered-parent usage/sequence judgments. Code binding does not automatically certify those judgments. Source/content holds now require linked current records and actual alternative results at the existing registry write boundary; a viable/untried alternative cannot be converted to blocked merely by explanation. The independent main's actual diagnosis/read/follow-up dispatch is exercised in the current same-subject remake. Native model turn-end control is not claimed.
+
+
+### 2026-10-28T20:25:36.273156+09:00 독립 화면 구성의 표지 사용구간 오거절
+
+현재 remake-v2 native render가 실제 사용 중인 C05-result0–2초의 표지1.9초를 거절했다. `studio_cover.used_windows`가 broad beats만 읽어 실제 `visual_cuts` 사용을 누락한 것이 원인이다. 기존 소스·음성·선택·캐시를 보존하고 실제 render selection 경계를 재사용하는 최소 수리와 회귀 검증 후 같은 렌더를 재개한다. 범위 밖 표지/마스크·얼굴·프레임 보호를 낮추거나 다른 표지를 임의 채택하지 않는다. 수리·실제 재개 결과는 현재 로컬 SESSION에 기록한다.
+
+### 2026-10-28 완료 후 진단 표기·설명 정정
+
+`selected_parent_sha256`에 담긴 값은 실제 원본 SHA 목록이 아니라 중복 집계용 그룹 대표값이다. 새 진단 출력은 `selected_parent_group_ids`로 명칭만 정정하며 원본 묶기·집계·선택 기준은 유지한다. 완료된 remake-v2의 timeline·영상·표지·QA와 당시 감시 기록은 보존한다. 해당 timeline의 자막 경계 설명 `최종80스타일에서전체서술통합예정`은 적용되지 않은 과거 계획이다. 실제 완료본은 자막 13개·글자 크기 108·그림자 80%이며, 9개 자막으로 통합하지 않았다. 최초 중국어 검색의 정확한 제출 시각은 미확인으로 유지한다. 검색 시각 자동 저장 기능은 추가하지 않으며 다음 실제 검색 때 기존 검색 로그에 바로 기록한다.
+
+
+### 2026-10-29 승인 대본 재제작의 자막 표시 폭 전달 누락
+
+De-UySozJp0의 승인 220자 대본에서 `따로 여밀 필요도 없고요`를 108px 글꼴로 함께 표시하려면 기본 900px보다 넓은 폭이 필요했다. 기존 의미 검토·reflow는 계획별 폭을 지원하지만 native analyze의 사전 검사·본문 생성·캐시가 요청의 caption_style을 무시하고 기본값을 사용했다. 실제 구절을 사용한 회귀가 수정 전 사전 검사에서 실패함을 확인했고, 요청에 명시된 스타일을 동일하게 전달하는 최소 수정 후 자막 의미 검사 53개가 통과했다. 전역 기본 폭과 글자 크기·보호구·원고는 변경하지 않았다. 같은 분석 단계로 돌아가며 최종 픽셀의 여백·효과 검수는 제작자가 수행한다. 재현·수리 SHA는 해당 작업의 ROOT_CAPTION_STYLE_REPAIR.json에 보존한다.
+
+### 2026-10-30 DfA8IIgyZWl Douyin 검색 간격 미준수
+
+신규 `production-DfA8IIgyZWl` / `new-20261030-DfA8IIgyZWl` 소스 단계에서 기존 로그인 Chrome 돌의 Douyin 작업 탭 1423496412로 화면 경로 `床帘开合`, `床帐篷内部空间`, `床帘安装过程`를 연속 제출했다. 읽기 전용 Chrome 방문 기록의 검색 URL 방문 시각은 2026-10-30 01:34:33.983 → 01:34:41.367 → 01:34:48.743 KST, 간격은 7.384초·7.376초다. 방문 시각은 제출 클릭 시각의 대용 근거이며, `SOURCE_WORKFLOW.md`의 기타 플랫폼 검색 기본 10초 간격을 지키지 못했다. 각각의 URL과 실제 결과는 Git 제외 `data/new-production-20261030/DfA8IIgyZWl/source-search.md` S5~S7에 보존했다. CAPTCHA·429·403이나 계정 상태 변경은 현재 관찰되지 않았다. 기존 제출을 지우거나 재제출해 실적으로 중복 집계하지 않는다. 이후 한 번의 새로운 실제 Douyin 검색에서 간격 준수를 짧게 확인하고 현재 영상의 구간 검토를 계속한다. 이 비치명 문제를 전체 제작 반복이나 접근 보호 완화로 확대하지 않는다.
+
+### 2026-10-30 DfA8IIgyZWl Google AI Studio Arlo 403
+
+공식 3안 중 선택한 220자 원고의 음성 단계에서 기존 로그인 Chrome 사원2의 새 전용 AI Studio 탭 1423497962를 사용했다. `prepared.json`의 요청 `4d710764-aabf-436d-808c-20cd698ac81f`와 원고 SHA, `gemini-3.8-flash-tts`, Arlo, STYLE, 단일 전체 블록을 `inspectSpeech`로 대조한 후 2026-10-30 02:08:29.160 KST에 Run을 한 번만 눌렀다. UI 접근성 상태는 `Http response at 400 or 500 level, error: , http status code: 403`을 표시했고 `pollSpeech`는 `failed_no_audio`, 실제 WAV·browser-receipt·result는 0이다. `finishNoAudio`로 해당 요청을 종료했으며 재Run하지 않았다. 기존 2026-10-29 성공 영수증과 현재 탭은 동일 계정/모델/Arlo/STYLE이고 두 탭 모두 `No API key selected`로 보여 그 표기만을 원인으로 단정할 수 없다. 사원2/ULTRA 계정의 AI Studio 사용량 화면은 표시 차트가 API 전용이고 API 키 없는 AI Studio 사용량은 반영하지 않는다고 명시하므로 현재 웹 요청의 할당량을 이 화면으로 판정할 수 없다. 구체적 403 사유는 현재 UI에 없다. Git 제외 근거는 `data/new-production-20261030/DfA8IIgyZWl/voice-failure.json`과 오류 직후 설정·대본 화면 `ai-studio-after-403.png`다. 후자에는 사라진 오류 toast가 보이지 않으므로 403 문자열은 당시 CUA AX 응답을 근거로 한다. 같은 조건 재제출·다른 모델/목소리 대체·접근 우회를 하지 않고, 확인된 최소 수리 또는 외부 권한 상태 변화의 구체적 근거가 생길 때 같은 voice 단계에서 이어간다. 소스·대본·이전 완료 음원은 보존한다.
+
+
+### 2026-10-30 DfEc-wbzGTu TikTok 검색 간격 미준수
+
+현재 `production-DfEc-wbzGTu` / `morning-production-20261030-DfEc-wbzGTu`의 실제 기록에서 A-EN4 `heated cushion controls`는 12:20:01.475 KST, A-EN5 `winter desk comfort`는 12:20:25.238 KST에 제출됐다. 간격 23.763초로 SOURCE_WORKFLOW의 TikTok 검색/상세 합산 최소 30초를 지키지 못했다. 감시자의 지적을 메인도 source-plan.json의 두 실제 시각으로 독립 확인했다. 원본 시각·성공 결과를 보존하고 같은 검색을 실적 보충으로 재제출하지 않는다. 이후 필요한 실제 TikTok 검색/상세 열기에서 직렬 간격을 적용·짧게 확인하며, 비치명 실행 문제를 접근 보호 완화나 전체 제작 반복으로 확대하지 않는다. Git 제외 근거: `data/morning-run-20261030/production/DfEc-wbzGTu/{source-plan.json,source-search.md,monitor-progress.md}`.
+
+
+### 2026-10-30 DfEc-wbzGTu Arlo 요청 후 관측 음원 부재
+
+현재 whole-script Arlo 요청 `78580e5a-f019-4cfe-b6b8-64bd28cb8525`는 선택227자 원고SHA·모델·STYLE·로그인사원2 일치 확인 뒤 12:32:24.017 KST에 지원 도구의 Run 클릭1회를 기록했다. 이후 현재 화면에 음원이 없고 Run은 활성이나, UI·콘솔의 명시 오류/HTTP코드와 원격 실행 접수는 미확인이다. `pollSpeech`의 `failed_no_audio`는 audio0/Run활성 조건의 휴리스틱이므로 서버실패나 과거 텐트403을 이번 원인으로 확정하지 않는다. 실제WAV·browserreceipt·voice결과가 없어 필수 음성 관문을 끝내지 못한다. 지원History는 새Drive 접근허용을 요구했으며 그 접근이 TTS해결에 필요하다는 근거가 없어 취소했다. 현재 설정·원고·요청·화면과 원본5부모·대본은 보존하고 같은조건Run을 반복하지 않았다. 구체 UI제출수리 근거나 정상 서비스/계정 회복 확인 후 같은 영상의 음성 단계에서 이어갈 수 있다. 현재 `source/script=ended`, `voice=begun`, `edit/deliver=not_started`, 원장 `blocked/voice/technical`. 근거는 Git 제외 `data/morning-run-20261030/production/DfEc-wbzGTu/{voice-failure.json,voice-hold-proposal.json,voice-submission.json,voice-error-page.txt,ai-studio-failure.png}`다.
+
+2026-10-30 13:16 KST 같은 영상 복구: 사용자의 새 명시 재시도 지시에 따라 기존 제작자·읽기 전용 감시자와 같은 task/run을 재개했다. 원래 실패 탭에서 관측된 Ctrl+Enter로 요청84cb0210-d1c9-4565-88df-b361d56c7199를 제출하자 실제 Music player/Stop 표시가 생겼으나 곧 음원 없이 돌아왔으며 명시 오류코드는 없었다. 원래 탭·요청은 보존하고 같은 로그인 사원2의 깨끗한 TTS 화면에서 동일 227자·모델·Arlo·STYLE를 재설정한 요청8333781d-3f0b-431f-99cc-60e891a0141b는 실제 스트리밍 후 30.68초/24kHz mono PCM16 완성 WAV를 생성했다. 메인은 prepared/result/browser-receipt와 실제 WAV SHA256 a2fe957d0c07038c3ce13318c2b50b8032c2fc2a5a605b847a4c0403f4c9e209 일치를 독립 확인했다. 새 화면 초기화는 관측된 성공 방법이며 이전 실패의 내부 원인을 확정한 것은 아니다. 프로필·모델·목소리·키·Drive권한 변경이나 보안 우회 없이 음성 관문과 편집을 계속한다. 기존 pollSpeech의 휴리스틱 및 제출 직후 시작 확인 부족은 별도 개선 후보로 기록하며 이번 제작 중 코드를 변경하지 않았다. 근거: 같은 작업 폴더의 voice-retry01/02 제출·화면 기록, voice-retry02.ai-studio/{prepared,result,browser-receipt}.json, voice-retry02.wav.
+
+### 2026-10-30 DfEc-wbzGTu 원본 컷 전환 직전 자막 잔존
+
+제작자의 실제 delivery01 촘촘한 컷 경계 검토에서 6.8667초 DY03-fit 마지막 프레임에 다음 원본 장면과 하단 중국어 자막이 나타났다. 메인과 읽기 전용 감시자가 qa01/contact-2.jpg 첫 행 3열에서 독립 확인했다. 이전 시작/중간/끝 표본과 1fps 감시 표본은 마지막 몇 프레임의 원본 전환을 포착하지 못했다. 같은 소스의 사용창만 0–1.2초로 줄이고 앞 DY01을 정상속도로 0.4초 늘리는 좁은 편집 수정으로 처리하며 원음·대본·표지와 기존 파일은 보존한다. 새 렌더의 해당 경계를 다시 확인하고, 확인 전 수정 완료로 처리하지 않는다. 전체 검색·음성 합성·접근 보호 변경으로 확대하지 않는다.
+
+수정 확인: 현재 delivery02 SHA e005d5fa5c17b33e27eb61f13f1d020f5847214ab6353015af2c56c1cb691898의 qa02/contact-2 실제6.867초와6.933초 경계를 제작자·감시자·메인이 대조해 중국어 잔존 제거를 확인했다. 현재 QA/저장/외부전달 및 원장revision57 완료. 완료 후 주장별 메인 판정은 같은 작업 폴더 MAIN_MONITOR_VERIFICATION.md에 기록했다. 음성 mix 초기 낮은 상관은 샘플형식 오독 진단으로 보존·정정됐으며, 현재 편집음 적용은 실제최종디코드와 높은 영시차 상관으로 확인했다.
+
+
+### 2026-10-30 DfDWVNoTlgY AI Studio 공개 플레이어와 DOM placeholder 불일치
+
+같은 Arlo 요청 ad56237c-dacd-4880-a70b-b21bf24e9105의 화면은32.2초 플레이어/활성 Download/Stop없음을 표시했지만 DOM audio가0.04초placeholder이고 Run이비활성이라 기존helper완료수신이막혔다. 재제출하지않고공개Download1회로받은monoPCM16/24k/32.2초파일의요청설정·현재텍스트·전체길이·클릭관측범위내mtime·SHA를검사하는명시적분기만최소수리했다. 기존DOM경로/한번제출·과거파일거절은유지했다. tests/test_ai_studio_browser.cjs 11/11와문법검사통과후같은요청의voice01.wav 수입성공(SHA721b7399…). 원음ASR은전체흐름/CTA를반환했으며 직접청감승인은아니다. Git제외근거: data/new-production-20261030/DfDWVNoTlgY/{voice-repair.md,voice-repair.diff,voice-asr.json,voice01.ai-studio/browser-receipt.json}.
+
+### 2026-10-30 DfDWVNoTlgY 억지 공감과 시청 후 설명으로 썸네일 합리화
+
+사용자가 대본의 “식사 뒤 이야기를 놓치지 않아 반가워요”가 부자연스럽고, “커피까지 마셔야 / 제대로 쉬는 기분이잖아요”는 눌어붙은 검은 찌꺼기를 전동 브러시로 제거하는 핵심과 동떨어졌다고 지적했다. 이전 script-selection.md와 script-answers.json은 커피 문구의 약점을 인지했으나 첫 대사와 전체 사연으로 연결된다고 통과시켰다. 감정 공감의 존재와 인과 설명을 실제 입말 자연성·시청 전 관련성으로 오인한 검토 실패다. 기존 완료본·QA는 당시 기록으로 보존하고, 사용자가 승인한 소스를 유지하는 새 copy-focus revision에서 대본·표지와 종속 음성·자막·렌더만 수정한다.
+
+집필 원본·기존 생성 지침과 script_hook 관문에 실제 문구의 자연성, 이미지와 표지만 본 시청 전 관련성 판단을 연결했다. 누락·부정 판정을 최상위 proceed로 덮어도 종료를 거절하는 회귀 검사를 포함해 관련 69개 검사가 통과했다. 이는 실패 판정의 무시를 막으며 문장 의미를 코드가 자동 보증하지 않는다. 실제 교정 여부는 새 문구와 화면에서 제작자·메인·감시자가 확인한다. 현재 작업 근거: data/remake-20261030/DfDWVNoTlgY-copy-focus/authorization.json.
+
+### 2026-10-30 DfDWVNoTlgY copy-focus 새 Arlo 음원 미수신
+
+2026-10-31 최종 후속: 오류 첫 관측 뒤 추가 조회 전에 원본 화면을 저장하도록 기존 AI Studio helper를 최소 수정했다. 과도 403 소실·CAPTCHA 사전 차단·캡처 실패 구분을 포함한 관련 14개 검사가 통과했다. 이 수리는 접근 권한이나 이전 403 원인의 해결을 뜻하지 않는다. 사용자의 즉시 오류 사진/이어하기 지시에 결속한 1회 진단 요청 voice03은 정상 24.84초 WAV를 생성했으며 이번에는 오류가 없어 새 오류 사진이 없다. 수정 영상 21.433초·현재 QA·정상 Z 저장과 외부 공유 검증까지 완료됐다. 전달 finalize가 edit.end/deliver.begin보다 먼저 실행된 절차 누락도 실제 시각과 현재 검토를 보존했다. 다음 제작에서는 기존 begin을 먼저 실행하며, 이 비치명 절차 문제로 현재 영상을 중복 후처리하지 않았다. 근거: 같은 작업 폴더의 MONITOR_REPORT.md, MAIN_MONITOR_VERIFICATION.md, main-final-validation.json 및 share 검증 기록. 아래 기록은 이전 시점의 보류 상태다.
+
+수정210자 원고의 request f4b02ec3-0255-4bf0-97da-fe930a41d23b를 기존 로그인 사원2의 새 TTS 화면에서 Arlo·3.8 모델·STYLE·전체 단일 블록 일치 후 Run 버튼으로 한 번 제출했다. 현재 Run은 활성이고 플레이어·Stop·audio·명시 오류·console error가 없으며 실제 WAV와 원격 접수는 미확인이다. failed_no_audio는 관측 휴리스틱이며 서버 실패 확정이 아니다. 공개 장애 공지는 API key traffic을 명시하지만 해당 화면은 No API key selected이므로 원인으로 확정하지 않는다. 이전32.2초 성공도 같은 Run helper 경로였고 현재 확인된 설정·제출 수리 차이가 없어 단축키·새 탭으로 재제출하지 않는다. 대본·표지 문구 수정과 승인 소스 재사용 근거를 보존하며 새 음원 없는 상태를 새 영상 완료로 표시하지 않는다. 실제 근거: data/remake-20261030/DfDWVNoTlgY-copy-focus/{voice-submission.json,voice-current-ui.json,ai-studio-no-audio.png,ai-studio-status.png}.
+
+2026-10-31 후속: 사용자의 새 영상 반영 지시와 실제 장애 배지 제거·공개 Operational/Resolved 관측을 근거로 같은 Arlo 전체원고의 새 요청 a61ff0e9-c975-47d9-99a6-953ba56ec8de를 한 번 제출했다. 실제 생성 플레이어/Stop이 나타났으나 음원 없이 종료됐다. 제작자는 당시 도구 반환의 HTTP403을 voice02-error-observed.json에 대화 출력에서 옮긴 인용으로 보존했다. 후속 voice02-failure-ui PNG/TXT에는 토스트가 사라져 403이 없으며 메인·감시자는 현재 음원 부재·Run 활성만 직접 확인했다. 정확한 실패 원인은 미확정이고 공개 복구 공지가 해당 무키 요청의 성공을 보장한 것은 아니다. finishNoAudio로 종료·탭 인계·원장71 voice 기술보류, 재Run/모델·키·권한 우회와 이전 음원 대체는 하지 않았다. 새 규칙·확정 원고와 표지는 준비됐으나 새 영상·QA·저장·공개 교체는 미완료다. 현재 근거는 같은 작업 폴더의 MAIN_VOICE02_HOLD.json 및 voice02 관련 기록에 있다.
+
+
+### 2026-10-31 DfA8IIgyZWl 명시 재시도도 HTTP403
+
+사용자 “다시 시도해봐”와 이전403 이후 같은 사원2·3.8·Arlo·STYLE 성공 영수증을 근거로 보존된 난방텐트 원고를 새 요청77d7e999-5369-4c1d-8a6c-da78667fc653에서 단1회 제출했다. 원래 task/run과 소스·대본·실패 요청을 보존했다. 09:25:43 KST 같은 HTTP403이 관측됐으며 helper가 다음 브라우저 조회 전에 원본 JPG와 문구 JSON을 저장했다. 원본 픽셀의403을 실제 확인하고 즉시 사용자에게 보여줬다. finishNoAudio로 종료했고 WAV·영수증은 없으며 구체적 원인은 UI에 없다. 재Run·다른 계정/키/모델/목소리 대체 없이 voice 보류를 유지한다. 근거: data/new-production-20261030/DfA8IIgyZWl/voice-retry-20261031-failure.json, voice-retry-20261031-hold-review.json 및 voice-retry-20261031.ai-studio/errors/1793406344189-76dc1b7e-e4a1-45bc-a499-a4298d52b3af.{jpg,json}.
+
+### 2026-11-02 DfJkg5TSRdK 검색 간격·전달 관문 실행 편차
+
+같은 task `production-DfJkg5TSRdK` / run `new-20261102-DfJkg5TSRdK`에서 검색→상세 26.368초(최소30초), 다른 플랫폼 검색 시작 3.548초(최소10초) 두 위반이 있었다. 이후 기존 timestamp guard를 적용했고 후속 49.576초/24.031초 실제 간격을 메인이 독립 확인했다. 차단 발생을 추정하거나 과거 위반을 지우지 않는다. 최초 finalize도17:34:47로 deliver.begin17:39:06보다 빨랐다. 이후 같은 바이트를 현행 전달 관문에서 실제 재검토·검증했으며 초기 실행시각을 꾸미거나 중복 후처리하지 않았다. 다음 실행은 기존 간격과 `deliver.begin` 선행 순서를 지킨다. 새 도구·설정·코드 변경이나 전체 영상 재제작은 하지 않았다.
+
+감시자의 cut4 결과 부재 주장은 실제 사용 구간36.100초 빨간 포장 초콜릿 프레임으로 반증·철회했다. 완료된 현 MP4의 새 품질 결함은 확인되지 않았다. 실제 관측·후속 확인·한계는 Git 제외 작업 폴더 `MONITOR_FINAL.md`, `MAIN_MONITOR_VERIFICATION.md`, `SOURCE_SEARCH.md`, `deliver-answers.json`에 보존했다. 원장86 completed, 현재 QA·Z 저장·외부 재생/다운로드 해시·전체 디코드 확인을 마쳤으며 실제 게시하지 않았다.

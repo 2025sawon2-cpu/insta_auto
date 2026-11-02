@@ -1,5 +1,7 @@
 # 제작 파이프라인 안내
 
+> 현재 TTS는 Google AI Studio Arlo와 짧은 쉼·들숨 정리로 확정됐다. 아래 VoiceBench·복제·포트·목소리 선택은 과거 설명이며 실행하지 않는다. [현재 TTS 원본](TTS_TRUNCATION_RECOVERY.md)을 따른다.
+
 > 보존된 제작실·자동 실행기 구현 설명입니다. 현재 신규 제작·검색·중지·완료 기준은 [WORKFLOW](WORKFLOW.md), [SOURCE_WORKFLOW](SOURCE_WORKFLOW.md), [대본 규칙](../hotpost/writing/RULES.md)을 따릅니다. 아래 과거 기본값·예약·병렬 처리·재시도 예시는 현재 실행 지시가 아니며, 기존 run과 구현 이력은 보존합니다.
 
 insta_auto가 후보 선정·자료 확보와 내장 Codex 집필을 맡고, VoiceBench가 음성, auto_capcut이 편집을 맡는다.

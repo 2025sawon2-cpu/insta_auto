@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from hotpost.config import load_settings
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.editing_adapter import _atomic_json
 
 
@@ -28,10 +28,10 @@ def main():
         'prior_evidence':'First padding take has lower/narrower estimated F0 than the approved baseline.'})
     submitted=folder/'submission.json'
     request=json.loads(submitted.read_text('utf-8'))['request_id'] if submitted.exists() else None
-    receipt=VoiceBenchAdapter(load_settings()).synthesize(text,folder/'narration.wav',
+    receipt=AiStudioAdapter(load_settings()).synthesize(text,folder/'narration.wav',
         progress=lambda message,pct:print(pct,message,flush=True),request_id=request,
         on_submitted=lambda value:_atomic_json(submitted,{'request_id':value,'script_sha256':sha}),
-        generation_key='mirror-tone16-v2-padding-'+sha,require_personal_clone=True)
+        generation_key='mirror-tone16-v2-padding-'+sha)
     _atomic_json(record,{**receipt,'script_sha256':sha,'script':text,'baseline_request_id':168,
         'audio_sha256':hashlib.sha256((folder/'narration.wav').read_bytes()).hexdigest(),
         'auditory_tone_approved':False,'operational_task_changed':False})

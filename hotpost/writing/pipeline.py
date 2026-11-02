@@ -7,7 +7,7 @@ from .reference_evidence import COMMENT_KEYWORD, VISUAL_INSTRUCTION, visual_cont
 from .script_integrity import digest
 from .script_quantities import quantity_readings
 from .hook_policy import INSTRUCTION as HOOK_INSTRUCTION, first_sentence
-from .script_style import question_ending_issues
+from .script_style import question_ending_issues, explicit_expression_issues
 
 TEXT_SCHEMA = {'type':'object','properties':{'text':{'type':'string','minLength':1,'maxLength':3000}},
                'required':['text'],'additionalProperties':False}
@@ -95,11 +95,22 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
                   'variant_context의 다른 안과 비교하세요. '
                   '표면 치환형은 원작 심리 메커니즘과 의미 있는 요소 2~3개 치환을 유지하되 전개 순서는 공통 구성을 우선합니다. '
                   '상황이 후킹에 포함되거나 해결과 공감이 한 문장에 통합되어도 허용하며, 억지 문제·상황 반복·기능 나열·형식적 공감을 검사하세요. '
+                  'narration_character_count와 공통 규칙의 분량을 대조하고, 대화하는 구어체·~더라구요 문장·'
+                  '긍정적인 두 내용을 합친 문장·실용적 공감·감정적 공감을 각각 실제 문구에서 확인하세요. '
+                  '장점+공감 등의 연결 문장 하나가 있다는 이유로 두 종류의 공감까지 충족했다고 판단하지 마세요. '
+                  '제품 동작이나 변화에서 직접 느끼는 감정도 구체적인 계기와 자연스럽게 연결되면 감정적 공감으로 인정하세요. '
+                  '그 감정이 원고에서 이미 전달되면 별도의 생활 사연이나 감정 문장을 추가하도록 요구하지 마세요. '
+                  '감정 항목을 채우려 덧붙인 사연이나 감정 종결을 실제 입말로 읽어 어색하면 정확히 인용해 수정 대상으로 삼으세요. '
+                  '행동에서 감정까지 인과 설명을 붙일 수 있다는 사실만으로 자연스럽다고 통과시키지 마세요. '
+                  '공통 규칙 「6. 귀로 한 번 듣는 최종 점검」의 여덟 항목도 한 번 듣는 시청자 입장에서 확인하고, '
+                  '걸리는 문구(한 번에 안 들리는 첫 문장, 다른 뜻으로 들리는 낱말, 원본과 다른 설치·사용 동사나 같은 동작의 다른 동사, '
+                  '반복·되돌아가는 흐름, 상투적 감정 관용구, 무엇을 가리키는지 모를 위치어, 예시 문장 틀 복사)는 정확히 인용해 지적하세요. '
                   '1인칭과 새 생활 상황 연출은 허용하며, 설정 변경을 제품 사실 추가와 혼동하지 마세요. '
                   '원문 문장·특징적인 설명 묶음, 추상적 교훈이나 기준·방법에 대한 댓글 요청은 검사하세요. '
                   '수정할 필요가 없으면 issues는 빈 배열입니다. 새 사실·인물·수치 추가나 복사는 구분하세요.'
                   +(COPY_REVIEW_INSTRUCTION if thumbnail_lines else ''),
                   {**evidence,'candidate':text,'first_sentence':first_sentence(text),
+                   'narration_character_count':len(' '.join(text.split())),
                    **({'thumbnail_lines':thumbnail_lines} if thumbnail_lines else {})},
                   editorial_schema(ISSUE_SCHEMA) if thumbnail_lines else ISSUE_SCHEMA)
         copy_review=value.get('thumbnail_review')
@@ -119,6 +130,7 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
                          'findings의 실제 인용을 수정 대상으로 삼으세요. 복사 지적은 어미만 바꾸지 말고 '
                          '해당 구절의 어휘와 문장 구성을 다시 쓰되 기능·수치·고유명사는 유지하세요.',
                          {**evidence,'candidate':text,'issues':issues,
+                          'narration_character_count':len(' '.join(text.split())),
                           'findings':{'integrity':local['integrity_review']['issues'],
                                       'naturalness':local['naturalness_review']['issues'],
                                       'editorial':editorial['issues']}},TEXT_SCHEMA)['text'].strip()
@@ -130,6 +142,7 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
                            '후보 1이 의미·재작성·말투에서 실제로 개선됐으면 preferred=1, 동점·악화면 0입니다. '
                            'issues에는 선택한 원고에 남아 있는 문제만 정확히 인용하세요.',
                            {**evidence,'candidates':[text,proposed],
+                            'narration_character_counts':[len(' '.join(t.split())) for t in (text,proposed)],
                             'first_sentences':[first_sentence(text),first_sentence(proposed)]},
                            {'type':'object','properties':{'preferred':{'type':'integer','enum':[0,1]},
                             'reason':{'type':'string'},'issues':ISSUE_SCHEMA['properties']['issues']},
@@ -138,7 +151,7 @@ def _generate_single(payload, directory, check, progress, *, draft=None):
             if any(not i['quote'] or i['quote'] not in chosen for i in comparison['issues']):
                 raise ValueError('비교 결과의 인용이 선택 대본과 다릅니다.')
             accept = (comparison['preferred']==1 and repair_preserves_integrity(local, proposed_review)
-                      and not question_ending_issues(proposed))
+                      and not question_ending_issues(proposed) and not explicit_expression_issues(proposed))
             repair.update(accepted=accept,proposed=proposed,comparison=comparison)
             if accept:
                 text=proposed;local=proposed_review;editorial={'status':'evaluated','issues':comparison['issues']}

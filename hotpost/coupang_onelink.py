@@ -49,21 +49,61 @@ def link_identity(value):
     return identity
 
 
+def _unique_object(pairs):
+    # Ambiguous records must not silently accept the last occurrence of a key.
+    result = dict(pairs)
+    return result if len(result) == len(pairs) else None
+
+
+def _storefront_objects(source):
+    """Decode JSON containers and Next.js string payloads without executing JS."""
+    decoder = json.JSONDecoder(object_pairs_hook=_unique_object)
+    pending, seen = [source], set()
+    token = re.compile(r'[\[{\"]')
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            yield value
+            # Product text is data, not another serialized product record.
+            pending.extend(v for v in reversed(list(value.values())) if isinstance(v, (dict, list)))
+        elif isinstance(value, list):
+            pending.extend(reversed(value))
+        elif isinstance(value, str) and 'productId' in value and 'landingUrl' in value:
+            if value in seen:
+                continue
+            seen.add(value)
+            # Also accept a bare escaped JSON payload from older callers.
+            if r'\"productId\"' in value:
+                try:
+                    pending.append(decoder.decode('"' + value + '"'))
+                except ValueError:
+                    pass
+            position, decoded = 0, []
+            while match := token.search(value, position):
+                try:
+                    child, position = decoder.raw_decode(value, match.start())
+                except ValueError:
+                    position = match.end()
+                else:
+                    decoded.append(child)
+            pending.extend(reversed(decoded))
+
+
 def parse_storefront(source):
-    """Read product records, including JSON escaped inside Next.js scripts."""
-    unescaped = source.replace(r'\"', '"')
-    pattern = re.compile(
-        r'"productId"\s*:\s*(\d+)\s*,\s*"itemId"\s*:\s*(\d+)\s*,\s*"vendorItemId"\s*:\s*(\d+)'
-        r'(?:(?!"productId").)*?"landingUrl"\s*:\s*"([^"\n]+)"\s*,\s*"title"\s*:\s*"((?:\\.|[^"\\])*)"', re.S)
+    """Read each product's own fields, independent of field order or extras."""
     items = []
-    for match in pattern.finditer(unescaped):
-        pid, iid, vid, raw, title = match.groups()
+    for product in _storefront_objects(source):
+        fields = [('productId', 'product_id'), ('itemId', 'item_id'), ('vendorItemId', 'vendor_item_id')]
+        if any(type(product.get(key)) is not int or product[key] < 0 for key, _ in fields):
+            continue
+        raw, title = product.get('landingUrl'), product.get('title')
+        if not isinstance(raw, str) or not isinstance(title, str) or not title.strip():
+            continue
         link = normalize_one_link(raw)
         try:
             identity = link_identity(link)
-            if identity != dict(product_id=pid, item_id=iid, vendor_item_id=vid):
+            if identity != {target: str(product[key]) for key, target in fields}:
                 continue
-            title = json.loads('"' + title + '"')
         except (ValueError, TypeError):
             continue
         row = dict(identity, title=html.unescape(title), one_link=link)

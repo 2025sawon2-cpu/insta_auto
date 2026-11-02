@@ -28,7 +28,7 @@
     if(t.source_acquisition?.hold||t.source_search?.hold)return {kind:'blocked',title:'소스 자동 수집을 중지했습니다',body:t.source_search?.message||t.message,items:[],resumeLabel:'문제 해결 후 자동 제작 재개',footer:'검색 내역을 확인하고 인증·로그인 문제를 해결하거나 새로운 검색 조건을 입력하세요. 기존 영상·대본·음성은 보존됩니다.'};
     const garlic=t.shortcode==='DeEau5JxJfy'||/마늘/.test(t.title||'');
     const blockers=(t.production_blockers||[]).map(key=>({
-      personal_clone_unavailable:'본인 복제 목소리가 아직 준비되지 않았습니다. VoiceBench에서 본인 참조 음성·전사문과 복제 모델을 준비해야 합니다. 기본 여성 목소리로 자동 대체하지 않습니다.',
+      personal_clone_unavailable:'Chrome 사원2에서 Google AI Studio Arlo 생성 상태를 확인하세요. 다른 목소리로 자동 대체하지 않습니다.',
       core_footage_gap:garlic?'다진마늘을 준비·보관하고 한 스푼씩 사용하는 핵심 동작 영상이 부족합니다. 닭고기·샐러드 영상은 요리 맥락에 사용할 수 있지만 이 동작을 대신하지는 못합니다.':'대본이 강조하는 핵심 기능·동작 영상이 부족합니다. 소재 탭에서 해당 동작이 보이는 소스 영상을 추가하세요.'
     }[key]||'추가 제작 자료가 필요합니다. 현재 단계의 안내를 확인하세요.'));
     const automatic=t.automation?.protocol===2;

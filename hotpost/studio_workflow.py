@@ -141,8 +141,8 @@ class WorkflowMixin:
             profile = data['voice_profile_id']
             if not isinstance(profile,str) or len(profile)>100: raise ValueError('목소리 목록에서 선택하세요.')
             if profile:
-                from .voicebench_adapter import VoiceBenchAdapter
-                voices=VoiceBenchAdapter(self.settings).voices().get('voices',[])
+                from .ai_studio_adapter import AiStudioAdapter
+                voices=AiStudioAdapter(self.settings).voices().get('voices',[])
                 if not any(v['id']==profile and v.get('available') for v in voices):
                     raise ValueError('이 목소리는 아직 준비되지 않았어요. 사용 가능한 목소리를 선택하세요.')
         if action == 'use-sources':
@@ -303,7 +303,7 @@ class WorkflowMixin:
             elif action in {'save-feedback', 'regenerate-voice', 'make-video'}:
                 if 'voice_profile_id' in data:
                     feedback['voice_profile_id'] = data['voice_profile_id']
-                    feedback['voice_selection_mode'] = 'manual' if data['voice_profile_id'] else 'personal_default'
+                    feedback['voice_selection_mode'] = 'manual' if data['voice_profile_id'] else 'google_ai_studio'
                 if 'speed' in data:
                     speed = float(data['speed'])
                     if not math.isfinite(speed) or not .8 <= speed <= 1.25: raise ValueError('속도는 0.8~1.25배입니다.')
@@ -479,7 +479,7 @@ class WorkflowMixin:
             return
         self.ensure_source_collection(s, db)
         key = run['id']
-        wrong_automatic_voice = bool(voice and voice.get('voice_profile_id') and run['inputs'].get('voice_selection_mode') != 'manual')
+        wrong_automatic_voice = bool(voice and voice.get('voice_profile_id') not in (None, '', 'Arlo') and run['inputs'].get('voice_selection_mode') != 'manual')
         if not script or s['automation'].get('needs_top_pick'):
             stage, status, message, payload = 'rewrite', 'rewriting', '후보 대본 비교 · Top Pick 선정 대기', {}
         elif not voice or voice['script_id'] != script['id'] or wrong_automatic_voice:
@@ -494,7 +494,7 @@ class WorkflowMixin:
             manual_voice = run['inputs'].get('voice_selection_mode') == 'manual'
             if manual_voice and run['inputs'].get('voice_profile_id'):
                 payload['voice_profile_id'] = run['inputs']['voice_profile_id']
-            payload['voice_mode'] = 'manual' if payload.get('voice_profile_id') else 'personal_clone'
+            payload['voice_mode'] = 'manual' if payload.get('voice_profile_id') else 'google_ai_studio'
             if run['inputs'].get('regenerate_voice'):
                 payload['generation_key'] = key
             s['automation']['script_selection'] = {'mode':'automatic','script_id':script['id']}

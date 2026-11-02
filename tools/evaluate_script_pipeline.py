@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hotpost.config import load_settings
 from hotpost.studio_adapter import StudioAdapter
 from hotpost.studio_top_pick import choose
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from dataclasses import replace
 
 
@@ -25,10 +25,9 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     settings = load_settings()
     adapter = StudioAdapter(settings)
-    health = VoiceBenchAdapter(settings).default_voice_status()
+    health = AiStudioAdapter(settings).default_voice_status()
     if health.get('active_requests', 0):
         raise RuntimeError('음성 작업이 끝난 뒤 대본 실측을 실행하세요.')
-    VoiceBenchAdapter(settings).release_idle()
     contract = adapter.writing_contract()
     (args.output/'contract.json').write_text(json.dumps(contract,ensure_ascii=False,indent=2),'utf-8')
     for case in json.loads(args.cases.read_text('utf-8')):

@@ -23,6 +23,18 @@ def report(*posts):
             "collection_started_at": epoch(24, 8)}
 
 
+def test_source_quality_cannot_block_on_unreviewed_alternatives_and_prose_only(tmp_path):
+    registry = load(tmp_path / 'registry.json')
+    sync(registry, report(post('a', 24, 1)), 'report.json')
+    mark(registry, 'a', 'in_progress', 'Bound producer and monitor', expected='unknown',
+         stage='source', task_id='task-a', run_id='run-a', owner='producer', monitor='monitor')
+    before = json.loads(json.dumps(registry))
+    with pytest.raises(ValueError, match='hold review'):
+        mark(registry, 'a', 'blocked', 'Exact closing cut missing; context intervals not reviewed',
+             expected='in_progress', reason='source_quality_hold')
+    assert registry == before
+
+
 def test_latest_published_date_then_daily_score_and_status_preserved(tmp_path):
     path = tmp_path / "registry.json"
     registry = load(path)

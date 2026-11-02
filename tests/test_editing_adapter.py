@@ -8,7 +8,7 @@ import pytest
 
 from hotpost.config import Settings
 from hotpost.editing_adapter import (
-    AutoCapcutAdapter, build_with_voicebench, script_from_transcript,
+    AutoCapcutAdapter, build_with_ai_studio, script_from_transcript,
     selected_source_videos,
 )
 
@@ -124,7 +124,7 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
             assert text == "들리는 대사\n"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(b"RIFF" + b"\0" * 4 + b"WAVE" + b"\0" * 32)
-            return {"voicebench_request_id": 9, "status": "succeeded"}
+            return {"tts_request_id": 9, "status": "succeeded"}
 
     class CapCut:
         def build(self, **kwargs):
@@ -132,26 +132,26 @@ def test_workflow_synthesizes_spoken_script_before_capcut(tmp_path):
             assert kwargs["voice_path"].is_file()
             assert kwargs["script_path"].read_text(encoding="utf-8") == "들리는 대사\n"
             assert kwargs["audio_profile"] == "clean_tts"
-            assert kwargs["narration_speed"] == 1.12
+            assert kwargs["narration_speed"] == 1.0
             return {"contract_version": "1.0", "job_id": kwargs["job_id"],
                     "status": "completed", "draft_path": "draft"}
 
     approved = settings.data_dir / 'rewritten.txt'
     approved.write_text('들리는 대사\n', encoding='utf-8')
-    result = build_with_voicebench(
+    result = build_with_ai_studio(
         settings, job_id="edit-001", manifest_path=manifest,
         transcript_path=transcript, draft_name="edit-001-v1",
         approved_script_path=approved,
-        voicebench=Voice(), auto_capcut=CapCut(),
+        tts=Voice(), auto_capcut=CapCut(),
     )
     assert result["status"] == "completed"
-    assert result["voicebench"]["voicebench_request_id"] == 9
+    assert result["tts"]["tts_request_id"] == 9
 
 
 def test_workflow_never_falls_back_to_original_transcript(tmp_path):
     settings = _settings(tmp_path)
     with pytest.raises(ValueError, match='rewritten_script_required'):
-        build_with_voicebench(settings, job_id='edit-no-rewrite',
+        build_with_ai_studio(settings, job_id='edit-no-rewrite',
             manifest_path=tmp_path / 'manifest.json',
             transcript_path=tmp_path / 'transcript.json', draft_name='draft')
 
@@ -186,10 +186,10 @@ def test_workflow_preserves_approved_script(tmp_path):
             return {"contract_version": "1.0", "job_id": kwargs["job_id"],
                     "status": "completed", "draft_path": "draft"}
 
-    result = build_with_voicebench(
+    result = build_with_ai_studio(
         settings, job_id="edit-approved", manifest_path=manifest,
         transcript_path=transcript, approved_script_path=approved,
-        draft_name="edit-approved-v1", voicebench=Voice(), auto_capcut=CapCut(),
+        draft_name="edit-approved-v1", tts=Voice(), auto_capcut=CapCut(),
     )
     assert result["status"] == "completed"
 

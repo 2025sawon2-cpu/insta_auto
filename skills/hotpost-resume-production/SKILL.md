@@ -1,14 +1,19 @@
 ---
 name: hotpost-resume-production
-description: Resume one explicitly identified paused or blocked insta_auto Hotpost video from its preserved task and run. Use when the user supplies the stable Instagram video ID after reviewing reference status; do not select a fresh ranked post.
+description: Resume or remake one explicitly identified insta_auto Hotpost video from its preserved artifacts. Use for a paused or blocked video or a user's explicit revision or remake request for a completed video; do not select another ranked post.
 ---
 
 # 중단 영상 재개
 
 기존 계획의 스타일을 보존하며 명시된 스타일 변경에만 `docs/PRODUCTION_DELIVERY.md`의 `style-plan`을 적용한다. 새 독립 원본 렌더는 같은 문서의 `finalize`를 거쳐 전달한다. 기존 전달 후보를 중복 후처리하지 않는다. 최종 QA와 검토본/완료본 저장 구분은 `docs/WORKFLOW.md`, `docs/LOCAL_VIDEO_STORAGE.md`를 따른다.
 
+음성 사용자 검토·승인 단계 없이 제작자 QA와 최종영상 제작·저장·전달·완료 보고까지 진행한다. 직접 청취하지 못한 한계만으로 사용자 답변을 기다리지 않으며 피드백은 전달한 최종영상으로 받는다. 과거 청감 대기 기록은 보존하되 최신 완료 기준을 현재 파일에 적용한다.
+
+완료본에 대한 사용자의 명시 수정·재제작 요청은 일반 보류 재개와 구분한다. 대상 고정 ID와 이전 완료본·QA·관문을 보존하고 요청 범위의 새 revision/task/run으로 진행한다. 소스 재수집 지시를 기존 파일 재배치로 대신하지 않는다. 대본·표지 타깃 후킹과 자막에서 독립된 영상 흐름·실제 반복은 새 관문의 현재 파일 검토에 결속한다.
+
 1. 사용자가 지정한 Instagram shortcode `video_id`를 받는다. 순위 번호만 받았다면 `$hotpost-reference-status`로 고정 ID를 확인한 뒤 대상이 확정될 때까지 실행하지 않는다.
-2. 현재 clone의 `AGENTS.md`, `docs/COLLABORATION.md`, `docs/WORKFLOW.md`, `docs/REFERENCE_STATUS.md`와 단계별 원본을 다시 읽고, 공통 원장 `show <video_id>`를 실행 직전에 확인한다. 원래 task/run·담당자·인계·대본·음성·소스·최종 파일과 실제 중지 사유를 대조한다. 원장과 원본이 충돌하면 먼저 근거를 확인한다.
-3. `paused/blocked`인 그 영상에 대한 새 명시 재개 지시인지 확인한다. 무진전 보류는 새 근거 없이 풀지 않는다. `completed`·`unknown`·`not_started`를 재개 작업으로 바꾸지 않고, 다른 영상이 진행 중이면 병행하지 않는다.
+2. 현재 clone의 `AGENTS.md`, `docs/COLLABORATION.md`, `docs/WORKFLOW.md`, `docs/REFERENCE_STATUS.md`와 단계별 원본을 다시 읽고, 공통 원장 `show <video_id>`를 실행 직전에 확인한다. 원래 task/run·담당자·인계·대본·음성·소스·최종 파일과 실제 중지 사유를 대조한다. 보류 기록은 당시의 판단 근거이며 현행 원본에 없는 합격 조건을 새로 만들지 않는다. 원장과 원본이 충돌하면 먼저 근거를 확인한다.
+3. `paused/blocked`인 그 영상에 대한 새 명시 재개 지시인지, 또는 완료본에 대한 명시 수정·재제작 요청인지 확인한다. 무진전 보류는 새 근거 없이 풀지 않는다. 새 근거는 새 URL로 제한하지 않는다. `docs/SOURCE_WORKFLOW.md`의 구간·컷 역할 판정으로 기존 파일의 잘못된 제외를 반증하거나 실제 다른 구성을 확인했다면 같은 task/run의 진전 근거로 기록할 수 있다. `docs/WORKFLOW.md`의 ‘한 영상의 진행과 보류’와 `docs/quality_progress_policy.md`에 따라 그 대안을 실행하며 보류 해제만으로 복구가 끝났다고 하지 않는다. 명시 수정 요청 없는 `completed`·`unknown`·`not_started`를 재개 작업으로 바꾸지 않고, 다른 영상이 진행 중이면 병행하지 않는다.
 4. 기존 전담 제작자를 재사용하고 별도 읽기 전용 감시자를 같은 task/run에 붙인다. 누락된 식별자는 원본 자료에 근거해 기록하고 임의로 꾸미지 않는다. 둘을 결속한 뒤 기대 상태를 확인하며 `in_progress`로 갱신하고, 저장된 단계부터 같은 한 편을 진행한다. 작업 폴더에 `stage-gates`가 있으면 `python -m hotpost.stage_gate status`로 끝난 단계를 확인하고, 이어 할 단계는 `begin`으로 지침을 다시 읽고 시작해 `end`로 마친다. 관문 도입 전에 시작한 영상은 원래 방식으로 마친다. 감시자를 붙이지 못하면 단독 재개하지 않는다.
+   - 음성 단계에서 AI Studio 웹 HTTP 403으로 보류됐다면 [TTS 원본](../../docs/TTS_TRUNCATION_RECOVERY.md#생성-경로)의 원본 캡처·5분 대기·Playwright 1회 재시도를 확인한다. 개별 포럼 답변만으로 사용자에게 수동 Run을 떠넘기지 않는다. 로컬 입력 준비만으로 음성 완료로 표시하지 않고 기존 task/run과 실패 증거를 보존한다.
 5. 최종 QA·전달과 감시 Markdown·문제 주장별 독립 검증은 `docs/WORKFLOW.md`를 따른다. 다른 후보와 실제 Instagram 게시는 시작하지 않는다.

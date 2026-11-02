@@ -75,6 +75,16 @@ def test_legacy_completed_qa_remains_readable_and_reports_its_scope(reviewed):
     assert final_qa.validate(path, video_id='post')['input_binding'] == 'legacy_metadata_only'
 
 
+def test_all_pass_judgment_cannot_hide_explicitly_banned_script(reviewed):
+    path, files, record = reviewed
+    files['script'].write_text('겨울 침대에서 쉬는 시간이 괜히 반가워요.', 'utf-8')
+    record['artifacts']['script']['sha256'] = final_qa.digest(files['script'])
+    path.write_text(json.dumps(record), 'utf-8')
+    assert final_qa.inspect_record(path, video_id='post')['unresolved'] == ['script']
+    with pytest.raises(ValueError, match='script is not confirmed'):
+        final_qa.validate(path, video_id='post')
+
+
 def test_capture_inputs_does_not_write_or_approve_a_review(reviewed, capsys):
     path, files, _ = reviewed
     before = path.read_bytes()

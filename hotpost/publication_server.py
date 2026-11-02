@@ -40,6 +40,15 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
         def do_GET(self):
             if self.installation_request(settings):
                 return
+            if urlparse(self.path).path == '/settings.html':
+                # The publication server uses installation settings; the legacy
+                # criteria page depends on APIs belonging to the retired server.
+                self.send_response(302)
+                self.send_header('Location', '/setup.html')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             if urlparse(self.path).path == '/':
                 from .installation_settings import read
                 if not read(settings.data_dir)['configured']:
@@ -56,6 +65,8 @@ def make_publication_handler(settings, snapshot=None, review_dir=None):
             if path == '/api/health':
                 self._json({'mode': 'publication', 'production_workers': 0, 'collection_workers': 0,
                             'reference_accounts': True})
+            elif path == '/api/completed-posts':
+                self._json({'posts': service.completed()})
             elif path == '/api/display-settings':
                 from . import display_settings
                 from .storage import Storage

@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from ..editing_adapter import _atomic_json, selected_source_videos
-from ..local_compute import release_idle_voice, serialized_compute
+from ..local_compute import serialized_compute
 from ..source_quality import editing_ready
 from ..source_intake import downloaded_candidates
 from ..studio_sources import SourceAcquisitionMixin
@@ -377,7 +377,7 @@ class GenerationMixin:
 
     @serialized_compute('voice')
     def _voice(self, state, job):
-        from ..voicebench_adapter import VoiceBenchAdapter, verify_wav
+        from ..ai_studio_adapter import AiStudioAdapter, verify_wav
         p = job["payload"]
         manual_voice = p.get('voice_mode') == 'manual' and bool(p.get('voice_profile_id'))
         voice_profile = p.get('voice_profile_id') if manual_voice else None
@@ -388,8 +388,8 @@ class GenerationMixin:
         metadata = folder / "tts.json"
         if metadata.is_file() and not manual_voice:
             cached = json.loads(metadata.read_text(encoding='utf-8'))
-            if cached.get('voice_profile_id'):
-                raise ValueError('저장된 음성은 다른 목소리입니다. 본인 복제 음성으로 새 버전을 만들어야 합니다.')
+            if cached.get('provider') != 'google-ai-studio-browser':
+                raise ValueError('이전 음성은 보존했습니다. Google AI Studio용 새 음성 버전을 사용하세요.')
         if not (voice.is_file() and metadata.is_file()):
             if state.get('automation'):
                 from ..studio_services import ensure_local
@@ -398,15 +398,13 @@ class GenerationMixin:
                 job["checkpoint"]["request_id"] = request_id
                 job['checkpoint'].pop('retry_requested', None)
                 self.store.checkpoint(job, job["checkpoint"])
-            result = VoiceBenchAdapter(self.settings).synthesize(p.get('spoken_text', script["text"]), voice,
+            result = AiStudioAdapter(self.settings).synthesize(p.get('spoken_text', script["text"]), voice,
                 progress=lambda message, pct: change_claimed(self.store, job, lambda s, db: s.update(message=message, progress=pct)),
                 request_id=job["checkpoint"].get("request_id"), on_submitted=checkpoint,
-                retry_failed=bool(job['checkpoint'].get('retry_requested')), generation_key=p.get('generation_key'),
-                require_personal_clone=not manual_voice,
+                generation_key=p.get('generation_key'),
                 **({'before_save':lambda:self.store.assert_owned(job)} if job.get('claim_token') else {}),
                 **({'voice_profile_id':voice_profile} if voice_profile else {}))
             _atomic_json(metadata, result)
-            release_idle_voice(self.settings, best_effort=True)
         result = json.loads(metadata.read_text(encoding="utf-8"))
         from ..daily_quality import enabled as daily_quality_enabled, QualitySceneGap
         if daily_quality_enabled(state) and (result.get('speech_plan') or {}).get('segment_count',1)>1:
@@ -422,5 +420,7 @@ class GenerationMixin:
                 "created": time.time(), "speed": p["speed"], "duration": info["duration"],
                 "spoken_text": p.get('spoken_text', script['text']),
                 "voice_profile_id": result.get('voice_profile_id') or '',
-                "request_id": result["voicebench_request_id"], "quality_control": result.get("quality_control"),
+                "provider": result.get('provider'), "voice_name": result.get('voice_name'),
+                "model": result.get('model'),
+                "request_id": result.get('tts_request_id', result.get('voicebench_request_id')), "quality_control": result.get("quality_control"),
                 "speech_plan":result.get("speech_plan")}

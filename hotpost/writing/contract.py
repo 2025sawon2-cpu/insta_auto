@@ -1,7 +1,7 @@
 import hashlib
 from pathlib import Path
 
-VERSION = 'internal-codex-three-variants-20261025-v13-thumbnail-hook'
+VERSION = 'internal-codex-three-variants-20261102-v16-explicit-expression'
 
 
 def snapshot(mode=None):
@@ -9,7 +9,7 @@ def snapshot(mode=None):
     if mode == 'self_shot':
         prompt += '\n\n내 촬영 영상 신규 집필 적용:\n' + (
             '벤치마킹 원본이나 원본 후킹은 없다. 제공 자료는 제품 정보와 사용자가 제공한 실제 경험이다. '
-            '규칙 1, 7, 9의 원본 대비 보존·재작성은 적용하지 않고, 짧고 강렬한 새 제품 후킹을 만든다. '
+            '「9. 원본 벤치마킹과 세 가지 제작안」의 원본 대비 보존·재작성은 적용하지 않고, 짧고 강렬한 새 제품 후킹을 만든다. '
             '공통 다섯 단계 구성·후킹·말투·제품 호기심·짧은 댓글 종결 및 대본 우선 원칙은 그대로 적용한다. '
             '단계마다 별도 문장이나 억지 불편을 만들지 않으며, 후킹에 포함된 상황과 해결에 이어진 공감은 통합할 수 있다. '
             '제품 사실은 사용자 입력과 같은 제품으로 확인된 조사 사실만 사용한다. 출처나 일반적인 제품 지식에서 '

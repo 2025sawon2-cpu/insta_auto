@@ -14,7 +14,7 @@ from hotpost.source_quality import sha256_file
 from hotpost.source_finder import probe_video
 from hotpost.studio import Studio
 from hotpost.studio_workflow import init_run, snapshot
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from tools import build_tiktok_rework as build
 from tools import revise_cart_youtube_actions as environment
 from tools.rework_tiktok_batch import save
@@ -74,11 +74,11 @@ def prepare():
         return
     submission = final / 'voice-submission.json'
     request = read(submission).get('request_id') if submission.exists() else None
-    result = VoiceBenchAdapter(load_settings()).synthesize(
+    result = AiStudioAdapter(load_settings()).synthesize(
         script['text'], final / 'narration.wav',
         progress=lambda m, n: print(CODE, m, n, flush=True), request_id=request,
         on_submitted=lambda i: save(submission, {'request_id': i, 'script_sha256': digest}),
-        generation_key=EDIT + '-' + digest, require_personal_clone=True)
+        generation_key=EDIT + '-' + digest)
     save(final / 'voice.json', {**result, 'id': 'old-jacket-value-voice-' + digest[:12],
         'path': str(final / 'narration.wav'), 'sha256': sha256_file(final / 'narration.wav'),
         'duration': result['audio']['duration'], 'script_id': script['id'],

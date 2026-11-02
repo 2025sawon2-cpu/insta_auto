@@ -31,6 +31,12 @@
 
 원장은 인덱스이자 결정 기록이며 원본 영상·검색 로그·QA·DB를 대체하지 않는다. 기록이 서로 모순되면 제작을 시작하지 않고 원본 근거로 정정한다. 스킬 설치나 원장 sync는 현재 중지의 해제·수집·제작 실행이 아니다.
 
+## 진행 중 영상의 보류 근거
+
+진행 중 소스·대본·음성·편집·전달의 `mark ... --state blocked`에는 기존 검토 JSON의 `hold_review` 절 또는 직접 record를 `--hold-review`로 연결한다. `--evidence`는 기존 설명 문자열로 유지한다. record는 현재 `video_id/task_id/run_id`, 실제 `inputs`의 절대 `path/sha256/role`, 해당 입력을 가리키는 `input/location/observation` 근거를 포함한다. 품질 보류는 현재 원문 요구(`requirements`), 실제 구간 검토(`segments`), 시도 결과(`alternatives`: `ruled_out` 또는 `unavailable`), 메인의 `main_decision`을 연결한다. `viable/untried` 대안이 남으면 보류를 거절하므로 메인이 가능한 다음 행동을 실행한다. 소스 관문 완료나 별도 보고 파일은 요구하지 않는다.
+
+접근·권한·필수 실행 불능은 `--block-kind access/permission/technical`과 실제 실패 입력(`role=failure`, `blocker` 근거)으로 구분한다. 이름만 바꾸어 품질 검사를 우회하지 않는다. 사용자 `paused` 중지는 즉시 존중한다. 검사 실패는 기존 상태를 자동 변경하지 않으며 `in_progress` 문자열이 실제 진행·담당자 생존을 뜻하지 않는다. 코드는 연결한 자료의 현재 바이트·식별자·필수 참조만 검사하고, 사실·의미·권한 진실과 실제 후속 행동은 메인이 원본과 실제 도구로 확인한다.
+
 ## 변경 충돌과 재개 조회
 
 `sync`·`mark`와 일일 리포트의 원장 병합은 OS 파일 잠금 안에서 최신 원장을 읽고 상태 검사·원자 저장까지 수행한다. `revision`은 성공한 저장마다 증가하며, 기존 필드가 없는 원장은 0에서 시작한다. 라이브러리 호출은 `transaction(path)` 안에서 변경하거나 `load(path)`로 얻은 객체를 `save(path, registry)`에 전달한다. 오래된 읽기 결과, 같은 revision의 외부 파일 변경, 다른 경로의 객체는 저장할 수 없다. 직접 `json.loads`한 복제본을 저장하거나 상태 파일을 수동 덮어써 잠금을 우회하지 않는다. 잠금은 협력하는 쓰기 프로세스 사이의 충돌 보호이며 보안 샌드박스가 아니다.

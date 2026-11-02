@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from hotpost.config import load_settings
 from hotpost.script_rewriter import _generate
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.writing.contract import snapshot
 from hotpost.editing_adapter import _atomic_json
 
@@ -69,10 +69,10 @@ def main():
         _atomic_json(target/'selected-script.json',variant)
         submitted=target/'submission.json'
         request=json.loads(submitted.read_text('utf-8'))['request_id'] if submitted.exists() else None
-        receipt=VoiceBenchAdapter(settings).synthesize(text,target/'narration.wav',
+        receipt=AiStudioAdapter(settings).synthesize(text,target/'narration.wav',
             progress=lambda message,pct:print(item['code'],pct,message,flush=True),request_id=request,
             on_submitted=lambda value:_atomic_json(submitted,{'request_id':value,'script_sha256':text_sha}),
-            generation_key='mirror-tone16-'+item['code']+'-'+text_sha,require_personal_clone=True)
+            generation_key='mirror-tone16-'+item['code']+'-'+text_sha)
         _atomic_json(record,{**receipt,'script_sha256':text_sha,'script':text,'baseline_request_id':168,
             'audio_sha256':hashlib.sha256((target/'narration.wav').read_bytes()).hexdigest(),
             'auditory_tone_approved':False,'operational_task_changed':False})

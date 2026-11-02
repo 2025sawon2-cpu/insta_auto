@@ -121,6 +121,12 @@ def main():
     result = commands.add_parser('confirm-result')
     result.add_argument('job');result.add_argument('--post-url',required=True);result.add_argument('--screen-sha',required=True)
     args = parser.parse_args()
+    if args.command=='prepare':
+        from .installation_settings import require_littly_login
+        try:
+            require_littly_login(settings.data_dir,args.account)
+        except ValueError as error:
+            raise MobileError(str(error)) from error
     jobs = ReelJobs(root) if hasattr(args,'job') or args.command=='prepare' else None
     bound_device = jobs.get(args.job)['package'].get('device_id','primary') if hasattr(args,'job') else None
     selected_device = args.device or bound_device or 'primary'

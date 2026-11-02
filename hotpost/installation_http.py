@@ -18,7 +18,11 @@ class InstallationHTTP:
             return False
         writable = self.installation_can_save()
         if self.command in ('GET','HEAD'):
-            self._json({**read(settings.data_dir),'can_save':writable})
+            result = read(settings.data_dir)
+            if not writable:
+                # Saved login identifiers belong to this machine's local setup.
+                result['values'] = {key:value for key,value in result['values'].items() if key!='littly_logins'}
+            self._json({**result,'can_save':writable})
             return True
         self.close_connection = True
         if self.command != 'PUT':

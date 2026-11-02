@@ -20,7 +20,7 @@ from pathlib import Path
 from .editing_adapter import AutoCapcutAdapter, _atomic_json
 from .storage import Storage
 from .studio_adapter import StudioAdapter
-from .voicebench_adapter import VoiceBenchAdapter
+from .ai_studio_adapter import AiStudioAdapter
 
 
 def digest(text):
@@ -70,7 +70,7 @@ class ProductionManager:
         self.root = settings.production_dir
         self.root.mkdir(parents=True, exist_ok=True)
         self.studio = studio or StudioAdapter(settings)
-        self.voice = voice or VoiceBenchAdapter(settings)
+        self.voice = voice or AiStudioAdapter(settings)
         self.editor = editor or AutoCapcutAdapter(settings)
 
     def folder(self, job_id):
@@ -226,7 +226,7 @@ class ProductionManager:
                       rewrite_review=review, transformation=plan, scenes=normalized,
                       edit_style=edit_style,
                       selection_time=time.time(), status='script_selected', error='',
-                      voicebench_request_id=None, voice=None, editing=None)
+                      tts_request_id=None, voice=None, editing=None)
             return job
 
     def dispatch(self, job_id, action):
@@ -315,9 +315,9 @@ class ProductionManager:
         if not job.get('voice'):
             self.save(job, status='synthesizing', error='')
             voice = self.voice.synthesize(text, voice_path,
-                request_id=job.get('voicebench_request_id'),
+                request_id=job.get('tts_request_id',job.get('voicebench_request_id')),
                 generation_key='prod-'+job['id']+'-'+job['script_sha256'][:32],
-                on_submitted=lambda request_id: self.save(job, voicebench_request_id=request_id))
+                on_submitted=lambda request_id: self.save(job, tts_request_id=request_id))
             self.save(job, voice={**voice, 'sha256': file_digest(voice_path),
                                  'script_sha256': job['script_sha256']})
         if (file_digest(voice_path) != job['voice']['sha256']

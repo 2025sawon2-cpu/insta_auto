@@ -23,8 +23,8 @@ from hotpost.studio_runtime.editing import EditingMixin
 from test_quality_progress_independent import fixture, plan, store_plan, bind_replacement
 from test_production import workflow, selection
 from test_daily_quality import ready, passed
-from test_voicebench_adapter import Response, Session, _settings, valid_wav
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter,AiStudioPending
+from test_ai_studio_adapter import valid_wav
 
 
 def test_subframe_interval_shift_does_not_reopen_failed_same_picture(tmp_path):
@@ -177,30 +177,8 @@ def test_manual_old_result_from_other_range_is_not_reused(workflow):
     assert len(voice.calls)==1
 
 
-def test_persisted_tts_id_resumes_without_second_whole_script_submission(tmp_path):
-    class Resume(Session):
-        def post(self,*args,**kwargs): pytest.fail('Existing request must not be resubmitted')
-    session=Resume(valid_wav())
-    result=VoiceBenchAdapter(_settings(tmp_path),session=session,sleep=lambda _:None).synthesize(
-        '전체 대본을 한 번만 합성',tmp_path/'data'/'voice.wav',request_id=17)
-    assert result['voicebench_request_id']==17 and session.posts==0
 
 
-def test_waiting_tts_then_real_segment_progress_survives_total_elapsed(tmp_path,monkeypatch):
-    from hotpost import operation_progress
-    clock=[0]
-    monkeypatch.setattr(operation_progress.time,'monotonic',lambda:clock[0])
-    class QueueThenProgress(Session):
-        def get(self,url,**kwargs):
-            if url.endswith('/audio'): return Response(content=self.wav)
-            self.gets+=1
-            if self.gets<4: return Response({'id':17,'status':'queued','completed_segments':0})
-            return Response({'id':17,'status':'succeeded' if self.gets==7 else 'running',
-                'completed_segments':self.gets-4,'segment_count':3})
-    session=QueueThenProgress(valid_wav())
-    VoiceBenchAdapter(_settings(tmp_path),session=session,sleep=lambda _:clock.__setitem__(0,clock[0]+6)).synthesize(
-        '실제 대본',tmp_path/'data'/'voice.wav')
-    assert clock[0]>40 and session.posts==1
 
 
 def test_actual_25fps_native_exposure_subframe_equivalence_and_new_frame(tmp_path):
@@ -552,82 +530,14 @@ def test_queue_thread_creation_fault_does_not_strand_lease(tmp_path,monkeypatch)
         if queue._lease and not queue._lease.closed:queue._lease.close()
 
 
-def _service_settings(tmp_path,monkeypatch):
-    from hotpost import studio_services as service
-    from hotpost.config import Settings
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
-    root=tmp_path/'separate-voice-service'
-    python=root/'.venv'/('Scripts/python.exe' if service.os.name=='nt' else 'bin/python')
-    python.parent.mkdir(parents=True);python.touch()
-    data=tmp_path/'client';data.mkdir()
-    monkeypatch.setattr(VoiceBenchAdapter,'_api_key',lambda self:'isolated-test-key')
-    settings=Settings(data_dir=data,voicebench_root=root,voicebench_url='http://127.0.0.1:18767')
-    command=[str(python),'-X','utf8','-m','voicebench','--host','127.0.0.1','--port','18767']
-    receipt=root/'.runtime'/'hotpost-startup-18767.json';receipt.parent.mkdir()
-    receipt.write_text(json.dumps({'pid':321,'process_created':123.0,'command':command,'cwd':str(root)}),'utf-8')
-    return service,settings,command,receipt
 
 
-def test_uninspectable_owned_cold_service_defers_without_new_process_or_key_receipt(tmp_path,monkeypatch):
-    import requests
-    from hotpost.model_service import ModelServiceUnavailable
-    service,settings,command,receipt=_service_settings(tmp_path,monkeypatch)
-    original=receipt.read_bytes()
-    def refused(*a,**k):raise requests.ConnectionError('startup not listening yet')
-    monkeypatch.setattr(service.requests,'Session',lambda:SimpleNamespace(get=refused))
-    monkeypatch.setattr(service.psutil,'Process',lambda pid:(_ for _ in ()).throw(service.psutil.AccessDenied(pid)))
-    monkeypatch.setattr(service.subprocess,'Popen',lambda *a,**k:pytest.fail('Unknown ownership must not duplicate service'))
-    with pytest.raises(ModelServiceUnavailable) as held:
-        service.ensure_local(settings,'voice')
-    assert held.value.attempted is False
-    assert receipt.read_bytes()==original and b'isolated-test-key' not in original
 
 
-@pytest.mark.parametrize('code,body',[(401,{}),(403,{}),(200,{'service':'another-app'}),(302,{})])
-def test_service_auth_wrong_app_and_redirect_are_configuration_failure_not_wait(tmp_path,monkeypatch,code,body):
-    from hotpost.model_service import ModelServiceUnavailable
-    service,settings,_,_=_service_settings(tmp_path,monkeypatch)
-    monkeypatch.setattr(service.requests,'Session',lambda:SimpleNamespace(get=lambda *a,**k:Response(body,status=code)))
-    monkeypatch.setattr(service.subprocess,'Popen',lambda *a,**k:pytest.fail('Configuration fault must not launch another service'))
-    with pytest.raises(RuntimeError) as failure:service.ensure_local(settings,'voice')
-    assert not isinstance(failure.value,ModelServiceUnavailable)
 
 
-def test_existing_owned_startup_wait_resumes_after_exact_service_health_arrives(tmp_path,monkeypatch):
-    import requests
-    from hotpost.model_service import ModelServiceUnavailable
-    service,settings,command,receipt=_service_settings(tmp_path,monkeypatch)
-    healthy=[False]
-    def get(*a,**k):
-        assert k['allow_redirects'] is False
-        if not healthy[0]:raise requests.ConnectionError('service still loading')
-        return Response({'service':'VoiceBench External TTS API'})
-    monkeypatch.setattr(service.requests,'Session',lambda:SimpleNamespace(get=get))
-    monkeypatch.setattr(service.psutil,'Process',lambda pid:SimpleNamespace(
-        is_running=lambda:True,create_time=lambda:123.0,cmdline=lambda:command,cwd=lambda:str(settings.voicebench_root)))
-    monkeypatch.setattr(service.subprocess,'Popen',lambda *a,**k:pytest.fail('Existing cold service must not be relaunched'))
-    with pytest.raises(ModelServiceUnavailable) as first:service.ensure_local(settings,'voice')
-    assert first.value.attempted is False
-    healthy[0]=True
-    service.ensure_local(settings,'voice')
 
 
-def test_dead_same_startup_cannot_be_launched_again_on_each_automatic_retry(tmp_path,monkeypatch):
-    import requests
-    service,settings,command,receipt=_service_settings(tmp_path,monkeypatch)
-    receipt.unlink()
-    launches=[];clock=[0]
-    monkeypatch.setattr(service.time,'monotonic',lambda:clock[0])
-    monkeypatch.setattr(service.time,'sleep',lambda _:clock.__setitem__(0,clock[0]+1))
-    def refused(*a,**k):raise requests.ConnectionError('service never bound')
-    monkeypatch.setattr(service.requests,'Session',lambda:SimpleNamespace(get=refused))
-    monkeypatch.setattr(service.subprocess,'Popen',lambda *a,**k:launches.append(1) or SimpleNamespace(pid=321,poll=lambda:1))
-    monkeypatch.setattr(service.psutil,'Process',lambda pid:SimpleNamespace(
-        is_running=lambda:False,create_time=lambda:123.0,cmdline=lambda:command,cwd=lambda:str(settings.voicebench_root)))
-    for _ in range(2):
-        try:service.ensure_local(settings,'voice')
-        except RuntimeError:pass
-    assert len(launches)==1, 'Unchanged confirmed-dead startup was relaunched by automatic retry'
 
 
 def test_unattempted_service_wait_after_explicit_retry_does_not_reuse_old_failure_cap(ready,monkeypatch):
@@ -732,52 +642,8 @@ def test_reserved_recovery_obeys_disabled_photo_policy_before_service_and_method
     assert original.read_bytes()==b'original preserved'
 
 
-@pytest.mark.parametrize('stage,status',[('status',429),('status',503),('status',None),
-    ('audio',429),('audio',503),('audio',None)])
-def test_tts_status_and_audio_transfer_wait_preserves_id_and_resumes_without_resubmission(tmp_path,stage,status):
-    import requests
-    from hotpost.model_service import ModelServiceUnavailable
-    broken=[True];ids=[]
-    class Transfer(Session):
-        def post(self,url,**kwargs):
-            self.posts+=1
-            return Response({'id':17,'status':'queued' if stage=='status' else 'succeeded'})
-        def get(self,url,**kwargs):
-            is_audio=url.endswith('/audio')
-            if broken[0] and (is_audio==(stage=='audio')):
-                if status is None:raise requests.ReadTimeout('temporary transfer silence')
-                response=requests.Response();response.status_code=status;response.url=url
-                response.headers['Retry-After']='120';response._content=b'{}'
-                return response
-            return Response(content=self.wav) if is_audio else Response({'id':17,'status':'succeeded'})
-    session=Transfer(valid_wav());settings=_settings(tmp_path)
-    target=settings.data_dir/'voice.wav';target.parent.mkdir();target.write_bytes(b'preserved old voice')
-    adapter=VoiceBenchAdapter(settings,session=session,sleep=lambda _:None)
-    start=time.time()
-    with pytest.raises(ModelServiceUnavailable) as wait:
-        adapter.synthesize('실제 대본',target,on_submitted=ids.append)
-    assert wait.value.attempted is False
-    if status is not None:assert wait.value.retry_at>=start+119
-    assert ids==[17] and session.posts==1 and target.read_bytes()==b'preserved old voice'
-    broken[0]=False
-    result=adapter.synthesize('실제 대본',target,request_id=ids[-1],on_submitted=ids.append)
-    assert result['voicebench_request_id']==17 and session.posts==1
-    assert target.read_bytes()==session.wav
 
 
-@pytest.mark.parametrize('status',[401,403])
-def test_tts_authentication_failure_does_not_become_auto_service_wait(tmp_path,status):
-    import requests
-    from hotpost.model_service import ModelServiceUnavailable
-    class Auth(Session):
-        def get(self,url,**kwargs):
-            response=requests.Response();response.status_code=status;response.url=url;response._content=b'{}'
-            return response
-    session=Auth(valid_wav());settings=_settings(tmp_path)
-    with pytest.raises(RuntimeError) as blocked:
-        VoiceBenchAdapter(settings,session=session,sleep=lambda _:None).synthesize('실제 대본',settings.data_dir/'voice.wav',request_id=17)
-    assert not isinstance(blocked.value,ModelServiceUnavailable)
-    assert session.posts==0
 
 
 def test_manual_unknown_tts_submission_reuses_stable_generation_key_on_retry(workflow,monkeypatch):
@@ -793,10 +659,10 @@ def test_manual_unknown_tts_submission_reuses_stable_generation_key_on_retry(wor
             if len(keys)==1:
                 raise ModelServiceUnavailable('POST accepted but response lost',attempted=False)
             on_submitted(17);target.write_bytes(valid_wav())
-            return {'output_path':str(target),'voicebench_request_id':17}
+            return {'output_path':str(target),'tts_request_id':17}
     manager.voice=UnknownThenKnown()
     first=manager.run(job['id'],'build')
-    assert not first.get('voicebench_request_id')
+    assert not first.get('tts_request_id')
     assert first['status']=='service_wait' and first['service_retry_at']>clock[0]
     files={str(p):p.read_bytes() for p in manager.folder(job['id']).rglob('*') if p.is_file()}
     early=manager.run(job['id'],'build')
@@ -805,58 +671,16 @@ def test_manual_unknown_tts_submission_reuses_stable_generation_key_on_retry(wor
     clock[0]=first['service_retry_at']+.01
     second=manager.run(job['id'],'build')
     assert len(keys)==2 and keys[0] and keys[0]==keys[1]
-    assert second['status']=='draft_ready' and second['voicebench_request_id']==17
+    assert second['status']=='draft_ready' and second['tts_request_id']==17
 
 
-def test_chunked_audio_transfer_resumes_existing_request_without_new_post(tmp_path):
-    import requests
-    from hotpost.model_service import ModelServiceUnavailable
-    interrupted=[True];ids=[]
-    class Chunked(Session):
-        def post(self,url,**kwargs):
-            self.posts+=1;return Response({'id':17,'status':'succeeded'})
-        def get(self,url,**kwargs):
-            if url.endswith('/audio'):
-                if interrupted[0]:raise requests.exceptions.ChunkedEncodingError('response body interrupted')
-                return Response(content=self.wav)
-            return Response({'id':17,'status':'succeeded'})
-    settings=_settings(tmp_path);target=settings.data_dir/'voice.wav'
-    target.parent.mkdir();target.write_bytes(b'preserved old approved voice')
-    session=Chunked(valid_wav());adapter=VoiceBenchAdapter(settings,session=session,sleep=lambda _:None)
-    with pytest.raises(ModelServiceUnavailable) as waiting:
-        adapter.synthesize('실제 대본',target,on_submitted=ids.append)
-    assert waiting.value.attempted is False
-    assert ids==[17] and session.posts==1 and target.read_bytes()==b'preserved old approved voice'
-    interrupted[0]=False
-    assert adapter.synthesize('실제 대본',target,request_id=17)['voicebench_request_id']==17
-    assert session.posts==1 and target.read_bytes()==session.wav
 
 
-def test_authenticated_ready_resolves_old_startup_failure_without_erasing_failure_evidence(tmp_path,monkeypatch):
-    import requests
-    service,settings,command,receipt=_service_settings(tmp_path,monkeypatch)
-    old=json.loads(receipt.read_text('utf-8'));old.update(status='failed',exit_code=11)
-    receipt.write_text(json.dumps(old),'utf-8')
-    healthy=[True];launches=[]
-    def get(*a,**k):
-        if not healthy[0]:raise requests.ConnectionError('later service restart required')
-        return Response({'service':'VoiceBench External TTS API'})
-    def process(pid):
-        if pid==321:raise service.psutil.NoSuchProcess(pid)
-        return SimpleNamespace(is_running=lambda:True,create_time=lambda:456.0,
-            cmdline=lambda:command,cwd=lambda:str(settings.voicebench_root))
-    def launch(*a,**k):
-        launches.append(a[0]);healthy[0]=True
-        return SimpleNamespace(pid=444,poll=lambda:None)
-    monkeypatch.setattr(service.requests,'Session',lambda:SimpleNamespace(get=get))
-    monkeypatch.setattr(service.psutil,'Process',process)
-    monkeypatch.setattr(service.subprocess,'Popen',launch)
-    service.ensure_local(settings,'voice')
-    assert json.loads(receipt.read_text('utf-8'))['status']=='ready'
-    history=json.loads(receipt.read_text('utf-8'))['startup_failure_history']
-    assert any(item.get('pid')==321 and item.get('exit_code')==11 for item in history)
-    assert not launches
-    healthy[0]=False
-    service.ensure_local(settings,'voice')
-    assert len(launches)==1
-    assert json.loads(receipt.read_text('utf-8'))['startup_failure_history']==history
+
+
+def test_persisted_browser_request_resumes_without_new_request(tmp_path):
+    adapter=AiStudioAdapter();out=tmp_path/'voice.wav'
+    with pytest.raises(AiStudioPending) as first:adapter.synthesize('전체 원고.',out)
+    with pytest.raises(AiStudioPending) as second:adapter.synthesize('전체 원고.',out,request_id=first.value.request_id)
+    assert first.value.request_id==second.value.request_id
+    assert not out.exists()

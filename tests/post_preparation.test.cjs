@@ -6,14 +6,14 @@ const dm='본 포스팅은 쿠팡파트너스 활동의\n일환으로 제품 구
 function fixture(){return {accounts:['mr.salrim','__ariddaum__'],revision:0,coupang_link:{status:'idle',payload:{}},draft:{selected_accounts:[],thumbnail_options:{recommended:'기존 표지',hook:'후킹',curiosity:'궁금증',benefit:'이득'},selected_thumbnail:'recommended',caption:'우리 대본 ✨',pinned_comment:'댓글',product_link:'',dm_message:dm,dm_button_text:'변기 위 빈자리, 수납으로 바꾸기'},media:{final:'/final.mp4',reference:'/ref.mp4',cover:'/cover.jpg'}};}
 function harness(fetch,navigator={}){const {document,window}=parseHTML('<html><body><div id="root"></div></body></html>');let timer;vm.runInNewContext(code,{window,document,navigator,fetch,AbortController,URL,setTimeout:fn=>(timer=fn,1),clearTimeout:()=>{},console});return {root:document.querySelector('#root'),window,timer:()=>timer?.()};}
 const response=(data,status=200)=>({ok:status<400,status,json:async()=>structuredClone(data)});
-test('four editable choices, both accounts and draft inputs survive a save without replacing DOM',async()=>{
- const puts=[],d=fixture();const h=harness(async(url,options={})=>{if(options.method==='PUT'){puts.push(JSON.parse(options.body));return response({revision:puts.length});}return response(d);});
+test('four editable choices and saved account metadata survive edits without account selection UI',async()=>{
+ const puts=[],d=fixture();d.draft.selected_accounts=['mr.salrim','__ariddaum__'];const h=harness(async(url,options={})=>{if(options.method==='PUT'){puts.push(JSON.parse(options.body));return response({revision:puts.length});}return response(d);});
  const view=h.window.PostPreparation.mount(h.root,{shortcode:'post'});await tick();
  assert.equal(h.root.querySelectorAll('[name=prep-thumbnail]').length,4);
  assert.equal(h.root.querySelector('[name=prep-link]').value,'');
  assert.equal(h.root.querySelectorAll('a[href*="studio"]').length,0);
  const caption=h.root.querySelector('[name=prep-caption]');caption.value='바꾼 내용';
- h.root.querySelectorAll('[name=prep-account]').forEach(el=>{el.checked=true;el.setAttribute('checked','');});
+ assert.equal(h.root.querySelectorAll('[name=prep-account]').length,0);
  caption.dispatchEvent(new h.window.Event('input',{bubbles:true}));h.timer();await tick();
  assert.deepEqual(puts[0].draft.selected_accounts,['mr.salrim','__ariddaum__']);
  assert.equal(puts[0].draft.caption,'바꾼 내용');assert.equal(h.root.querySelector('[name=prep-caption]'),caption);

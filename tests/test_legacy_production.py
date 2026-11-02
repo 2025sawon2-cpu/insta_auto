@@ -185,7 +185,7 @@ def test_legacy_rewrite_uses_shared_contract_and_keeps_advisory_findings(tmp_pat
 
 
 def test_pipeline_reuses_assets_and_produces_two_distinct_handoffs(tmp_path, monkeypatch):
-    from hotpost import editing_adapter, script_rewriter, voicebench_adapter
+    from hotpost import editing_adapter, script_rewriter, ai_studio_adapter
     settings = Settings(data_dir=tmp_path)
     source = settings.source_dir / "code-1"
     source.mkdir(parents=True)
@@ -212,7 +212,7 @@ def test_pipeline_reuses_assets_and_produces_two_distinct_handoffs(tmp_path, mon
     voices=[]
     def synth(self,text,path,progress):
         voices.append(text); path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(b"RIFFvoice")
-    monkeypatch.setattr(voicebench_adapter.VoiceBenchAdapter,"synthesize",synth)
+    monkeypatch.setattr(ai_studio_adapter.AiStudioAdapter,"synthesize",synth)
     builds=[]
     def build(self,**kwargs):
         assert kwargs['video_paths'] == [source/'video.mp4']

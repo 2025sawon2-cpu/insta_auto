@@ -64,17 +64,16 @@ class StudioHTTP:
                 from .studio_intake import intake_status
                 self._json(intake_status(studio))
             elif parts == ['api','studio','voices']:
-                from .voicebench_adapter import VoiceBenchAdapter
-                data=VoiceBenchAdapter(studio.settings).voices()
-                readiness=VoiceBenchAdapter(studio.settings).default_voice_status()
-                data['personal_default']={'available':bool(readiness.get('ready') and readiness.get('default_voice_kind')=='personal'),
-                                          'errors':readiness.get('errors',[])}
+                from .ai_studio_adapter import AiStudioAdapter
+                data=AiStudioAdapter(studio.settings).voices()
+                readiness=AiStudioAdapter(studio.settings).default_voice_status()
+                data['default_voice_status']=readiness
                 for voice in data.get('voices',[]):
                     if voice.get('preview_url'): voice['preview_url']='/api/studio/voices/'+voice['id']+'/preview'
                 self._json(data)
             elif len(parts)==5 and parts[:3]==['api','studio','voices'] and parts[4]=='preview':
-                from .voicebench_adapter import VoiceBenchAdapter
-                content,mime=VoiceBenchAdapter(studio.settings).preview(parts[3])
+                from .ai_studio_adapter import AiStudioAdapter
+                content,mime=AiStudioAdapter(studio.settings).preview(parts[3])
                 self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(content)))
                 self.send_header('Cache-Control','private, max-age=300');self.end_headers();self.wfile.write(content)
             elif len(parts) == 2:

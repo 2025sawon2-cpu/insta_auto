@@ -7,7 +7,7 @@ from .script_rewriter import _generate
 from .studio_script_checks import refresh_local_reviews, ReviewUnavailable
 from .writing.reference_evidence import VisualEvidenceIntegrityError
 from .writing.hook_policy import INSTRUCTION as HOOK_INSTRUCTION, POLICY as HOOK_POLICY, first_sentence
-from .writing.script_style import question_ending_issues
+from .writing.script_style import question_ending_issues, explicit_expression_issues
 
 REVIEW_POLICY = 25
 
@@ -74,6 +74,9 @@ def approved_recovery(reference,item):
 def choose(settings, state, valid):
     if not valid:
         raise ValueError('선택할 생성 대본이 없습니다.')
+    valid = [(index,item) for index,item in valid if not explicit_expression_issues(item['text'])]
+    if not valid:
+        raise ValueError('모든 후보에 사용자 금지 표현(괜히 반가워요)이 남아 있습니다. 문제 구절을 수정하세요.')
     valid = [(index,item) for index,item in valid if not question_ending_issues(item['text'])]
     if not valid:
         raise ValueError('모든 후보에 금지 질문형(~에요?·~예요?·~이에요?)이 남아 있습니다. 원고를 보존하고 말투를 수정하세요.')

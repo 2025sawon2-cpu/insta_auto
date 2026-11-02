@@ -79,3 +79,41 @@ def test_a_preferred_repair_cannot_introduce_a_banned_question(tmp_path, monkeyp
     assert result['scripts'][0]['text'] == original
     audit = json.loads((tmp_path/'writing-audit.json').read_text('utf-8'))
     assert audit['repair']['attempted'] and audit['repair']['accepted'] is False
+
+
+@pytest.mark.parametrize('phrase', ['괜히 반가워요', '괜히반가워요', '괜히\n반가워요', '괜히\u200b반가워요'])
+def test_explicit_emotion_prohibition_is_reported_without_rewriting(phrase):
+    text = '겨울 침대에서 쉬는 시간이 ' + phrase + '.'
+    result = review(text, '누빔 텐트')
+    assert result['text'] == text
+    assert any('사용자 금지 표현' in issue for issue in result['quality_summary']['issues'])
+
+
+def test_greeting_and_natural_emotion_are_not_a_blanket_ban():
+    from hotpost.writing.script_style import explicit_expression_issues
+    assert not explicit_expression_issues('만나서 반가워요. 누빔 안쪽이 포근해요.')
+
+
+def test_scoring_outage_cannot_select_explicitly_banned_emotion(tmp_path, monkeypatch):
+    from hotpost.studio_top_pick import choose
+    monkeypatch.setattr('hotpost.studio_top_pick.refresh_local_reviews', lambda settings, reference, valid: valid)
+    monkeypatch.setattr('hotpost.studio_top_pick._generate', lambda *args: (_ for _ in ()).throw(RuntimeError('offline')))
+    candidates = [(0, {'text': '쉬는 시간이 괜히 반가워요.'}), (1, {'text': '누빔 안쪽에서 책을 읽어요.'})]
+    index, _ = choose(SimpleNamespace(data_dir=tmp_path), {'id': 'emotion', 'original_text': '누빔 텐트'}, candidates)
+    assert index == 1
+    with pytest.raises(ValueError, match='사용자 금지 표현'):
+        choose(SimpleNamespace(data_dir=tmp_path), {'id': 'emotion', 'original_text': '누빔 텐트'}, candidates[:1])
+
+
+def test_model_preference_cannot_introduce_explicitly_banned_emotion(tmp_path, monkeypatch):
+    from hotpost.writing import pipeline
+    from hotpost.writing.contract import snapshot
+    original = '누빔 안쪽에서 책을 읽어요. 댓글에 ‘나도’ 남겨주세요.'
+    proposed = original.replace('책을 읽어요', '쉬는 시간이 괜히 반가워요')
+    replies = iter([{'issues': [{'quote': '책을 읽어요', 'reason': '생활 장면 표현 보완'}]},
+                    {'text': proposed}, {'preferred': 1, 'reason': '모델의 잘못된 선호', 'issues': []}])
+    monkeypatch.setattr(pipeline.codex_writer, 'chat', lambda *args, **kwargs: next(replies))
+    result = pipeline._generate_single({'reference_script': '누빔 안쪽에서 책을 읽을 수 있어요.',
+                                       'writing_contract': snapshot()}, tmp_path, lambda: None,
+                                      lambda *args: None, draft=original)
+    assert result['scripts'][0]['text'] == original

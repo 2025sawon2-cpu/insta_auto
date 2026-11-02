@@ -20,6 +20,7 @@ def test_fresh_install_audit_creates_no_state_or_login_claim(tmp_path,monkeypatc
     assert result['read_only'] and not result['installation_saved']
     assert not result['installation']['configured'] and not result['installation']['login_verified']
     assert result['devices']==result['jobs']==result['next_post_slots']==[]
+    assert result['littly_logins']==result['missing_littly_login_accounts']==[]
     assert not (tmp_path/'absent').exists()
     with pytest.raises(ValueError):preflight.inspect(tmp_path)
 
@@ -50,6 +51,7 @@ def test_saved_setup_and_cross_device_attempts_reused_without_mutation(tmp_path,
     result=preflight.inspect(ROOT,'video1')
     assert result['installation_saved'] and result['installation']['values']==values
     assert result['installation']['configured'] and not result['installation']['login_verified']
+    assert result['missing_littly_login_accounts']==['my.brand']
     assert len(result['devices'])==2 and all(not d['live_connection_checked'] for d in result['devices'])
     assert len(result['jobs'])==2 and all(j['must_not_resubmit'] for j in result['jobs'])
     by_id={j['job']:j for j in result['jobs']}
@@ -70,3 +72,20 @@ def test_real_config_loader_in_new_process_does_not_create_data_or_web(tmp_path)
     value=json.loads(result.stdout)
     assert value['read_only'] and not value['installation']['configured']
     assert not list(tmp_path.iterdir())
+
+
+def test_preflight_reads_per_account_login_routes_on_every_run(tmp_path,monkeypatch):
+    from hotpost.installation_settings import save
+    monkeypatch.setattr('hotpost.config.load_settings',lambda **kwargs:SimpleNamespace(data_dir=tmp_path))
+    values={'publication_accounts':['first','second','new.brand'],'discovery_account':'reader',
+            'storefront_url':'https://influencers.coupang.com/s/store','collection':'Collection',
+            'littly_logins':{'first':{'provider':'google','account_hint':'first@example.test'},
+                             'second':{'provider':'kakao','account_hint':'saved Kakao'}}}
+    save(tmp_path,dict(revision=0,values=values))
+    first=preflight.inspect(ROOT)
+    assert [r['provider'] for r in first['littly_logins']]==['google','kakao','']
+    assert first['missing_littly_login_accounts']==['new.brand']
+    assert not any(r['login_verified'] for r in first['littly_logins'])
+    values['littly_logins']['first']['provider']='chrome'
+    save(tmp_path,dict(revision=1,values=values))
+    assert preflight.inspect(ROOT)['littly_logins'][0]['provider']=='chrome'

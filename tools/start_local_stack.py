@@ -17,7 +17,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from hotpost.config import load_settings
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 
 
 def main():
@@ -87,15 +87,8 @@ def main():
     python_name = 'Scripts/python.exe' if os.name == 'nt' else 'bin/python'
     from hotpost.writing.codex_writer import executable
     print('writing: internal Codex (' + executable() + ')', flush=True)
-    voice_url = settings.voicebench_url.rstrip('/')
-    voice = VoiceBenchAdapter(settings)
-    headers = voice._headers()
-    environment = os.environ.copy()
-    environment['VOICEBENCH_EXTERNAL_API_KEY'] = voice._api_key()
-    start('voice', voice_url, '/v1/health', settings.voicebench_root,
-          [str(settings.voicebench_root / '.venv' / python_name), '-X', 'utf8', '-u',
-           '-m', 'voicebench', '--host', '127.0.0.1', '--port', str(urlparse(voice_url).port or 80)],
-          lambda value: value.get('service') == 'VoiceBench External TTS API', headers, environment)
+    voice = AiStudioAdapter(settings)
+    print('voice: Google AI Studio / Arlo / existing Chrome 사원2', flush=True)
     # The full studio includes every historical edit and can exceed a short
     # health timeout. Check the small persistent criteria API for readiness.
     start('hotpost', 'http://127.0.0.1:8775', '/api/criteria', ROOT,
@@ -107,8 +100,8 @@ def main():
     if args.voice_id:
         selected = next((item for item in voice.voices().get('voices', [])
                          if item['id'] == args.voice_id), None)
-        health['checks']['voicebench'] = {'ready': bool(selected and selected.get('available')),
-            'message': ('선택한 목소리 준비됨: ' + args.voice_id) if selected and selected.get('available')
+        health['checks']['google_ai_studio'] = {'ready': False, 'configured':bool(selected and selected.get('available')),
+            'message': ('선택한 목소리 설정됨 · 실제 Chrome 로그인/생성 상태는 제출 직전에 확인: ' + args.voice_id) if selected and selected.get('available')
                        else '선택한 목소리를 사용할 수 없습니다: ' + args.voice_id}
         health['ready'] = all(item['ready'] for item in health['checks'].values())
     print(json.dumps(health, ensure_ascii=False), flush=True)

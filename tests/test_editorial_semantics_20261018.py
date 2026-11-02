@@ -91,7 +91,7 @@ def test_nonliteral_support_is_not_changed_to_opposite_by_a_legacy_reason_phrase
 
 def test_ranking_and_final_qa_use_the_same_current_whole_montage_contract():
     from hotpost.daily_quality import REVIEW_INSTRUCTION
-    assert POLICY=='product-appeal-first-20261018-v3'
+    assert POLICY=='subject-montage-audience-interest-20261030-v7'
     assert PRODUCT_APPEAL_INSTRUCTION in RANK_INSTRUCTION
     assert PRODUCT_APPEAL_INSTRUCTION in REVIEW_INSTRUCTION
 

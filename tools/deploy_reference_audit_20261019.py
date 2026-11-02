@@ -50,7 +50,7 @@ def main():
         OUT=OUT.with_name('deployment-verified')
     sys.path.insert(0,str(ROOT))
     from hotpost.config import load_settings
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
+    from hotpost.ai_studio_adapter import AiStudioAdapter
     settings=load_settings()
     OUT.mkdir(parents=True,exist_ok=True)
     if (OUT/'receipt.json').exists():raise RuntimeError('Deployment receipt already exists')
@@ -60,7 +60,7 @@ def main():
     old_pid=identity['ProcessId']
     children=ps(f"@(Get-CimInstance Win32_Process | Where-Object ParentProcessId -eq {old_pid} | Select-Object ProcessId,Name) | ConvertTo-Json -Compress")
     assert not children, 'Active server children; leave running'
-    health=VoiceBenchAdapter(settings).default_voice_status()
+    health=AiStudioAdapter(settings).default_voice_status()
     assert health['active_requests']==0 and not any(health['queue'].values())
     expected={name:hashlib.sha256((ROOT/(name.replace('.','/')+'.py')).read_bytes()).hexdigest() for name in MODULES}
     (OUT/'expected.json').write_text(json.dumps(expected,indent=2),'utf8')

@@ -12,7 +12,7 @@ from hotpost.config import load_settings
 from hotpost.editing_adapter import _atomic_json as save
 from hotpost.source_finder import probe_video
 from hotpost.source_quality import sha256_file
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.source_presentation import POLICY, review_scope
 from tools import build_tiktok_rework as build
 
@@ -67,8 +67,8 @@ def voice():
         return
     receipt = ROOT / 'voice-submission.json'
     request = json.loads(receipt.read_text('utf-8')).get('request_id') if receipt.exists() else None
-    result = VoiceBenchAdapter(load_settings()).synthesize(
-        script['text'], ROOT / 'narration.wav', require_personal_clone=True,
+    result = AiStudioAdapter(load_settings()).synthesize(
+        script['text'], ROOT / 'narration.wav',
         request_id=request, generation_key='folder-v6-' + digest,
         on_submitted=lambda rid: save(receipt, {'request_id': rid, 'script_sha256': digest}),
         progress=lambda message, n: print(message, n, flush=True))

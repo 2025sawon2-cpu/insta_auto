@@ -44,6 +44,37 @@ def test_corrupt_or_foreign_affiliate_records_cannot_be_used():
             link_identity(link)
 
 
+def test_storefront_reads_fields_by_name_inside_nextjs_product_objects():
+    title = '브랜드 "따뜻한" {커튼} \\ 사이드문'
+    record = dict(title=title, vendorItemId=789, extra={'nested': [1, 2]},
+                  landingUrl=LINK, impressionId='example', impressionData='example',
+                  itemId=456, productId=123)
+    payload = json.dumps({'elements': {'list': [record]}}, ensure_ascii=False)
+    flight = '7:' + payload + '\n'
+    html = '<script>self.__next_f.push(' + json.dumps([1, flight], ensure_ascii=False) + ')</script>'
+    expected = [dict(ITEM, title=title)]
+    for raw in (payload, json.dumps(payload), html):
+        assert parse_storefront(raw) == expected
+
+
+def test_storefront_does_not_combine_adjacent_or_nested_product_fields():
+    ids = dict(productId=123, itemId=456, vendorItemId=789)
+    incomplete = [dict(ids, landingUrl=LINK), {'title': ITEM['title']},
+                  dict(ids, details={'landingUrl': LINK, 'title': ITEM['title']})]
+    assert parse_storefront(json.dumps(incomplete)) == []
+    valid = dict(ids, landingUrl=LINK, title=ITEM['title'])
+    assert parse_storefront(json.dumps(incomplete + [valid, valid])) == [ITEM]
+
+
+def test_storefront_rejects_ambiguous_keys_and_wrong_field_types():
+    raw = source()
+    assert parse_storefront(raw[:-1] + ',"itemId":999}') == []
+    record = json.loads(raw)
+    for field, value in [('productId', True), ('itemId', '456'),
+                         ('vendorItemId', 789.0), ('title', None), ('landingUrl', [])]:
+        assert parse_storefront(json.dumps(dict(record, **{field: value}))) == []
+
+
 @pytest.mark.parametrize('url', ['http://influencers.coupang.com/s/ourstore', 'https://127.0.0.1/s/a',
     'https://influencers.coupang.com.evil.example/s/a', 'https://user@influencers.coupang.com/s/a',
     'https://influencers.coupang.com:443/s/a', 'https://influencers.coupang.com/s/a?url=http://127.0.0.1',

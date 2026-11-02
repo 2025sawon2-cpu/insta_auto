@@ -41,6 +41,7 @@ def ensure_thumbnail(settings: Settings, post: Post, session: requests.Session |
         w = settings.thumb_width
         if img.width > w:
             img = img.resize((w, int(img.height * w / img.width)))
+        out.parent.mkdir(parents=True, exist_ok=True)
         img.save(out, "JPEG", quality=82, optimize=True)
         return rel
     except Exception:  # noqa: BLE001

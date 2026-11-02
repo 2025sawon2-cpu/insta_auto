@@ -132,7 +132,7 @@ def test_automatic_voice_does_not_inherit_legacy_sohee_override(prepared):
     studio.store.enqueue=lambda db,t,k,p,key:captured.append(p)
     studio.store.change(task,lambda s,db:studio.advance_workflow(s,db))
     studio.store.enqueue=original
-    assert captured[0]['voice_mode']=='personal_clone'
+    assert captured[0]['voice_mode']=='google_ai_studio'
     assert not captured[0].get('voice_profile_id')
 
 
@@ -176,29 +176,25 @@ def test_top_pick_continues_to_personal_voice_without_human_script_approval(tmp_
     assert after['approved_script_id']==after['script_id']
     assert not after['automation'].get('needs_top_pick')
     voice=studio.store.claim(); assert voice['kind']=='voice'
-    assert voice['payload']['voice_mode']=='personal_clone'
+    assert voice['payload']['voice_mode']=='google_ai_studio'
     assert not voice['payload'].get('voice_profile_id')
 
 
-@pytest.mark.parametrize('mode,expected_profile',[(None,None),('personal_clone',None),('manual','qwen-sohee')])
-def test_voice_worker_requires_personal_clone_unless_studio_explicitly_selected(prepared,monkeypatch,mode,expected_profile):
-    from hotpost import voicebench_adapter,studio_services
-    from tests.test_voicebench_adapter import valid_wav
+@pytest.mark.parametrize('mode,expected_profile',[(None,None),('personal_clone',None),('manual','Arlo')])
+def test_voice_worker_uses_google_without_clone_or_gpu_cleanup(prepared,monkeypatch,mode,expected_profile):
+    from hotpost import ai_studio_adapter,studio_services
+    from tests.test_ai_studio_adapter import valid_wav
     studio,task=prepared;state=studio.store.get(task);captured=[]
-    released=[]
-    monkeypatch.setattr('hotpost.studio_runtime.generation.release_idle_voice',
-                        lambda settings, **kwargs: released.append(kwargs))
     monkeypatch.setattr(studio_services,'ensure_local',lambda *a:None)
     def synthesize(self,text,path,**kwargs):
         captured.append(kwargs);path.write_bytes(valid_wav())
-        return {'voicebench_request_id':17,'voice_profile_id':kwargs.get('voice_profile_id')}
-    monkeypatch.setattr(voicebench_adapter.VoiceBenchAdapter,'synthesize',synthesize)
-    p={'script_id':state['script_id'],'voice_id':'voice-fixture','speed':1,'voice_profile_id':'qwen-sohee'}
+        return {'tts_request_id':17,'voice_profile_id':kwargs.get('voice_profile_id')}
+    monkeypatch.setattr(ai_studio_adapter.AiStudioAdapter,'synthesize',synthesize)
+    p={'script_id':state['script_id'],'voice_id':'voice-fixture','speed':1,'voice_profile_id':'Arlo'}
     if mode:p['voice_mode']=mode
     studio._voice(state,{'id':'test-voice','payload':p,'checkpoint':{}})
-    assert captured[0]['require_personal_clone']==(expected_profile is None)
+    assert 'require_personal_clone' not in captured[0]
     assert captured[0].get('voice_profile_id')==expected_profile
-    assert released==[{'best_effort':True}]
 
 
 @pytest.mark.parametrize('change',['same_sources','new_sources','new_script'])
@@ -340,17 +336,17 @@ def test_explicit_production_survives_daily_rollover_and_collects_sources(prepar
 
 
 def test_voice_choice_rebuilds_voice_and_can_return_to_default(prepared,monkeypatch):
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
-    monkeypatch.setattr(VoiceBenchAdapter,'voices',lambda self:{'voices':[{'id':'qwen-sohee','available':True}]})
+    from hotpost.ai_studio_adapter import AiStudioAdapter
+    monkeypatch.setattr(AiStudioAdapter,'voices',lambda self:{'voices':[{'id':'Arlo','available':True}]})
     studio,task=prepared;complete(studio,task)
     before=studio.store.get(task)
     with pytest.raises(ValueError):studio.action(task,'make-video',{'voice_profile_id':'not-approved'})
     assert studio.store.get(task)==before
-    studio.action(task,'make-video',{'voice_profile_id':'qwen-sohee'})
+    studio.action(task,'make-video',{'voice_profile_id':'Arlo'})
     job=next(j for j in studio.store.jobs(task) if j['status']=='queued')
     with studio.store.connect() as db:
         payload=json.loads(db.execute('SELECT payload FROM jobs WHERE id=?',(job['id'],)).fetchone()[0])
-    assert job['kind']=='voice' and payload['voice_profile_id']=='qwen-sohee'
+    assert job['kind']=='voice' and payload['voice_profile_id']=='Arlo'
     complete(studio,task)
     studio.action(task,'make-video',{'voice_profile_id':''})
     job=next(j for j in studio.store.jobs(task) if j['status']=='queued')

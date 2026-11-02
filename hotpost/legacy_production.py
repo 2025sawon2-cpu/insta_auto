@@ -134,7 +134,7 @@ class ProductionManager:
         from .source_finder import find_sources
         from .transcript import extract_transcript
         from .script_rewriter import rewrite, SCRIPT_POLICY_VERSION
-        from .voicebench_adapter import VoiceBenchAdapter
+        from .ai_studio_adapter import AiStudioAdapter
         with self.lock:
             state = self.read(code)
             state.update(status="running", error="")
@@ -203,7 +203,7 @@ class ProductionManager:
                 if not self._file(voice):
                     variant["status"] = "voice"
                     update(f"버전 {version} 음성 생성 중", 60 + version * 4)
-                    VoiceBenchAdapter(self.settings).synthesize(variant["text"], voice,
+                    AiStudioAdapter(self.settings).synthesize(variant["text"], voice,
                         lambda m, p: update(f"버전 {version} · {m}", 60 + version * 4))
                 if not variant.get("draft_path") or not Path(variant["draft_path"]).is_dir():
                     variant["status"] = "building"
@@ -212,7 +212,7 @@ class ProductionManager:
                     ordered = videos if version == 1 else list(reversed(videos))
                     result = adapter.build(job_id=job_id, video_paths=ordered, voice_path=voice,
                         script_path=variant["script_path"], draft_name=variant["draft_name"], audio_profile="clean_tts",
-                        export_profile="free", narration_speed=1.12)
+                        export_profile="free", narration_speed=1.0)
                     if result.get("status") != "completed":
                         raise RuntimeError(result.get("message") or "CapCut 프로젝트 생성 실패")
                     variant["draft_path"] = result["draft_path"]

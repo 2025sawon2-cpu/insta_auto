@@ -245,21 +245,21 @@ class AutoCapcutAdapter:
         return result
 
 
-def build_with_voicebench(
+def build_with_ai_studio(
     settings: Settings, *, job_id: str, manifest_path: Path,
     transcript_path: Path, draft_name: str,
     approved_script_path: Path | None = None,
     video_labels: list[str] | None = None,
     allow_unclassified_sources: bool = False,
-    narration_speed: float = 1.12,
+    narration_speed: float = 1.0,
     thumbnail: dict | None = None,
     watermark_masks: list[dict] | None = None,
     editorial_plan: dict | None = None,
-    voicebench=None, auto_capcut: AutoCapcutAdapter | None = None,
+    tts=None, auto_capcut: AutoCapcutAdapter | None = None,
     progress: Callable[[str, int], None] | None = None,
 ) -> dict:
     """Orchestrate artifacts while keeping both subsystems behind adapters."""
-    from .voicebench_adapter import VoiceBenchAdapter
+    from .ai_studio_adapter import AiStudioAdapter
 
     progress = progress or (lambda _message, _percent: None)
     job_dir = settings.editing_dir / job_id
@@ -279,7 +279,7 @@ def build_with_voicebench(
     videos = selected_source_videos(
         manifest_path, allow_unclassified=allow_unclassified_sources)
     voice_path = job_dir / "voice.wav"
-    tts = (voicebench or VoiceBenchAdapter(settings)).synthesize(
+    tts = (tts or AiStudioAdapter(settings)).synthesize(
         script_path.read_text(encoding="utf-8"), voice_path,
         progress=lambda message, percent: progress(message, min(55, percent // 2)),
     )
@@ -299,7 +299,7 @@ def build_with_voicebench(
     )
     return {
         **result,
-        "voicebench": tts,
+        "tts": tts,
         "artifacts": {
             "script_path": str(script_path),
             "voice_path": str(voice_path),

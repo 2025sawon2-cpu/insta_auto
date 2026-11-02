@@ -1,17 +1,23 @@
 """Shared first-sentence review instruction and literal opening evidence."""
 import re
 
-POLICY = 'first-sentence-curiosity-gap-20261024-v2'
+POLICY = 'audience-relevant-first-sentence-20261028-v3'
 INSTRUCTION = (
     'Evaluate the FIRST SENTENCE by itself before considering the rest of the narration. '
-    'It must be the strongest hook: a concrete unexpected situation or mismatch between action and result '
-    'that opens a specific unresolved question and makes the viewer want the next scene. '
+    'It must be the strongest hook: a concrete recognizable situation, desire, overlooked possibility or '
+    'unexpected result that opens meaningful interest and makes the viewer want the next scene. '
+    'Evaluate relevance to women in their 30s and 40s who may care about this subject without assuming '
+    'their family, household role or tastes. Explain the specific lived inconvenience, desired change, '
+    'pleasure or stake that makes THIS opening worth their attention. A physical up/down/left/right '
+    'direction puzzle or description of a hand movement is not strong merely because it is unresolved. '
+    'Consider why a viewer would care about its answer and whether the image makes that answer trivial. '
+    'Reject contrived contradictions and generic advertising when the actual wording offers little payoff. '
     'The goal is curiosity, not explaining the product identity or function immediately. '
     'Do not reveal the identity, function and answer all at once in the opening. '
     'Do not penalize a missing product name or a reveal in later sentences. A generic habit question, '
     'viewer address or psychological-mechanism label alone is not a strong hook. '
     'Do not assume a thumbnail or CTA will make a weak opening work. '
-    'Quote the actual opening, name the unresolved question and explain why the viewer wants the next scene; '
+    'Quote the actual opening, name the viewer interest or unresolved question and explain why the viewer wants the next scene; '
     'check whether the answer has already been given away. Clarity of product explanation is not hook strength. '
     'Do not force a question, withheld name, paradox formula or fixed reveal position; avoid vague bait and invented facts. '
     'The body must progressively resolve the question through clues, actions and results and deliver the product appeal. '

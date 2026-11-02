@@ -44,11 +44,6 @@ class Settings:
     monetization_dm_initial_wait_seconds: int = 120
     monetization_dm_followup_wait_seconds: int = 120
     script_model: str = "gemini-3.6-flash"
-    voicebench_root: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py'))
-    voicebench_url: str = "http://127.0.0.1:8765"
-    voicebench_api_key_file: Path = field(default_factory=lambda: sibling_project('VoiceBench', 'Voice', 'voicebench/api.py') / '.runtime' / 'external-api-key.txt')
-    voicebench_timeout: int = 14400
-    voicebench_poll_interval: float = 5.0
     # Legacy config keys are retained for file compatibility, never contacted.
     studio_url: str = "http://127.0.0.1:18765"
     studio_root: Path = ROOT / 'data' / 'writing'

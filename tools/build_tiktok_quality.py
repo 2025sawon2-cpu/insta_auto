@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hotpost.config import load_settings
 from hotpost.source_quality import sha256_file
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.studio import Studio
 from tools.refine_tiktok_quality import OLD,ROOT,FINDINGS
 from tools.rework_tiktok_batch import save
@@ -43,10 +43,10 @@ def prepare(code):
         assert json.loads(voice_file.read_text('utf-8'))['script_sha256']==digest
         return
     submission=r/'voice-submission.json';request=json.loads(submission.read_text('utf-8')).get('request_id') if submission.exists() else None
-    result=VoiceBenchAdapter(load_settings()).synthesize(script['text'],r/'narration.wav',
+    result=AiStudioAdapter(load_settings()).synthesize(script['text'],r/'narration.wav',
         progress=lambda m,n:print(code,m,n,flush=True),request_id=request,
         on_submitted=lambda i:save(submission,{'request_id':i,'script_sha256':digest}),
-        generation_key='tiktok-quality-'+code+'-'+digest,require_personal_clone=True)
+        generation_key='tiktok-quality-'+code+'-'+digest)
     save(voice_file,{**result,'id':'tiktok-quality-voice-'+code+'-'+digest[:12],'path':str(r/'narration.wav'),
         'sha256':sha256_file(r/'narration.wav'),'duration':result['audio']['duration'],'script_id':script['id'],
         'script_sha256':digest,'created':time.time(),'status':'completed'})

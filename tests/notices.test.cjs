@@ -18,12 +18,12 @@ test('successful new run never reuses stale report errors',()=>{
 test('stale data and missing schedule have actionable collection help',()=>{
  const value=data('',{state:'success',newest_post_update:1});value.schedule.missed_today=true;
  const notice=collection(value,accounts,{},now);
- assert.equal(notice.tone,'warning');assert.match(notice.solution,/수동 수집/);assert.equal(notice.actions[0].href,'accounts.html#help-collect');
+ assert.equal(notice.tone,'warning');assert.match(notice.solution,/수동 수집/);assert.equal(notice.actions[0].href,'accounts.html#collection-health');
 });
 test('rate limiting asks to wait while authentication asks for user login',()=>{
- assert.equal(remedy('429 rate limited').href,'accounts.html#help-rate-limit');
- assert.equal(remedy('verification_required').href,'accounts.html#help-login');
- assert.equal(remedy('session missing').href,'accounts.html#help-login');
+ assert.equal(remedy('429 rate limited').href,'accounts.html#collection-health');
+ assert.equal(remedy('verification_required').href,'accounts.html#collection-health');
+ assert.equal(remedy('session missing').href,'accounts.html#collection-health');
 });
 test('unknown failure remains visible and running collection avoids stale errors',()=>{
  assert.equal(collection(data(''),accounts,{},now).tone,'warning');

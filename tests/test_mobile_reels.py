@@ -119,12 +119,26 @@ def test_cli_uses_registered_accounts_instead_of_fixed_personal_choices(tmp_path
     from hotpost import mobile_reels_cli as cli
     from hotpost.installation_settings import save
     save(tmp_path,{'revision':0,'values':{'publication_accounts':['my.brand'],'discovery_account':'reader',
-         'storefront_url':'https://influencers.coupang.com/s/test','collection':'Test'}})
+         'storefront_url':'https://influencers.coupang.com/s/test','collection':'Test',
+         'littly_logins':{'my.brand':{'provider':'google','account_hint':'saved@example.test'}}}})
     DeviceConfig('10.9.0.2',40001,android_serial='fixture').save(tmp_path/'.mobile-device.json')
     monkeypatch.setattr(cli,'load_settings',lambda:SimpleNamespace(data_dir=tmp_path))
     monkeypatch.setattr(sys,'argv',['mobile_reels_cli','prepare','video','--account',account])
     # A registered account reaches the next real prerequisite; an unregistered one stops at identity validation.
     with pytest.raises(MobileError,match=message):cli.main()
+
+
+def test_cli_prepare_requires_saved_login_hint_before_device_or_job_creation(tmp_path,monkeypatch):
+    import sys
+    from hotpost import mobile_reels_cli as cli
+    from hotpost.installation_settings import save
+    save(tmp_path,{'revision':0,'values':{'publication_accounts':['new.brand'],'discovery_account':'reader',
+         'storefront_url':'https://influencers.coupang.com/s/test','collection':'Test'}})
+    monkeypatch.setattr(cli,'load_settings',lambda:SimpleNamespace(data_dir=tmp_path))
+    monkeypatch.setattr(sys,'argv',['mobile_reels_cli','prepare','video','--account','new.brand'])
+    with pytest.raises(MobileError,match='new.brand.*리틀리 로그인 방식'):
+        cli.main()
+    assert not (tmp_path/'mobile-reels').exists()
 
 
 @pytest.mark.parametrize('ip,port,network', [('8.8.8.8',5555,'0.0.0.0/0'),('127.0.0.1',5555,'127.0.0.0/8'),

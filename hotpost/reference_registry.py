@@ -15,6 +15,121 @@ KST = timezone(timedelta(hours=9))
 STATES = {"unknown", "not_started", "in_progress", "paused", "blocked", "completed"}
 UNFINISHED = {"in_progress", "paused", "blocked"}
 SCHEMA_VERSION = 1
+BLOCK_KINDS = {'source_quality', 'content_quality', 'access', 'permission', 'technical'}
+
+
+def _hold_kind(current, stage, block_kind):
+    if block_kind is not None and block_kind not in BLOCK_KINDS:
+        raise ValueError('Unknown block kind')
+    if block_kind:
+        return block_kind
+    current_stage = current.get('stage') or ''
+    proposed_stage = stage or current_stage
+    if any(value.startswith('source') for value in (current_stage, proposed_stage)):
+        return 'source_quality'
+    if any(value in {'script', 'voice', 'edit', 'deliver', 'final_qa'}
+           for value in (current_stage, proposed_stage)):
+        return 'content_quality'
+    return None
+
+
+def _hold_review(value, *, code, current, kind):
+    """Bind a hold judgment to existing files, not prove its semantic truth.
+
+    The record may be a section of existing source answers/manifest JSON. It
+    does not require a finished source stage or authorize any continued work.
+    """
+    from .final_qa import digest, file_input
+
+    def text(value, label):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'Production hold review needs {label}')
+        return value
+
+    record_file = None
+    if not isinstance(value, dict):
+        if not value:
+            raise ValueError('Production hold review is required; inspect existing intervals and next actions')
+        try:
+            record_file = file_input(value)
+            value = json.loads(Path(record_file['path']).read_bytes())
+        except (OSError, ValueError, TypeError) as error:
+            raise ValueError('Production hold review must be an existing UTF-8 JSON record') from error
+    record = value.get('hold_review', value) if isinstance(value, dict) else None
+    if not isinstance(record, dict):
+        raise ValueError('Production hold review must contain a record')
+    for key, expected in (('video_id', code), ('task_id', current.get('task_id')),
+                          ('run_id', current.get('run_id'))):
+        if not expected or record.get(key) != expected:
+            raise ValueError(f'Production hold review {key} differs from the current video/task/run')
+    inputs = record.get('inputs')
+    if not isinstance(inputs, list) or not inputs:
+        raise ValueError('Production hold review needs current input files')
+    bound = {}
+    for item in inputs:
+        if not isinstance(item, dict):
+            raise ValueError('Production hold review needs input path, sha256 and role')
+        path = Path(text(item.get('path'), 'input path'))
+        if not path.is_absolute():
+            raise ValueError('Production hold review input path must be absolute')
+        try:
+            actual = file_input(path)
+        except (OSError, ValueError) as error:
+            raise ValueError('Production hold review input file is unavailable') from error
+        if actual['sha256'] != item.get('sha256'):
+            raise ValueError('Production hold review input bytes changed after review')
+        role = text(item.get('role'), 'input role')
+        key = Path(actual['path'])
+        if key in bound:
+            raise ValueError('Production hold review input file is duplicated')
+        bound[key] = {**actual, 'role': role}
+
+    def evidence(rows, label, roles=None):
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f'Production hold review needs {label} evidence')
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError(f'Production hold review needs {label} observations')
+            path = Path(text(row.get('input'), f'{label} input'))
+            item = bound.get(path.resolve()) if path.is_absolute() else None
+            if item is None or (roles and item['role'] not in roles):
+                raise ValueError(f'Production hold review {label} evidence must refer to a bound input')
+            text(row.get('location'), f'{label} location')
+            text(row.get('observation'), f'{label} observation')
+
+    if kind in {'access', 'permission', 'technical'}:
+        evidence(record.get('blocker'), 'actual failure', {'failure'})
+    else:
+        roles = {item['role'] for item in bound.values()}
+        purpose = {'script', 'brief', 'reference'} if kind == 'source_quality' else {'script'}
+        if not {'source_review', 'rule'} <= roles or not purpose & roles:
+            raise ValueError('Production hold review needs current script/subject, source_review and rule inputs')
+        evidence(record.get('requirements'), 'current requirement', {'rule'})
+        evidence(record.get('segments'), 'segment review', {'source', 'source_review'})
+        alternatives = record.get('alternatives')
+        if not isinstance(alternatives, list) or not alternatives:
+            raise ValueError('Production hold review needs actual alternative results')
+        for alternative in alternatives:
+            if not isinstance(alternative, dict):
+                raise ValueError('Production hold review needs actual alternative results')
+            text(alternative.get('action'), 'alternative action')
+            if alternative.get('outcome') not in {'ruled_out', 'unavailable'}:
+                raise ValueError('Production hold review has an untried or viable alternative; inspect the next action')
+            evidence(alternative.get('evidence'), 'alternative result')
+        decision = record.get('main_decision')
+        if not isinstance(decision, dict) or decision.get('decision') != 'hold':
+            raise ValueError('Production hold review needs the main decision')
+        evidence(decision.get('evidence'), 'main decision')
+    if record_file and digest(record_file['path']) != record_file['sha256']:
+        raise ValueError('Production hold review record changed during validation')
+    for item in bound.values():
+        if digest(item['path']) != item['sha256']:
+            raise ValueError('Production hold review input bytes changed during validation')
+    # A file hash records which existing review was used. Inline callers keep
+    # their observations in history too; neither form establishes live roles.
+    return {'kind': kind, **({'record': record_file} if record_file else
+                            {'review': json.loads(json.dumps(record))}),
+            'inputs': list(bound.values())}
 
 
 class Registry(dict):
@@ -194,7 +309,7 @@ def ranked(registry, include_old=False):
 
 def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None, run_id=None,
          owner=None, monitor=None, reason=None, qa_evidence=None, final_sha256=None,
-         new_over_paused=(), stage_gates=None):
+         new_over_paused=(), stage_gates=None, hold_review=None, block_kind=None):
     if code not in registry["posts"]:
         raise ValueError(f"Unknown video ID: {code}")
     if state not in STATES or not evidence.strip():
@@ -202,6 +317,15 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
     current = registry["posts"][code]["production"]
     if current["state"] != expected:
         raise ValueError(f"State changed: expected {expected}, found {current['state']}")
+    hold = None
+    if state == 'blocked' and current['state'] == 'in_progress':
+        kind = _hold_kind(current, stage, block_kind)
+        if kind:
+            for key, supplied in (('task_id', task_id), ('run_id', run_id),
+                                  ('owner', owner), ('monitor', monitor)):
+                if supplied is not None and supplied != current.get(key):
+                    raise ValueError(f'Hold cannot change the bound {key}')
+            hold = _hold_review(hold_review, code=code, current=current, kind=kind)
     if state == "in_progress":
         if not all((task_id or current.get("task_id"), run_id or current.get("run_id"),
                     owner or current.get("owner"), monitor or current.get("monitor"))):
@@ -251,6 +375,8 @@ def mark(registry, code, state, evidence, *, expected, stage=None, task_id=None,
                     "updated_at": changed_at})
     if new_over_paused:
         updated["new_over_paused"] = sorted(new_over_paused)
+    if hold:
+        updated['history'][-1]['hold_review'] = hold
     if state == "completed":
         updated["qa_evidence"] = qa["record_path"]
         updated["qa_record_sha256"] = qa["record_sha256"]
@@ -297,8 +423,10 @@ def main(argv=None):
     change.add_argument("--expected-state", required=True, choices=sorted(STATES))
     change.add_argument("--evidence", required=True)
     for key in ("stage", "task_id", "run_id", "owner", "monitor", "reason", "qa_evidence", "final_sha256",
-                "stage_gates"):
+                "stage_gates", "hold_review"):
         change.add_argument("--" + key.replace("_", "-"))
+    change.add_argument('--block-kind', choices=sorted(BLOCK_KINDS),
+                        help='Cause of a current hold; access/permission/technical also require bound failure evidence')
     change.add_argument("--new-over-paused", action="append", default=[])
     change.add_argument('--expected-revision', type=int)
     args = parser.parse_args(argv)
@@ -334,7 +462,7 @@ def main(argv=None):
                  stage=args.stage, task_id=args.task_id, run_id=args.run_id, owner=args.owner,
                  monitor=args.monitor, reason=args.reason, qa_evidence=args.qa_evidence,
                  final_sha256=args.final_sha256, new_over_paused=args.new_over_paused,
-                 stage_gates=args.stage_gates)
+                 stage_gates=args.stage_gates, hold_review=args.hold_review, block_kind=args.block_kind)
         print(f"{args.video_id}: {args.expected_state} -> {args.state}")
 
 

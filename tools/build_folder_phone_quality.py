@@ -17,7 +17,7 @@ from hotpost.source_policy import current_policy
 from hotpost.source_coverage import coverage_goal
 from hotpost.studio import Studio
 from hotpost.studio_workflow import init_run, snapshot
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from tools import build_tiktok_rework as build
 from tools import revise_cart_youtube_actions as environment
 
@@ -86,8 +86,7 @@ def voice():
     if (final/'voice.json').exists():
         assert read(final/'voice.json')['script_sha256']==digest;print('Matching personal voice retained.',flush=True);return
     submission=final/'voice-submission.json';request=read(submission).get('request_id') if submission.exists() else None
-    result=VoiceBenchAdapter(load_settings()).synthesize(script['text'],final/'narration.wav',
-        require_personal_clone=True,request_id=request,generation_key=EDIT+'-'+digest,
+    result=AiStudioAdapter(load_settings()).synthesize(script['text'],final/'narration.wav',request_id=request,generation_key=EDIT+'-'+digest,
         on_submitted=lambda rid:save(submission,{'request_id':rid,'script_sha256':digest}),
         progress=lambda m,n:print(m,n,flush=True))
     save(final/'voice.json',{**result,'id':EDIT+'-voice-'+digest[:12],'path':str(final/'narration.wav'),

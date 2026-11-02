@@ -9,7 +9,7 @@ import time
 from hotpost.config import load_settings
 from hotpost.source_quality import sha256_file
 from hotpost.studio import Studio
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from tools.recover_daily_materials import ROOT
 from tools.rework_tiktok_batch import save
 from tools import build_tiktok_rework as build
@@ -65,10 +65,10 @@ def prepare():
         return
     submission=r/'voice-submission.json'
     request=json.loads(submission.read_text('utf-8')).get('request_id') if submission.exists() else None
-    result=VoiceBenchAdapter(load_settings()).synthesize(item['text'],r/'narration.wav',
+    result=AiStudioAdapter(load_settings()).synthesize(item['text'],r/'narration.wav',
         progress=lambda m,n:print(CODE,m,n,flush=True),request_id=request,
         on_submitted=lambda i:save(submission,{'request_id':i,'script_sha256':digest}),
-        generation_key='daily-jacket-'+CODE+'-'+digest,require_personal_clone=True)
+        generation_key='daily-jacket-'+CODE+'-'+digest)
     save(vf,{**result,'id':'daily-jacket-voice-'+digest[:12],'path':str(r/'narration.wav'),
         'sha256':sha256_file(r/'narration.wav'),'duration':result['audio']['duration'],
         'script_id':script['id'],'script_sha256':digest,'created':time.time(),'status':'completed'})

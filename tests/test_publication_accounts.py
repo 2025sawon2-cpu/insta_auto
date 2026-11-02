@@ -97,6 +97,28 @@ def test_startup_does_not_import_retired_production_or_collection_runners():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize('method', ['GET', 'HEAD'])
+def test_settings_entry_uses_existing_installation_page_without_legacy_apis(dashboard, method):
+    request, settings = dashboard
+    handler = make_publication_handler(settings)
+    with PublicationServer(('127.0.0.1', 0), handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with closing(HTTPConnection(*server.server_address, timeout=5)) as conn:
+                conn.request(method, '/settings.html?from=main')
+                response = conn.getresponse()
+                assert response.status == 302
+                assert response.getheader('Location') == '/setup.html'
+                assert response.read() == b''
+        finally:
+            server.shutdown()
+            thread.join(3)
+    assert request('GET', '/api/installation')[0] == 200
+    assert request('GET', '/api/criteria')[0] == 404
+    assert request('PUT', '/api/criteria', {'values': {}})[0] == 405
+
+
 def test_coupang_lookup_requires_explicit_post_and_rejects_cross_origin(dashboard, monkeypatch):
     from hotpost.post_preparation import PostPreparation
     calls = []
@@ -116,3 +138,34 @@ def test_coupang_lookup_requires_explicit_post_and_rejects_cross_origin(dashboar
     assert request('PUT', '/api/post-preparations/post/coupang-link', {})[0] == 404
     health = request('GET', '/api/health')[1]
     assert health['production_workers'] == health['collection_workers'] == 0
+
+
+def test_completed_history_includes_old_completions_and_never_changes_registry(dashboard, monkeypatch):
+    from hotpost.post_preparation import PostPreparation
+    from hotpost.reference_registry import load
+    request, settings = dashboard
+    registry = load(settings.data_dir/'reference-status.json')
+    for code, state, at, latest in [('old', 'completed', '2026-09-01T12:00:00+09:00', False),
+                                    ('new', 'completed', '2026-10-30T12:00:00+09:00', True),
+                                    ('missing', 'completed', '2026-10-25T12:00:00+09:00', False),
+                                    ('blocked', 'blocked', '2026-10-31T12:00:00+09:00', True),
+                                    ('working', 'in_progress', '2026-10-31T12:00:00+09:00', True)]:
+        registry['posts'][code] = {'reference': {'username': 'creator', 'in_latest_report': latest},
+                                   'production': {'state': state, 'updated_at': at}}
+    path = settings.data_dir/'reference-status.json'
+    path.write_text(json.dumps(registry), 'utf8')
+    before = path.read_bytes()
+    def source(self, code):
+        return {'cover_text': '완성한 영상\n'+code, 'media_version': 'version1',
+                'media': {'final': None if code == 'missing' else settings.data_dir/'final.mp4',
+                          'cover': settings.data_dir/'cover.png'}}
+    monkeypatch.setattr(PostPreparation, 'source', source)
+    status, result = request('GET', '/api/completed-posts')
+    assert status == 200
+    assert [p['shortcode'] for p in result['posts']] == ['new', 'missing', 'old']
+    assert result['posts'][1]['media']['final'] is None
+    assert result['posts'][0]['media']['cover'] == '/api/post-preparations/new/media/cover?v=version1'
+    assert str(settings.data_dir) not in json.dumps(result)
+    assert path.read_bytes() == before
+    assert request('POST', '/api/completed-posts', {})[0] == 405
+    assert request('GET', '/api/health')[1]['production_workers'] == 0

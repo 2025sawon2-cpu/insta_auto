@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>완성기록 · 오늘의 터진 게시물</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css?v=20261023-production-filter">
+<link rel="stylesheet" href="post-preparation.css?v=20261027-product-link-open">
+<link rel="stylesheet" href="completed.css?v=20261031">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <div><h1>완성기록</h1><p class="sub">우리가 만든 영상을 한곳에서</p></div>
+    <nav class="top-right main-navigation" aria-label="주요 메뉴">
+      <a class="btn ghost" href="index.html">레퍼런스 게시물</a>
+      <a class="btn ghost" href="completed.html" aria-current="page">완성기록</a>
+      <a class="btn ghost" href="accounts.html">레퍼런스 계정</a>
+      <button class="btn ghost" id="theme-toggle" aria-label="테마 전환">🌙</button>
+    </nav>
+  </div>
+</header>
+<main class="wrap archive">
+  <section class="archive-heading" aria-labelledby="archive-title">
+    <div><p class="archive-eyebrow">완성한 영상 모음</p><h2 id="archive-title">우리가 만든 게시물 <span id="archive-count">–</span></h2>
+      <p class="hint">최근 순위와 기간에 관계없이, 제작을 마친 게시물을 모았어요.</p></div>
+  </section>
+  <form class="archive-tools" role="search" onsubmit="return false">
+    <label class="archive-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input type="search" id="archive-query" aria-label="완성기록 검색" placeholder="썸네일 문구 · 계정 · 게시물 검색"></label>
+    <label class="archive-sort">정렬 <select id="archive-sort"><option value="newest">최근 완성순</option><option value="oldest">오래된 완성순</option></select></label>
+  </form>
+  <p class="hint archive-result" id="archive-result" role="status" aria-live="polite">완성기록을 불러오는 중…</p>
+  <div id="archive-list"></div>
+  <div class="empty" id="archive-empty" hidden></div>
+  <button type="button" class="btn ghost" id="archive-retry" hidden>다시 불러오기</button>
+</main>
+<div class="modal" id="archive-modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" tabindex="-1">
+    <button class="modal-close" data-close aria-label="닫기">✕</button>
+    <h2 id="archive-dialog-title" class="archive-dialog-title">완성 영상 · 게시물 준비</h2>
+    <div id="archive-detail"></div>
+  </div>
+</div>
+<script src="post-preparation.js?v=20261103-remove-accounts"></script>
+<script src="completed.js?v=20261031"></script>
+</body>
+</html>

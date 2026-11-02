@@ -214,11 +214,11 @@ def test_collection_bell_read_state_persists_and_new_issue_reappears(dashboard):
     page.reload();page.wait_for_selector('#collection-notification-count:not([hidden])')
     page.locator('#collection-notification-toggle').click()
     assert '해결 방법:' in page.locator('#collection-health').inner_text()
-    assert '로그인 복구 방법' in page.locator('#collection-health').inner_text()
+    assert '수집 상태 확인' in page.locator('#collection-health').inner_text()
     page.locator('#collection-health a').first.click()
-    page.wait_for_url('**/accounts.html#help-login')
-    page.wait_for_function("document.querySelector('#collection-help').open")
-    assert page.locator('#help-login').is_visible()
+    page.wait_for_url('**/accounts.html#collection-health')
+    assert page.locator('#collection-health').is_visible()
+    assert page.locator('#collection-help').count()==0
 
 
 def test_report_warning_can_be_closed_without_hiding_other_notices(dashboard):

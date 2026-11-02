@@ -1,5 +1,7 @@
 # 게시물별 자동 쇼츠 제작
 
+> 현재 TTS는 Google AI Studio Arlo와 짧은 쉼·들숨 정리로 확정됐다. 아래 VoiceBench·복제·포트·목소리 선택은 과거 설명이며 실행하지 않는다. [현재 TTS 원본](TTS_TRUNCATION_RECOVERY.md)을 따른다.
+
 > 보존된 제작실·자동 실행기 구현 설명입니다. 현재 신규 제작·검색·중지·완료 기준은 [WORKFLOW](WORKFLOW.md), [SOURCE_WORKFLOW](SOURCE_WORKFLOW.md), [대본 규칙](../hotpost/writing/RULES.md)을 따릅니다. 아래 과거 기본값·예약·병렬 처리·재시도 예시는 현재 실행 지시가 아니며, 기존 run과 구현 이력은 보존합니다.
 
 > 2026-10-07 갱신: 대본 규칙과 Codex 집필·장면 분석 연결은 insta_auto로 내재화했다. 아래 script_auto·Gemini·3안 생성 설명은 과거 기록이며 현재 동작은 [내장 집필 안내](writing.md)가 우선한다.

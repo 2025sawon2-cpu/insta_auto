@@ -118,19 +118,6 @@ def test_cyclic_transport_reason_is_rejected():
     assert not classify_failure(error)['retryable']
 
 
-def test_real_readonly_voice_wrapper_preserves_typed_transport_but_submit_does_not(tmp_path):
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
-    class Session:
-        def get(self, *a, **kw): raise requests.ConnectionError('network')
-        def post(self, *a, **kw): raise requests.ConnectionError('network')
-    adapter = VoiceBenchAdapter(SimpleNamespace(voicebench_url='http://localhost'), session=Session())
-    adapter._headers = lambda: {}
-    for operation in [adapter.voices, lambda: adapter.preview('voice')]:
-        with pytest.raises(RuntimeError) as caught: operation()
-        assert classify_failure(caught.value)['retryable']
-    with pytest.raises(RuntimeError) as caught:
-        adapter._synthesis_request('post', '/v1/tts', headers={}, timeout=1, safe_retry=False)
-    assert not classify_failure(caught.value)['retryable']
 
 
 def test_long_work_with_actual_progress_is_not_a_failure_and_stall_never_retries():

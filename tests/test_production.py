@@ -31,7 +31,7 @@ class Voice:
         self.calls.append((text, request_id))
         on_submitted(17)
         target.write_bytes(b'RIFF' + b'\0' * 4 + b'WAVE' + b'\0' * 32)
-        return {'output_path': str(target), 'voicebench_request_id': 17}
+        return {'output_path': str(target), 'tts_request_id': 17}
 
 
 class Editor:
@@ -169,7 +169,7 @@ def test_manual_service_wait_reuses_script_key_and_request_even_when_scene_style
         return original(text, target, request_id, on_submitted, generation_key)
     voice.synthesize = interrupted
     waiting = manager.run(job['id'], 'build')
-    assert waiting['status'] == 'service_wait' and waiting['voicebench_request_id'] == 17
+    assert waiting['status'] == 'service_wait' and waiting['tts_request_id'] == 17
     assert waiting['service_retry_at'] == 123456 and not voice.calls
     waiting['edit_style'] = 'brisk'; waiting['scenes'][0]['range'] = [1, 3]
     manager.save(waiting)
@@ -202,7 +202,7 @@ def test_manual_retry_respects_provider_cooldown_even_after_new_script_selection
         studio.result['scripts'][0]['text']=new_text
         studio.result['scripts'][0]['rewrite_review']['script_sha256']=digest(new_text)
         waiting=manager.select(job['id'],selection())
-        assert waiting['voicebench_request_id'] is None
+        assert waiting['tts_request_id'] is None
     before=copy.deepcopy(waiting)
     files={str(p):p.read_bytes() for p in manager.folder(job['id']).rglob('*') if p.is_file()}
     for _ in range(3):

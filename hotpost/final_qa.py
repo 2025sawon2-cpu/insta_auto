@@ -210,13 +210,18 @@ def inspect_record(record_path, *, video_id, task_id=None, run_id=None, producer
                 _verified_input(item, name)
     if path.read_bytes() != raw:
         raise ValueError('Final QA record changed during validation')
+    unresolved = [name for name in CHECK_ASSETS if checks[name]['status'] != '충족']
+    if record['schema_version'] == 2:
+        from .writing.script_style import explicit_expression_issues
+        if explicit_expression_issues(Path(artifacts['script']['path']).read_text('utf-8')) and 'script' not in unresolved:
+            unresolved.append('script')
     return {"record_path": str(path), "record_sha256": hashlib.sha256(raw).hexdigest(),
             'schema_version': record['schema_version'],
             'input_binding': 'files' if record['schema_version'] == 2 else 'legacy_metadata_only',
             "video": verified["video"], "cover": verified["cover"],
             "task_id": record["task_id"], "run_id": record["run_id"],
             "producer": record["producer"], "edit_id": record["edit_id"],
-            "unresolved": [name for name in CHECK_ASSETS if checks[name]['status'] != '충족']}
+            "unresolved": unresolved}
 
 
 def main(argv=None):

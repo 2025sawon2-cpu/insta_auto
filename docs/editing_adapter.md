@@ -37,21 +37,7 @@ separately rather than claiming the current output passed. A Windows compatibili
 spike may opt into unclassified footage explicitly, but that override is not a
 claim that the footage is clean or licensed.
 
-`hotpost.voicebench_adapter.VoiceBenchAdapter` sends the spoken script to the
-separate VoiceBench HTTP API, polls the returned request ID without resubmitting,
-and atomically materializes the validated WAV under the editing job directory.
-It does not import VoiceBench or select its engine, reference, quality mode, or
-Seed. The API key is read from `VOICEBENCH_API_KEY` or VoiceBench's ignored
-`.runtime/external-api-key.txt`; it is never written into a job request or log.
-
-VoiceBench uses `http://127.0.0.1:8765`, insta_auto uses port 8775, and the internal Codex writer has no HTTP port. The integrated flow is:
-
-1. Pass original `speech` and the reference video hash to the internal Codex writing queue.
-2. Select a reviewed rewrite and transformation plan in the production UI.
-3. Synthesize the selected script through VoiceBench into a versioned WAV under
-   `data/productions/<production_id>/`.
-4. Pass selected source videos, scene labels/ranges, script hash, and WAV to
-   `AutoCapcutAdapter`.
+`hotpost.ai_studio_adapter.AiStudioAdapter` prepares the existing job's whole-script request for Google AI Studio Arlo. The production agent uses the existing Chrome 사원2 session and `tools/ai_studio_browser.mjs` to submit once and save the matching rendered WAV/receipt. The same adapter validates/imports it. There is no local TTS service, API-key lookup or GPU lifecycle dependency. The browser-pending result is the agent's next action, not a user approval gate. See [the TTS source](TTS_TRUNCATION_RECOVERY.md) for commands and failure handling.
 
 Integrated builds use the `clean_tts` audio profile and 1.0x tempo.
 The latest sound-effects policy is recorded in auto_capcut's
@@ -80,15 +66,11 @@ The legacy helper retains its 1.12x default. This avoids applying microphone den
 podcast color, vocal beautification, and +20dB gain to a clean generated WAV.
 
 `hotpost.production.ProductionManager` persists the entire handoff, revision,
-and resume state. The legacy `build_with_voicebench` helper requires an explicit
-approved script and no longer falls back to original speech. Neither
-VoiceBench nor auto_capcut depends on the other subsystem.
+and resume state. The legacy `build_with_ai_studio` helper requires an explicit
+approved script and no longer falls back to original speech. The browser TTS bridge and auto_capcut keep their separate execution boundaries.
 
 Configuration can be overridden with `HOTPOST_AUTO_CAPCUT_ROOT`,
 `HOTPOST_AUTO_CAPCUT_PYTHON`, and `HOTPOST_AUTO_CAPCUT_TIMEOUT`.
-VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
-`HOTPOST_VOICEBENCH_API_KEY_FILE`, `HOTPOST_VOICEBENCH_TIMEOUT`, and
-`HOTPOST_VOICEBENCH_POLL_INTERVAL`.
 ## 2026-10-07 자막·쉼 제작 합의
 
 신규 제작실 편집의 자막은 auto_capcut `studio_typography.default_style()`에서
@@ -104,7 +86,7 @@ VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
 2026-10-10 새 타임라인의 `footage_selection_policy=diverse-sequential-v1`은 같은
 검토 장면이 연속 자막에 쓰이면 미사용 시간 구간을 이어 재생한다. 렌더러도 beat의
 선택 구간을 읽어 shot 시작점으로 되감지 않는다. 기존 필드 없는 타임라인은 이전
-동작을 유지한다. 선택은 해당 문장에 검토된 후보 안에서만 수행하며 부족한 길이와
+동작을 유지한다. 선택은 주제·장면 역할에 맞게 검토된 후보 안에서 수행하며 부족한 길이와
 반복량을 기록한다. 실제 다양성 감사는 파생 클립 개수가 아니라 원본 SHA-256과
 원본 시간 오프셋으로 합산한다. 수동 소스 재제작에서도 기존 음성 해시·대본·자막
 시계를 보존하고 새 수정본만 추가한다. 영상 컷의 역할 이름이나 길이로 자막 문구와
@@ -113,24 +95,12 @@ VoiceBench overrides are `HOTPOST_VOICEBENCH_URL`,
 문구와 순서를 여러 시점에서 직접 확인한다. 오디오·비디오 시작 시각의 일치만으로
 문장별 싱크가 맞는다고 판정하지 않는다.
 
-2026-10-27 사용자가 비교 B를 선택했으므로 새 독립 편집에는
-`sentence_preserved_v1`을 기본 적용한다. 문장·질문 종결 뒤 원래 조용한 구간을
-보존하고 문장 안의 쉼은 기존 tight 조건으로 정리한다. 선택 원고와 ASR의
-종결부 개수가 누락·불일치하면 쉼 축소를 보수적으로 중단한다. 개수 일치는
-정확한 정렬을 증명하지 않는다. 상세 음성 기준은
-[TTS 기본·톤·쉼·복구](TTS_TRUNCATION_RECOVERY.md)를 따른다.
-명시한 과거 `tight` 계획과 기존 영상은 그대로 보존한다.
-VoiceBench의 원본 복제 음성 WAV와 voice ID는 보존한다. 별도 처리 WAV를
-auto_capcut 프로세스에서 만들고 원본 ASR 시간을 샘플 단위 cut-map으로
-변환한 뒤 자막·장면·완성 MP4·CapCut 초안을 같은 시계로 제작한다.
-배속하거나 대본을 재작성하지 않으며 들숨을 전부 제거했다고 표시하지 않는다.
-타임라인의 `voice_source`는 승인한 원본 TTS, `voice`는 쉼을 줄인 편집 음성,
-`pause_processing`은 변환 기록이다. 제작실 음성 듣기는 원본 TTS를 들려주고
-완성 영상은 편집 음성을 사용한다. 캐시 재실행은 동일 처리 음성을 검증해
-재사용한다. 과거 완성본·자막 수정은 기존 음성과 선택 상태를 유지한다.
+자막 `cues`와 시각 장면은 독립적으로 설계한다. 초기 analyze가 만든 cue별 `beats`를 그대로 고정하면 자막 조각마다 컷과 원본 시작점이 반복될 수 있다. 이 경우 기존 plan JSON에서 원고·voice·cues·자막 스타일·cue별 강조는 보존하고, 여러 `cue_ids`를 포함하는 장면/주제 단위 beat와 그 안의 native `visual_cuts`를 구성한다. 기존 `select-shots`/`freeze-selection`→`render` 경로를 사용하며 새 편집기를 만들지 않는다. beat 재설계 뒤 실제 caption binding과 최종 화면을 검증한다. 모든 영상을 한 beat로 만들거나 모든 자막마다 새 장면을 넣는 고정 규칙은 아니다.
+
+2026-10-29 신규 독립 편집 기본은 사용자가 확정한 `short_pauses_breath_v1`이다. 문장 뒤 긴 쉼도 줄이고 기존 스펙트럼 들숨 제거를 적용한다. 원음은 불변이며 샘플 단위 cut-map으로 원래 ASR 단어 시각을 변환한다. 상세 기준은 [TTS 원본](TTS_TRUNCATION_RECOVERY.md)을 따른다. 기존 계획·완료본의 음성·시각은 자동 변경하지 않는다.
 
 신규 화면 자막은 쉼표·마침표를 생략하고 물음표·느낌표를 유지한다.
-선택 대본과 VoiceBench TTS 입력의 문장부호는 그대로 보존한다.
+선택 대본과 Google AI Studio TTS 입력의 문장부호는 그대로 보존한다.
 같은 표시 규칙을 웹 MP4와 CapCut 텍스트에 적용하며 자막 시간은 바꾸지 않는다.
 
 2026-10-12 실제 타코야키 출력의 장면 전환에서 블러가 한 프레임 누락되는 사례를 확인했다.

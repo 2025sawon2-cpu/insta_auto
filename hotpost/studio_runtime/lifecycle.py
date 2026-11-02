@@ -557,7 +557,7 @@ class LifecycleMixin:
             stage, status, message = 'rewrite', 'rewriting', 'Codex 대본 집필·검사 중'
             self.store.enqueue(db, state['id'], stage, {}, 'rewrite:'+state['id'])
         elif not voice or voice['script_id'] != script['id']:
-            stage, status, message = 'voice', 'voice_generating', '자동 선택 대본으로 VoiceBench 음성 생성'
+            stage, status, message = 'voice', 'voice_generating', '자동 선택 대본으로 Google AI Studio Arlo 음성 생성'
             voice_id = 'voice-auto-' + script['id']
             state.update(approved_script_id=script['id'], pending_voice_id=voice_id)
             auto['script_selection'] = {'mode':'automatic', 'script_id':script['id']}

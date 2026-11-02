@@ -262,6 +262,33 @@ class PostPreparation:
                 'media': {key: f'/api/post-preparations/{code}/media/{key}' + (suffix if key in ('final','cover') else '') if value else None
                           for key, value in source['media'].items()}}
 
+    def completed(self):
+        """All registered completions, independent of the latest ranking window.
+
+        This is a projection of existing completion records, never a QA/state update.
+        Missing local media stays visible as a completion with unavailable files.
+        """
+        from .reference_registry import load
+        from .daily_ranking import public_production
+        items = []
+        for code, entry in load(self.root / 'reference-status.json')['posts'].items():
+            production = public_production(code, entry.get('production', {}))
+            if production['state'] != 'completed' or not production.get('completed_video_ready'):
+                continue
+            code = shortcode(code)
+            source = self.source(code)
+            reference = entry.get('reference', {})
+            history = entry['production'].get('history', [])
+            completed_at = next((h.get('at') for h in reversed(history) if h.get('to') == 'completed'),
+                                entry['production'].get('updated_at'))
+            suffix = '?v=' + source['media_version'] if source['media_version'] else ''
+            items.append({'shortcode': code, 'username': reference.get('username', ''),
+                          'title': source['cover_text'].strip(), 'completed_at': completed_at,
+                          'production': production,
+                          'media': {kind: f'/api/post-preparations/{code}/media/{kind}' + suffix
+                                    if source['media'][kind] else None for kind in ('final', 'cover')}})
+        return sorted(items, key=lambda item: (item['completed_at'] or '', item['shortcode']), reverse=True)
+
     def save(self, code, payload):
         code = shortcode(code)
         if not isinstance(payload, dict) or set(payload) != {'revision', 'draft'}:

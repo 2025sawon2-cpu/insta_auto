@@ -2,6 +2,13 @@
 import re
 
 
+def explicit_expression_issues(text):
+    """Literal user prohibition; semantic awkwardness still needs editorial review."""
+    return [{'rule': '사용자 금지 표현: 괜히 반가워요 — 해당 공감 구절을 자연스럽게 다시 작성',
+             'excerpt': m.group(), 'start': m.start(), 'end': m.end()}
+            for m in re.finditer(r'괜히[\s\u200b]*반가워요', text)]
+
+
 def question_ending_issues(text):
     return [{'rule':'질문형 ~에요?·~예요?·~이에요? 금지: 시청자 질문은 자연스러운 ~세요? 계열로 다시 작성',
              'excerpt':text[max(0,m.start()-50):m.end()], 'start':m.start(), 'end':m.end()}
@@ -9,7 +16,7 @@ def question_ending_issues(text):
 
 
 def ending_issues(text):
-    issues=question_ending_issues(text)
+    issues=question_ending_issues(text) + explicit_expression_issues(text)
     for match in re.finditer(r'[^.!?。！？~～…\n]+',text):
         sentence=match.group(0)
         clean=sentence.strip().rstrip('"\'”’」』)]} ').strip()

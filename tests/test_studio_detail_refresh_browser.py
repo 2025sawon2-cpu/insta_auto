@@ -387,12 +387,12 @@ def test_actual_http_script_source_voice_changes_create_one_run_preserve_complet
     from functools import partial
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
     from hotpost.studio_http import StudioHTTP
-    from hotpost.voicebench_adapter import VoiceBenchAdapter
+    from hotpost.ai_studio_adapter import AiStudioAdapter
     from test_studio_workflow import prepared, complete
 
     monkeypatch.setattr('hotpost.source_policy.current_policy', lambda settings=None: dict(version=2, minimum_total=1, platform_minimums={}))
-    monkeypatch.setattr(VoiceBenchAdapter, 'voices', lambda self: dict(personal_default=dict(available=True), voices=[dict(id='qwen-sohee',name='소희',gender='female',model='Qwen',available=True)]))
-    monkeypatch.setattr(VoiceBenchAdapter, 'default_voice_status', lambda self: dict(ready=True, default_voice_kind='personal', errors=[]))
+    monkeypatch.setattr(AiStudioAdapter, 'voices', lambda self: dict(personal_default=dict(available=True), voices=[dict(id='qwen-sohee',name='소희',gender='female',model='Qwen',available=True)]))
+    monkeypatch.setattr(AiStudioAdapter, 'default_voice_status', lambda self: dict(ready=True, default_voice_kind='personal', errors=[]))
     studio, task_id = prepared.__wrapped__(tmp_path)
     def add_source(s, db):
         second = copy.deepcopy(s['sources'][0])

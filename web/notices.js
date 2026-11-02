@@ -3,11 +3,11 @@
   const memory=new Map();
   function remedy(reason){
     const text=String(reason||'').toLowerCase();
-    if(/429|rate.limit|요청 제한|too many/.test(text))return {text:'해당 서비스 요청을 멈추고 제한이 해제된 뒤 다시 수집하세요. 즉시 반복 실행하지 마세요.',href:'accounts.html#help-rate-limit',label:'요청 제한 해결 방법'};
-    if(/captcha|캡차|verification|challenge|checkpoint|인증|본인 확인/.test(text))return {text:'전용 Chrome에 표시된 인증을 직접 완료한 뒤 수집을 다시 실행하세요.',href:'accounts.html#help-login',label:'인증 해결 방법'};
-    if(/login|session|로그인|세션/.test(text))return {text:'수집 서버 PC의 전용 Instagram Chrome에서 로그인 상태를 확인한 뒤 다시 수집하세요.',href:'accounts.html#help-login',label:'로그인 복구 방법'};
+    if(/429|rate.limit|요청 제한|too many/.test(text))return {text:'해당 서비스 요청을 멈추고 제한이 해제된 뒤 다시 수집하세요. 즉시 반복 실행하지 마세요.',href:'accounts.html#collection-health',label:'수집 상태 확인'};
+    if(/captcha|캡차|verification|challenge|checkpoint|인증|본인 확인/.test(text))return {text:'전용 Chrome에 표시된 인증을 직접 완료한 뒤 수집을 다시 실행하세요.',href:'accounts.html#collection-health',label:'수집 상태 확인'};
+    if(/login|session|로그인|세션/.test(text))return {text:'수집 서버 PC의 전용 Instagram Chrome에서 로그인 상태를 확인한 뒤 다시 수집하세요.',href:'accounts.html#collection-health',label:'수집 상태 확인'};
     if(/사용할 수 없|찾을 수 없|존재하지|not.found|404|비공개/.test(text))return {text:'계정 프로필을 열어 아이디 변경·삭제·비공개 여부를 확인하세요. 더 이상 수집하지 않을 계정은 관리 목록에서 제외하세요.',href:'accounts.html#account-list',label:'계정 확인·관리'};
-    return {text:'마지막 수집 기록과 계정별 상태를 확인하고, 원인을 해결한 뒤 수집을 다시 실행하세요.',href:'accounts.html#collection-help',label:'수집 복구 방법'};
+    return {text:'마지막 수집 기록과 계정별 상태를 확인하고, 원인을 해결한 뒤 수집을 다시 실행하세요.',href:'accounts.html#collection-health',label:'수집 상태 확인'};
   }
   function collection(data, accounts, report, now=Date.now()/1000){
     const c=data.collection||{},run=c.last_run, schedule=data.schedule||{};
@@ -29,7 +29,7 @@
       model={...model,title:!c.newest_post_update?'아직 수집 데이터가 없습니다.':'최근 수집 데이터 확인이 필요합니다.',
         detail:'데이터 갱신 '+stamp+(schedule.missed_today?' · 오늘 예약 수집이 확인되지 않았습니다.':''),tone:'warning',
         solution:'서버 PC에서 자동 수집 일정을 확인하거나 수동 수집을 실행하세요. 새로고침만으로 Instagram 데이터를 다시 수집하지는 않습니다.',
-        actions:[{label:'수집 실행·일정 확인 방법',href:'accounts.html#help-collect'}]};
+        actions:[{label:'수집 상태 확인',href:'accounts.html#collection-health'}]};
     }
     if(c.last_success_at>(report.generated_at||0)){
       model={...model,detail:model.detail+' · 현재 목록보다 새로운 수집 결과가 있습니다.',actions:[...model.actions,{label:'최신 목록 새로고침',reload:true}]};

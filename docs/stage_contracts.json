@@ -1,17 +1,17 @@
 {
-  "version": "stage-contracts-20261027-v1",
+  "version": "stage-contracts-20261030-v8-copy-context",
   "common_rules": ["AGENTS.md", "docs/COLLABORATION.md", "docs/WORKFLOW.md"],
   "stages": {
     "source": {
       "requires": [],
-      "rules": ["docs/SOURCE_WORKFLOW.md", "docs/SOURCE_SEARCH_LOG.md", "docs/editorial_montage_policy.md"],
+      "rules": ["docs/SOURCE_WORKFLOW.md", "docs/SOURCE_SEARCH_LOG.md", "docs/editorial_montage_policy.md", "docs/quality_progress_policy.md"],
       "checks": [
         {"id": "source_log", "rule": "docs/SOURCE_SEARCH_LOG.md",
-         "question": "검색어와 실제 제출·후보·다운로드·채택을 검색 기록에 남겼나요?"},
+         "question": "검색어와 실제 제출·후보·다운로드·구간별 채택/제외를 기록했나요? 최소 원본 수에서 자동 종료하지 않고 장점이 보이는 구간·유용한 후보·다른 구도/동작/사용 맥락을 검토해 편집 선택폭을 확보했나요? 부족함에는 미검토 구간·다른 후보·새 검색 관점을 실제 대조했나요? 대사 직접시연과 장점 중심 화면을 유연하게 조합하고, 검색 최소 건수나 고유구간/음성 길이 비율을 종료·탈락 기준으로 쓰지 않았나요? 대본에 없어도 실제 원작·후보에 보이는 고정·분리·설치·관리 등 유용한 기능 장면을 함께 검토하고, 대본 미언급만으로 제외하지 않았나요?"},
         {"id": "source_fill", "rule": "docs/SOURCE_WORKFLOW.md",
          "question": "원본의 검은 띠·블러 배경·패딩을 확인하고 9:16 화면을 실제 장면으로 채웠나요?"},
         {"id": "source_masks", "rule": "docs/editorial_montage_policy.md",
-         "question": "사용 구간의 원작 자막·워터마크만 가렸나요? 제품·동작을 가로지르는 띠가 없는지 각 컷의 시작·중간·끝 프레임에서 봤나요?"}
+         "question": "사용 구간의 원작 자막·워터마크만 가렸나요? 제품·동작을 가로지르는 띠와 정면 얼굴이 없는지 각 컷의 시작·중간·끝 및 움직임·컷 경계에서 봤나요? 정면 얼굴이 들어오는 구간은 제품·손 중심 크롭이나 얼굴 없는 다른 구간으로 대체했나요?"}
       ],
       "outputs": {"sources": {"kind": "files"}}
     },
@@ -21,17 +21,17 @@
       "checks": [
         {"id": "script_three", "rule": "hotpost/writing/RULES.md",
          "question": "세 안을 공식 집필 경로로 한 번에 만들고, 선택안과 선택 이유를 남겼나요?"},
-        {"id": "script_hook", "rule": "hotpost/writing/RULES.md",
-         "question": "선택안의 첫 문장을 그대로 인용하고 어떤 구체적 의문이 생기는지 적었나요?"},
+        {"id": "script_hook", "rule": "hotpost/writing/RULES.md", "review_kind": "audience_hook_v2",
+         "question": "현재 대본의 첫 문장·SHA와 실제 썸네일 두 줄을 review에 연결했나요? empathy_review에 실제 공감 문구의 인용·입말 자연성(natural)·판단 이유를, thumbnail_context_review에 핵심 매력·시청 전 예상 주제·관련성(pre_view_relevant)·판단 이유를 남겼나요? 어색한 공감이나 시청 후 사연을 알아야 연결되는 썸네일이면 수정 전 통과하지 않으며 다른 장점이나 첫 대사로 상쇄하지 않았나요? 3040 여성의 어떤 생활 관심·욕구에 연결되는지, 장면 방향 퀴즈에 그치지 않는 시청 이유와 약점을 각각 검토했나요? RULES.md 기준 실제 글자 수가 201~250자인지 세고, 대화하는 구어체·~더라구요 문장·긍정적인 두 내용을 합친 문장을 실제 구절로 확인했나요? 실용적 공감과 감정적 공감이 각각 어떤 실제 문구에서 전달되는지, 문장 통합·중복 삭제 후에도 두 역할이 남는지 확인했나요? 발음 변환 후 길이를 이유로 원고를 축약하거나 분할하지 않고 전체 단일 합성을 준비했나요?"},
         {"id": "script_facts", "rule": "hotpost/writing/RULES.md",
          "question": "원본에 없는 기능·수치·효능·사용 경험을 사실처럼 넣지 않았나요?"},
         {"id": "script_cta", "rule": "hotpost/writing/RULES.md",
          "question": "댓글 요청을 지워도 제품을 찾아볼 이유가 남나요?"}
       ],
       "outputs": {
-        "writing_result": {"kind": "writing_result", "model": "gpt-6-sol", "variants": 3},
+        "writing_result": {"kind": "writing_result", "variants": 3},
         "selected_script": {"kind": "file"},
-        "selection": {"kind": "script_selection", "model": "gpt-6-sol", "optional": true}
+        "selection": {"kind": "script_selection", "optional": true}
       }
     },
     "voice": {
@@ -39,11 +39,11 @@
       "rules": ["docs/TTS_TRUNCATION_RECOVERY.md"],
       "checks": [
         {"id": "voice_whole", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
-         "question": "선택 원고 전체를 개인 목소리로 한 번에 합성했나요(문장 분할·덧붙이기·Seed 변경 없음)?"},
+         "question": "선택 원고 전체를 Google AI Studio Arlo로 한 번에 생성하고 요청/원고/모델/STYLE/음원 해시를 확인했나요? Seed·복제·HQ를 지원한다고 표시하지 않았나요?"},
         {"id": "voice_listen", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
-         "question": "원음의 시작·끝·주요 문구를 실제로 들었나요? 듣지 못했다면 확인 불가로 적었나요?"}
+         "question": "생성 결과의 시작·끝·주요 문구와 발화 누락·실제 적용을 확인했나요? 직접 청취하지 못한 범위는 기록하고 사용자 음성 검토를 기다리지 않고 최종영상 제작·저장·전달까지 진행하나요?"}
       ],
-      "outputs": {"voice_result": {"kind": "voice_result", "style": "reels_bright_v1"}}
+      "outputs": {"voice_result": {"kind": "voice_result", "provider": "google-ai-studio-browser", "voice": "Arlo"}}
     },
     "edit": {
       "requires": ["source", "voice"],
@@ -54,13 +54,13 @@
         {"id": "edit_captions", "rule": "docs/CAPTION_SEGMENTATION.md",
          "question": "자막 분할의 보호구와 경계별 이유를 이 원고 기준으로 검토했나요?"},
         {"id": "edit_pauses", "rule": "docs/TTS_TRUNCATION_RECOVERY.md",
-         "question": "문장 뒤 원래 쉼을 보존하는 기본 정책으로 편집했나요?"},
+         "question": "확정된 short_pauses_breath_v1로 문장 뒤 긴 쉼과 들숨을 정리하고 원음/cut-map/잔여 후보/마지막 발화를 확인했나요?"},
         {"id": "edit_sync", "rule": "docs/editing_adapter.md",
          "question": "렌더의 여러 시점과 컷 경계에서 자막과 음성의 순서·내용이 맞는지 봤나요?"},
-        {"id": "edit_scenes", "rule": "docs/editorial_montage_policy.md",
-         "question": "각 컷이 맡은 장면 역할과 전체 흐름을 원본 구간과 대조했나요?"}
+        {"id": "edit_scenes", "rule": "docs/editorial_montage_policy.md", "review_kind": "montage_v1",
+         "question": "review에 현재 plan SHA와 실제 부모별 사용·고유구간·재사용 요약을 결속했나요? 대사 직접시연과 장점 중심 화면을 유연하게 조합하고 실제 전체 흐름·매력을 판단했나요? 대본에 없는 기능·사용법·관리 장면도 실제 장점과 흐름에 기여하면 살리고, 그 장면을 정당화하려고 대본 설명을 추가하도록 강제하지 않았나요? 동일 짧은 구간·동작의 세 번째 이후 등장이 있으면 최종 시각/원본 구간과 대안 비교·유지 또는 보완 이유를 repetition_assessment에 남겼나요? 없으면 실제 구간 근거로 없다고 기록했나요? 연속 장면의 계획 분할이나 같은 장점/원본 사용을 반복으로 오인하거나, 세 번째 등장·반복 비율만으로 자동 탈락시키지 않았나요? 리액션·사용 맥락을 포함한 최종 MP4의 각 컷과 움직임·컷 경계에 정면 얼굴이 나오는 구간이 없는지 확인했나요?"}
       ],
-      "outputs": {"plan": {"kind": "edit_plan", "narration_profile": "sentence_preserved_v1"}}
+      "outputs": {"plan": {"kind": "edit_plan", "narration_profile": "short_pauses_breath_v1"}}
     },
     "deliver": {
       "requires": ["edit"],

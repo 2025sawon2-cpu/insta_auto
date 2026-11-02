@@ -7,6 +7,7 @@
 | 제작실 없는 게시용 서버 | hotpost/publication_server.py → account_registry_http.py, post_preparation_http.py | test_publication_accounts.py |
 | 계정 목록 Git 동기화 | hotpost/accounts.py, influencer_list.txt | test_account_git_sync.py |
 | 게시물 초안·현재 완료본 조회 | hotpost/post_preparation.py, web/post-preparation.js | test_post_preparation.py, post_preparation.test.cjs |
+| 기간 제한 없는 완성기록·게시물 준비 연결 | hotpost/post_preparation.py → publication_server.py의 /api/completed-posts, web/completed.html/js/css | test_publication_accounts.py, completed.test.cjs |
 | 게시물별 명시 쿠팡 원링크 조회·스토어 등록·실제 상품 검증 | hotpost/coupang_onelink.py, post_coupang_link.py → post_preparation_http.py | test_coupang_onelink.py, test_publication_accounts.py, post_preparation.test.cjs |
 | 본문·댓글·DM 준비 문구 | hotpost/post_preparation_content.py/json | test_post_preparation_content.py |
 | 명시 썸네일 반영·AVC 전달·서버 간 실행권 | hotpost/post_thumbnail.py, post_media_rules.py | test_post_thumbnail.py, test_thumbnail_admission.py, test_post_media_rules.py |
@@ -18,7 +19,7 @@
 | 모바일 업로드 스킬·기존 설정/공유 이력 읽기 점검 | skills/hotpost-mobile-upload/SKILL.md → scripts/preflight.py → installation_settings.read, 기존 SQLite 읽기 | test_mobile_upload_preflight.py |
 | 여러 폰 등록·기기별 작업·중복 게시 방지·최초 페어링·재연결 | phone-pair.cmd, phone-reconnect.cmd → mobile_reels_cli --device/devices/configure/pair/connect, mobile_device.DeviceRegistry | test_mobile_reels.py |
 | 대본 계약·3안·후킹·금지 표현 | hotpost/writing/RULES.md → contract.py, variants.py, hook_policy.py, script_style.py, pipeline.py | test_first_sentence_hook.py, test_writing_variants.py, test_internal_writing.py |
-| VoiceBench HTTP 연동·개인 릴스 named style·영속 ID 실제 적용 검증 | hotpost/voicebench_adapter.py | test_voicebench_adapter.py, test_voicebench_style.py |
+| Google AI Studio Arlo · 전체 원고/요청/음원 영수증 검증 | hotpost/ai_studio_adapter.py → tools/ai_studio_browser.mjs | test_ai_studio_adapter.py, test_ai_studio_browser.cjs |
 | 수집·분석·리포트(별도 실행 승인) | hotpost/cli.py → collectors/, storage.py, analyze.py, report.py | test_collection_control.py, hot_detection.test.cjs |
 | 레퍼런스 순위·제작 상태 트랜잭션·revision·읽기 전용 재개 context | hotpost/reference_registry.py → state_lock.py, data/reference-status.json | test_registry_transactions.py, test_reference_registry.py |
 | 오전 7시 72시간 현재 수치 선정·축약 수치·다이소 본문 제외·완성본 건너뛰기 | hotpost/daily_ranking.py → reference_registry.py, web/discovery/model.js | test_daily_ranking.py, discovery_model.test.cjs |

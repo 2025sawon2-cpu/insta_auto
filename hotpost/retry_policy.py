@@ -48,20 +48,6 @@ def _retry_after(headers):
     return None
 
 
-def _readonly_voice_wrapper(exc):
-    """Preserve two known GET-only wrappers, never ambiguous synthesis submits."""
-    if type(exc) is not RuntimeError or not isinstance(exc.__cause__, requests.RequestException):
-        return False
-    tb = exc.__traceback__
-    if tb is None:
-        return False
-    while tb.tb_next is not None:
-        tb = tb.tb_next
-    # Match the actual loaded code object, not the error wording or caller stage.
-    from .voicebench_adapter import VoiceBenchAdapter
-    return tb.tb_frame.f_code in {VoiceBenchAdapter.voices.__code__, VoiceBenchAdapter.preview.__code__}
-
-
 def classify_failure(exc, *, stage=''):
     """Return serializable classification without inspecting exception message text.
 
@@ -135,8 +121,6 @@ def classify_failure(exc, *, stage=''):
             if isinstance(cause, BaseException):
                 return classify(cause)
             return result(error, 'unknown', False, 'transport_wrapper_without_typed_reason')
-        if _readonly_voice_wrapper(error):
-            return classify(error.__cause__)
         if isinstance(error, (requests.ConnectionError, urllib3_errors.ProtocolError)):
             nested = [arg for arg in error.args if isinstance(arg, BaseException)]
             if isinstance(error.__cause__, BaseException) and error.__cause__ not in nested:

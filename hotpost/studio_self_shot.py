@@ -137,11 +137,10 @@ class SelfShotMixin:
 
     def write_self_shot(self, state, job):
         from .studio_adapter import StudioAdapter
-        from .local_compute import serialized_compute, release_idle_voice
+        from .local_compute import serialized_compute
         from .writing.contract import snapshot as contract_snapshot
         @serialized_compute('script')
         def write(owner):
-            release_idle_voice(self.settings, best_effort=True)
             adapter = StudioAdapter(self.settings)
             jid = job['checkpoint'].get('writing_job_id')
             if jid:

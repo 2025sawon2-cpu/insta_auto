@@ -11,7 +11,7 @@ from functools import lru_cache
 from hotpost.config import load_settings
 from hotpost.source_quality import sha256_file
 from hotpost.studio import Studio
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from tools import build_tiktok_rework as build
 from tools import revise_cart_youtube_actions as environment
 from tools import revise_jacket_cover_glyph as cover_version
@@ -57,10 +57,10 @@ def prepare():
         return
     submission=final/'voice-submission.json'
     request=json.loads(submission.read_text('utf-8')).get('request_id') if submission.exists() else None
-    result=VoiceBenchAdapter(load_settings()).synthesize(script['text'],final/'narration.wav',
+    result=AiStudioAdapter(load_settings()).synthesize(script['text'],final/'narration.wav',
         progress=lambda m,n:print(CODE,m,n,flush=True),request_id=request,
         on_submitted=lambda i:save(submission,{'request_id':i,'script_sha256':digest}),
-        generation_key='daily-jacket-value-'+CODE+'-'+digest,require_personal_clone=True)
+        generation_key='daily-jacket-value-'+CODE+'-'+digest)
     save(voice_file,{**result,'id':'daily-jacket-value-voice-'+digest[:12],
         'path':str(final/'narration.wav'),'sha256':sha256_file(final/'narration.wav'),
         'duration':result['audio']['duration'],'script_id':script['id'],'script_sha256':digest,

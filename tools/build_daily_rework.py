@@ -5,7 +5,7 @@ from PIL import Image,ImageDraw
 from hotpost.config import load_settings
 from hotpost.source_quality import sha256_file
 from hotpost.source_finder import probe_video
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 from hotpost.studio import Studio
 from tools.recover_daily_materials import ROOT
 from tools.rework_tiktok_batch import save
@@ -62,9 +62,9 @@ def prepare(c):
  vf=r/'voice.json'
  if vf.exists():assert json.loads(vf.read_text('utf-8'))['script_sha256']==digest;return
  submission=r/'voice-submission.json';request=json.loads(submission.read_text('utf-8')).get('request_id') if submission.exists() else None
- result=VoiceBenchAdapter(load_settings()).synthesize(text,r/'narration.wav',progress=lambda m,n:print(c,m,n,flush=True),
+ result=AiStudioAdapter(load_settings()).synthesize(text,r/'narration.wav',progress=lambda m,n:print(c,m,n,flush=True),
    request_id=request,on_submitted=lambda i:save(submission,{'request_id':i,'script_sha256':digest}),
-   generation_key='daily-rework-'+c+'-'+digest,require_personal_clone=True)
+   generation_key='daily-rework-'+c+'-'+digest)
  save(vf,dict(result,id='daily-rework-voice-'+c+'-'+digest[:12],path=str(r/'narration.wav'),
    sha256=sha256_file(r/'narration.wav'),duration=result['audio']['duration'],script_id=script['id'],
    script_sha256=digest,created=time.time(),status='completed'))

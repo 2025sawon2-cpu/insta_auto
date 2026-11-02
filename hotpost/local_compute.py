@@ -1,99 +1,34 @@
-"""Serialize this process's local model work without crossing service ownership.
-
-VoiceBench owns its workers and decides whether they are safe to release. This
-lock coordinates Hotpost workers, not independent clients or remote services.
-"""
-from __future__ import annotations
-
-import logging
-import threading
-import time
+"""Serialize local writing work; cloud speech owns no local GPU."""
 from contextlib import contextmanager
 from functools import wraps
-from urllib.parse import urlsplit
-
-import requests
-
-from .voicebench_adapter import VoiceBenchAdapter
+import threading
+import time
 from .model_service import ModelServiceUnavailable
-
-
 _lock = threading.RLock()
-_current = threading.local()
-_log = logging.getLogger(__name__)
-
-
-def _is_local(url: str) -> bool:
-    parsed = urlsplit(url)
-    return (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost')
-            and parsed.path in ('', '/'))
-
-
-def release_idle_voice(settings, *, best_effort=False) -> dict:
-    """Use the optional authenticated API; never stop workers from this client."""
-    if not _is_local(getattr(settings, 'voicebench_url', '')):
-        return {'status': 'remote', 'released': False}
-    try:
-        return VoiceBenchAdapter(settings).release_idle()
-    except (requests.ConnectionError, requests.Timeout):
-        # Older/offline services remain usable through the existing TTS API.
-        return {'status': 'unavailable', 'released': False}
-    except (requests.RequestException, RuntimeError, ValueError):
-        if not best_effort:
-            raise
-        # A failed cleanup must not turn an already saved voice into a failure.
-        _log.warning('VoiceBench idle resource release failed after synthesis.')
-        return {'status': 'unavailable', 'released': False}
-
-
 @contextmanager
-def compute_slot(settings, kind: str):
-    url = getattr(settings, 'studio_url' if kind == 'script' else 'voicebench_url', '')
-    if not _is_local(url):
+def compute_slot(settings,kind):
+    if kind == 'voice':
         yield
         return
-    timeout = float(getattr(settings, 'studio_timeout' if kind == 'script' else 'voicebench_timeout', 7200))
-    deadline = time.monotonic() + timeout
-    from .studio_pause import active_cancel, active_receipt_hook
-    wait_hook = active_receipt_hook('supervision_wait')
-    cancel = active_cancel()
-    def observe_wait(reason=None):
-        if cancel: cancel()
-        if wait_hook: wait_hook(reason)
+    deadline=time.monotonic()+float(settings.studio_timeout)
+    from .studio_pause import active_cancel,active_receipt_hook
+    cancel,hook=active_cancel(),active_receipt_hook('supervision_wait')
     try:
-        while not _lock.acquire(timeout=min(.5, max(0, deadline-time.monotonic()))):
-            observe_wait('local_compute')
-            if time.monotonic() >= deadline:
-                raise ModelServiceUnavailable('로컬 AI 작업 대기 시간이 초과됐습니다. 실행 중인 작업을 확인하세요.', attempted=False)
-    except BaseException:
-        if wait_hook: wait_hook(None)
-        raise
-    try:
-        observe_wait()
-        depth = getattr(_current, 'depth', 0)
-        if depth == 0 and kind == 'script':
-            while release_idle_voice(settings).get('status') == 'busy':
-                observe_wait('voice_service_busy')
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ModelServiceUnavailable('VoiceBench 음성 작업이 진행 중이어서 로컬 AI를 시작하지 못했습니다.', attempted=False)
-                time.sleep(min(2, remaining))
-            observe_wait()
-        _current.depth = depth + 1
+        while not _lock.acquire(timeout=.5):
+            if cancel:cancel()
+            if hook:hook('local_compute')
+            if time.monotonic()>=deadline:
+                raise ModelServiceUnavailable('로컬 집필 작업 대기 시간이 초과됐습니다.',attempted=False)
         try:
+            if cancel:cancel()
             yield
-        finally:
-            _current.depth = depth
+        finally:_lock.release()
     finally:
-        _lock.release()
-        if wait_hook: wait_hook(None)
-
-
-def serialized_compute(kind: str):
+        if hook:hook(None)
+def serialized_compute(kind):
     def decorate(method):
         @wraps(method)
-        def run(self, *args, **kwargs):
-            with compute_slot(self.settings, kind):
-                return method(self, *args, **kwargs)
+        def run(self,*args,**kwargs):
+            with compute_slot(self.settings,kind):return method(self,*args,**kwargs)
         return run
     return decorate

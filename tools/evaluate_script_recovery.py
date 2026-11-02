@@ -11,7 +11,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from hotpost.config import load_settings
 from hotpost.studio_adapter import StudioAdapter
 from hotpost.studio_top_pick import choose
-from hotpost.voicebench_adapter import VoiceBenchAdapter
+from hotpost.ai_studio_adapter import AiStudioAdapter
 
 
 def main():
@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--jobs',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
-    settings=load_settings();adapter=StudioAdapter(settings);voice=VoiceBenchAdapter(settings)
+    settings=load_settings();adapter=StudioAdapter(settings);voice=AiStudioAdapter(settings)
     if voice.default_voice_status().get('active_requests',0):raise RuntimeError('음성 작업이 끝난 뒤 실행하세요.')
     voice.release_idle()
     for case in json.loads(args.jobs.read_text('utf-8')):

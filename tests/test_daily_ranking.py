@@ -38,6 +38,50 @@ def test_visible_counts_keep_labels_and_allow_abbreviations(raw, value, precisio
     assert metric['raw'] == (str(raw) if raw is not None else '')
 
 
+def test_browser_card_images_survive_report_and_publish_to_local_cache(tmp_path, monkeypatch):
+    from PIL import Image
+    import io
+    from hotpost import thumbs
+    profiles, details, grid = inputs([('photo', 1, '8만')])
+    href = details['rows'][0]['href']
+    profiles['accounts'][0]['cards'] = [{'href': href, 'thumbnail_url': 'https://cdn.example/photo.jpg'}]
+    settings = Settings(data_dir=tmp_path/'data', web_dir=tmp_path/'web')
+    settings.data_dir.mkdir()
+    report = build_report(profiles, details, grid, settings, generated_at=NOW)
+    assert report['posts'][0]['thumbnail_url'] == 'https://cdn.example/photo.jpg'
+    image = io.BytesIO()
+    Image.new('RGB', (30, 50), 'orange').save(image, 'JPEG')
+    class Response:
+        content = image.getvalue()
+        def raise_for_status(self):
+            pass
+    calls = []
+    def get(self, url, **kwargs):
+        calls.append(url)
+        return Response()
+    monkeypatch.setattr(thumbs.requests.Session, 'get', get)
+    monkeypatch.setattr(thumbs, 'request_pause', lambda: None)
+    publish(report, settings, tmp_path/'snapshot.json')
+    assert calls == ['https://cdn.example/photo.jpg']
+    saved = json.loads(settings.report_path.read_text('utf8'))
+    assert saved['posts'][0]['thumb'] == 'thumbs/photo.jpg'
+    with Image.open(settings.thumbs_dir/'photo.jpg') as cached:
+        assert cached.size == (30, 50)
+
+
+def test_thumbnail_cache_reused_with_no_remote_url_and_detail_image_takes_precedence(tmp_path):
+    from hotpost.thumbs import ensure_thumbnail
+    from hotpost.models import Post
+    profiles, details, grid = inputs([('photo', 1, '8万')])
+    profiles['accounts'][0]['cards'] = [{'href': details['rows'][0]['href'], 'thumbnail_url': 'profile.jpg'}]
+    details['rows'][0]['thumbnail_url'] = 'detail.jpg'
+    settings = Settings(data_dir=tmp_path/'data', web_dir=tmp_path/'web', download_thumbs=False)
+    assert build_report(profiles, details, grid, settings)['posts'][0]['thumbnail_url'] == 'detail.jpg'
+    settings.thumbs_dir.mkdir(parents=True)
+    (settings.thumbs_dir/'photo.jpg').write_bytes(b'existing photo')
+    assert ensure_thumbnail(settings, Post(shortcode='photo', username='example', kind='reel', taken_at=NOW)) == 'thumbs/photo.jpg'
+
+
 def test_only_qualified_posts_within_72_hours_rank_across_publication_dates(tmp_path):
     report = build_report(*inputs([
         ('older', 71, '8만'), ('newer', 1, '2만'), ('below', 2, '1.7만'),

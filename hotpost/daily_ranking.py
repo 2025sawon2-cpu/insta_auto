@@ -82,6 +82,10 @@ def build_report(profiles, details, grid, settings, *, generated_at=None):
                          'available': row.get('available', bool(row.get('cards', True))),
                          'full_name': row.get('full_name', '')})
     by_account = {row['username']: row for row in accounts}
+    card_images = {card['href']: card.get('thumbnail_url')
+                   for account in profiles['accounts']
+                   for card in (account.get('cards') if isinstance(account.get('cards'), list) else [])
+                   if isinstance(card, dict) and card.get('href')}
     if len(by_account) != len(accounts):
         raise ValueError('Duplicate account observations')
     views = {row['href']: row for row in grid['rows']}
@@ -124,6 +128,7 @@ def build_report(profiles, details, grid, settings, *, generated_at=None):
             'multiplier': ratio or 0, 'tier': tier, 'ranking_mode': MODE,
             'eligible': eligible, 'evaluated_at': started,
             'likes': None, 'comments': None, 'thumb': row.get('thumb'),
+            'thumbnail_url': row.get('thumbnail_url') or card_images.get(row['href']),
             'video_duration': row.get('video_duration'), 'flags': [], 'terms': [],
             'categories': row.get('categories') or ['생활·기타'],
             'age_hours': (started - published) / 3600,
@@ -224,6 +229,13 @@ def publish(report, settings, snapshot_path):
                         values[key] = old_post[key]
             posts.append(Post(**values))
         store.upsert_posts(posts)
+        # The browser snapshot supplies observed image URLs; reuse the existing
+        # local cache instead of letting expiring CDN URLs become card sources.
+        from .thumbs import ensure_thumbnail
+        for row, post in zip(report['posts'], posts):
+            cached = ensure_thumbnail(settings, post)
+            if cached:
+                row['thumb'] = cached
         store.record_run(int(report['collection_started_at']), report['source'],
                          sum(a['available'] for a in report['accounts']),
                          sum(not a['available'] for a in report['accounts']),
